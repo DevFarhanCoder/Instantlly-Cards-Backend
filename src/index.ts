@@ -1,38 +1,17 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import mongoose from 'mongoose';
-import authRouter from './routes/auth';
-import cardsRouter from './routes/cards';
-import { requireAuth } from './middleware/auth';
+import express from "express";
+import cors from "cors";
+import authRouter from "./routes/auth";
 
 const app = express();
 
-// CORS: allow mobile + web (adjust origins as you wish)
-app.use(cors({ origin: true, credentials: false }));
-app.use(express.json({ limit: '1mb' }));
+app.use(cors());
+app.use(express.json()); // <-- IMPORTANT
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+// health (for wakeups & checks)
+app.get("/api/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-app.use('/api/auth', authRouter);
-app.use('/api/cards', requireAuth, cardsRouter); // protected
+// mount routers under /api
+app.use("/api", authRouter);
 
-// 404 handler
-app.use((_req, res) => res.status(404).json({ message: 'Not Found' }));
-
-const PORT = process.env.PORT || 8080;
-const MONGODB_URI = process.env.MONGODB_URI as string;
-
-async function start() {
-  try {
-    await mongoose.connect(MONGODB_URI);
-    app.listen(PORT, () => {
-      console.log(`API listening on :${PORT}`);
-    });
-  } catch (e) {
-    console.error('Failed to start server', e);
-    process.exit(1);
-  }
-}
-
-start();
+const port = process.env.PORT || 8080;
+app.listen(port, () => console.log(`API listening on :${port}`));
