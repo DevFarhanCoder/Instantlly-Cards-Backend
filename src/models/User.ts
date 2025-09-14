@@ -1,13 +1,12 @@
-import { Schema, model } from "mongoose";
+import { Schema, model, models } from "mongoose";
 
 const UserSchema = new Schema(
   {
+    name: { type: String, required: true },
     email: { type: String, required: true, unique: true, index: true },
-    // frequently marked select:false for safety, so we must .select("+passwordHash") in queries
-    passwordHash: { type: String, required: true, select: false },
-    name: String,
+    password: { type: String, required: true, select: false }, // <- key
   },
   { timestamps: true }
 );
 
-export default model("User", UserSchema);
+export default models.User || model("User", UserSchema);
