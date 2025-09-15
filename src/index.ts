@@ -8,7 +8,7 @@ import cardsRouter from "./routes/cards";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" })); // instead of default
 
 // single health route
 app.get("/api/health", (_req, res) => {
