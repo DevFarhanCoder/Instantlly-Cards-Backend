@@ -95,18 +95,24 @@ router.post("/login", async (req, res) => {
 // GET /api/auth/profile - Get user profile
 router.get("/profile", requireAuth, async (req: AuthReq, res) => {
   try {
+    console.log("Profile request - User ID:", req.userId);
     const user = await User.findById(req.userId);
+    console.log("Found user:", user ? "Yes" : "No");
+    
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.json({
+    const profileData = {
       _id: user._id,
       name: user.name,
       email: user.email,
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
-    });
+    };
+    
+    console.log("Sending profile data:", profileData);
+    res.json(profileData);
   } catch (error) {
     console.error("GET PROFILE ERROR", error);
     res.status(500).json({ message: "Server error" });
