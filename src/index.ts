@@ -5,6 +5,8 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
+import path from "path";
+import fs from "fs";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import cardsRouter from "./routes/cards";
@@ -13,6 +15,15 @@ import contactsRouter from "./routes/contacts";
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" })); // instead of default
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, '../uploads/profiles');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // single health route
 app.get("/api/health", (_req, res) => {
