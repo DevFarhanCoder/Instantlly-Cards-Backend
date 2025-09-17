@@ -7,6 +7,7 @@ const UserSchema = new Schema(
     password: { type: String, required: true, select: false }, // <- key
     phone: { type: String, default: "" },
     profilePicture: { type: String, default: "" },
+    about: { type: String, default: "Available" },
   },
   { timestamps: true }
 );

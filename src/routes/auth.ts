@@ -109,6 +109,7 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       email: user.email,
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
+      about: user.about || "Available",
     };
     
     console.log("Sending profile data:", profileData);
@@ -122,12 +123,13 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
 // PUT /api/auth/update-profile - Update user profile
 router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, about } = req.body;
     const userId = req.userId;
 
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (phone !== undefined) updateData.phone = phone;
+    if (about !== undefined) updateData.about = about;
 
     const user = await User.findByIdAndUpdate(
       userId,
@@ -145,6 +147,7 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       email: user.email,
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
+      about: user.about || "Available",
     });
   } catch (error) {
     console.error("UPDATE PROFILE ERROR", error);
