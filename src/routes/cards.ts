@@ -58,4 +58,109 @@ r.delete("/:id", async (req: AuthReq, res) => {
   }
 });
 
+// SHARE CARD (send to another user)
+r.post("/:id/share", async (req: AuthReq, res) => {
+  try {
+    const { recipientId, recipientPhone, message } = req.body;
+    const cardId = req.params.id;
+    
+    // Verify the card belongs to the sender
+    const card = await Card.findOne({ _id: cardId, userId: req.userId! });
+    if (!card) {
+      return res.status(404).json({ message: "Card not found" });
+    }
+
+    // For now, we'll create a simple sharing record
+    // In a real app, you'd want a separate SharedCard model
+    const sharedCard = {
+      cardId,
+      senderId: req.userId!,
+      recipientId: recipientId || null,
+      recipientPhone: recipientPhone || null,
+      cardTitle: card.companyName || card.name || 'Business Card',
+      sentAt: new Date(),
+      status: 'sent',
+      message: message || null
+    };
+
+    // You could save this to a SharedCards collection
+    // await SharedCard.create(sharedCard);
+    
+    res.json({ 
+      success: true, 
+      message: "Card shared successfully",
+      data: sharedCard 
+    });
+  } catch (err) {
+    console.error("SHARE CARD ERROR", err);
+    res.status(400).json({ message: "Failed to share card" });
+  }
+});
+
+// GET SENT CARDS
+r.get("/sent", async (req: AuthReq, res) => {
+  try {
+    // For now, return mock data
+    // In a real app, you'd query a SharedCards collection
+    const sentCards = [
+      {
+        _id: "sent1",
+        cardId: "card123",
+        recipientId: "user456",
+        recipientName: "John Doe",
+        cardTitle: "My Business Card",
+        sentAt: new Date(Date.now() - 86400000), // 1 day ago
+        status: "delivered"
+      },
+      {
+        _id: "sent2",
+        cardId: "card124",
+        recipientId: "user789",
+        recipientName: "Jane Smith",
+        cardTitle: "Company Card",
+        sentAt: new Date(Date.now() - 172800000), // 2 days ago
+        status: "viewed"
+      }
+    ];
+
+    res.json({ success: true, data: sentCards });
+  } catch (err) {
+    console.error("GET SENT CARDS ERROR", err);
+    res.status(500).json({ message: "Failed to fetch sent cards" });
+  }
+});
+
+// GET RECEIVED CARDS
+r.get("/received", async (req: AuthReq, res) => {
+  try {
+    // For now, return mock data
+    // In a real app, you'd query a SharedCards collection
+    const receivedCards = [
+      {
+        _id: "received1",
+        cardId: "card789",
+        senderId: "user123",
+        senderName: "Alice Johnson",
+        cardTitle: "Marketing Director",
+        receivedAt: new Date(Date.now() - 43200000), // 12 hours ago
+        isViewed: false
+      },
+      {
+        _id: "received2",
+        cardId: "card790",
+        senderId: "user456",
+        senderName: "Bob Wilson",
+        cardTitle: "Software Engineer",
+        receivedAt: new Date(Date.now() - 259200000), // 3 days ago
+        isViewed: true
+      }
+    ];
+
+    res.json({ success: true, data: receivedCards });
+  } catch (err) {
+    console.error("GET RECEIVED CARDS ERROR", err);
+    res.status(500).json({ message: "Failed to fetch received cards" });
+  }
+});
+
 export default r;
