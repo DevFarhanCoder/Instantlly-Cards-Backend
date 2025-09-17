@@ -1,6 +1,7 @@
 import express from "express";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
+import Contact from "../models/Contact";
 
 const router = express.Router();
 
@@ -104,6 +105,119 @@ router.get("/app-users", requireAuth, async (req: AuthReq, res) => {
     res.json({ success: true, data: contacts });
   } catch (error) {
     console.error("Error fetching app users:", error);
+    res.status(500).json({ error: "Failed to fetch contacts" });
+  }
+});
+
+// Sync all contacts (including non-app users) and store them in database
+router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { contacts } = req.body as { contacts: DeviceContact[] };
+    const userId = req.userId;
+    
+    if (!contacts || !Array.isArray(contacts)) {
+      return res.status(400).json({ error: "Invalid contacts data" });
+    }
+
+    // Extract phone numbers from contacts to find app users
+    const phoneNumbers = contacts.map(contact => contact.phoneNumber);
+    
+    // Find users in the app with these phone numbers
+    const appUsers = await User.find({
+      $or: [
+        { personalPhone: { $in: phoneNumbers } },
+        { companyPhone: { $in: phoneNumbers } }
+      ],
+      _id: { $ne: userId } // Exclude current user
+    }).select('name personalPhone companyPhone profilePicture');
+
+    // Create a map of phone numbers to users
+    const phoneToUserMap = new Map();
+    appUsers.forEach(user => {
+      if (user.personalPhone) {
+        phoneToUserMap.set(user.personalPhone, user);
+      }
+      if (user.companyPhone) {
+        phoneToUserMap.set(user.companyPhone, user);
+      }
+    });
+
+    // Prepare contacts for bulk upsert
+    const contactsToSave = contacts.map(contact => {
+      const appUser = phoneToUserMap.get(contact.phoneNumber);
+      return {
+        updateOne: {
+          filter: { userId, phoneNumber: contact.phoneNumber },
+          update: {
+            $set: {
+              name: contact.name,
+              phoneNumber: contact.phoneNumber,
+              isAppUser: !!appUser,
+              appUserId: appUser ? appUser._id : undefined,
+              lastSynced: new Date()
+            },
+            $setOnInsert: {
+              userId,
+              createdAt: new Date()
+            }
+          },
+          upsert: true
+        }
+      };
+    });
+
+    // Bulk upsert contacts
+    if (contactsToSave.length > 0) {
+      await Contact.bulkWrite(contactsToSave);
+    }
+
+    // Return summary
+    const appUserContacts = contacts.filter(contact => {
+      return phoneToUserMap.has(contact.phoneNumber);
+    });
+
+    res.json({ 
+      success: true, 
+      message: `Synced ${contacts.length} contacts`,
+      stats: {
+        total: contacts.length,
+        appUsers: appUserContacts.length,
+        nonAppUsers: contacts.length - appUserContacts.length
+      }
+    });
+  } catch (error) {
+    console.error("Error syncing all contacts:", error);
+    res.status(500).json({ error: "Failed to sync contacts" });
+  }
+});
+
+// Get all stored contacts for the user
+router.get("/all", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    
+    const contacts = await Contact.find({ userId })
+      .populate({ path: 'appUserId', select: 'name profilePicture', model: User })
+      .sort({ isAppUser: -1, name: 1 }) // App users first, then alphabetical
+      .lean();
+
+    const formattedContacts = contacts.map(contact => ({
+      _id: contact._id,
+      name: contact.name,
+      phoneNumber: contact.phoneNumber,
+      isAppUser: contact.isAppUser,
+      profilePicture: (contact.appUserId && typeof contact.appUserId === 'object' && 'profilePicture' in contact.appUserId)
+        ? (contact.appUserId as any).profilePicture
+        : undefined,
+      appUserId: (contact.appUserId && typeof contact.appUserId === 'object' && '_id' in contact.appUserId)
+        ? (contact.appUserId as any)._id
+        : contact.appUserId,
+      lastSynced: contact.lastSynced
+    }));
+
+    res.json({ success: true, data: formattedContacts });
+  } catch (error) {
+    console.error("Error fetching all contacts:", error);
     res.status(500).json({ error: "Failed to fetch contacts" });
   }
 });
