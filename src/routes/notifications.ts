@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import Notification from "../models/Notification";
 
@@ -8,6 +9,10 @@ const router = express.Router();
 router.get("/", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
     const { page = 1, limit = 20, unreadOnly = false } = req.query;
     
     const pageNum = parseInt(page as string);
@@ -53,6 +58,9 @@ router.put("/:id/read", requireAuth, async (req: AuthReq, res) => {
   try {
     const { id } = req.params;
     const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     
     const notification = await Notification.findOneAndUpdate(
       { _id: id, userId },
@@ -75,6 +83,9 @@ router.put("/:id/read", requireAuth, async (req: AuthReq, res) => {
 router.put("/read-all", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     
     const result = await Notification.updateMany(
       { userId, read: false },
@@ -96,6 +107,9 @@ router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
   try {
     const { id } = req.params;
     const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     
     const notification = await Notification.findOneAndDelete({ _id: id, userId });
     
@@ -114,9 +128,12 @@ router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
 router.get("/stats", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     
     const stats = await Notification.aggregate([
-      { $match: { userId: userId } },
+      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
       {
         $group: {
           _id: "$type",

@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
+import mongoose from "mongoose";
 import User from "../models/User";
 import Contact from "../models/Contact";
 import Notification from "../models/Notification";
@@ -60,7 +61,7 @@ async function notifyContactsOfNewUser(newUserId: string, phoneNumber: string) {
       { 
         $set: { 
           isAppUser: true, 
-          appUserId: newUserId,
+          appUserId: new mongoose.Types.ObjectId(newUserId),
           lastSynced: new Date()
         } 
       }
@@ -77,7 +78,7 @@ async function notifyContactsOfNewUser(newUserId: string, phoneNumber: string) {
         message: `${contact.name} is now on InstantllyCards`,
         data: {
           contactId: contact._id,
-          newUserId: newUserId,
+          newUserId: new mongoose.Types.ObjectId(newUserId),
           contactName: contact.name,
           contactPhone: phoneNumber
         }
@@ -130,7 +131,7 @@ router.post("/signup", async (req, res) => {
 
     // After successful registration, notify users who have this phone in their contacts
     try {
-      await notifyContactsOfNewUser(user._id, normalizedPhone);
+      await notifyContactsOfNewUser(user._id.toString(), normalizedPhone);
     } catch (notificationError) {
       console.error("Error sending contact notifications:", notificationError);
       // Don't fail the signup if notifications fail
@@ -257,7 +258,7 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
     }
 
     // If phone number was updated, trigger contact refresh and notifications
-    if (phone !== undefined) {
+    if (phone !== undefined && userId) {
       try {
         // Notify users who have this phone in their contacts
         await notifyContactsOfNewUser(userId, updateData.phone);
