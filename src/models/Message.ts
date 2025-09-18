@@ -1,58 +1,88 @@
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose from 'mongoose';
 
-export interface IMessage extends Document {
-  conversationId: string;
-  senderId: mongoose.Types.ObjectId;
-  receiverId: mongoose.Types.ObjectId;
-  text: string;
-  timestamp: Date;
-  isRead: boolean;
+interface IMessage extends mongoose.Document {
+  sender: mongoose.Types.ObjectId;
+  receiver: mongoose.Types.ObjectId;
+  content: string;
   messageType: 'text' | 'image' | 'file';
+  isRead: boolean;
+  readAt?: Date;
+  conversationId: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-const MessageSchema = new Schema<IMessage>({
-  conversationId: {
-    type: String,
-    required: true,
-    index: true
+interface IMessageModel extends mongoose.Model<IMessage> {
+  getConversationId(userId1: string, userId2: string): string;
+}
+
+const messageSchema = new mongoose.Schema({
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  senderId: {
-    type: Schema.Types.ObjectId,
-    ref: "User",
-    required: true,
-    index: true
+  receiver: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  receiverId: {
-    type: Schema.Types.ObjectId,
-    ref: "User",
-    required: true,
-    index: true
-  },
-  text: {
+  content: {
     type: String,
     required: true,
     trim: true
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now,
-    index: true
-  },
-  isRead: {
-    type: Boolean,
-    default: false
   },
   messageType: {
     type: String,
     enum: ['text', 'image', 'file'],
     default: 'text'
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  readAt: {
+    type: Date
+  },
+  conversationId: {
+    type: String,
+    required: true,
+    index: true
   }
 }, {
   timestamps: true
 });
 
-// Compound indexes for efficient queries
-MessageSchema.index({ conversationId: 1, timestamp: -1 });
-MessageSchema.index({ senderId: 1, receiverId: 1 });
+// Index for efficient conversation queries
+messageSchema.index({ conversationId: 1, createdAt: -1 });
+messageSchema.index({ sender: 1, receiver: 1 });
 
-export default mongoose.model<IMessage>("Message", MessageSchema);
+// Generate conversation ID based on participant IDs
+messageSchema.statics.getConversationId = function(userId1: string, userId2: string) {
+  return [userId1, userId2].sort().join('-');
+};
+
+// Virtual for formatted timestamp
+messageSchema.virtual('formattedTime').get(function() {
+  const now = new Date();
+  const messageTime = this.createdAt;
+  const diffMs = now.getTime() - messageTime.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
+  
+  if (diffHours < 24) {
+    return messageTime.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: true 
+    });
+  } else if (diffHours < 168) { // Less than a week
+    return messageTime.toLocaleDateString('en-US', { weekday: 'short' });
+  } else {
+    return messageTime.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric' 
+    });
+  }
+});
+
+export default mongoose.model<IMessage, IMessageModel>('Message', messageSchema);

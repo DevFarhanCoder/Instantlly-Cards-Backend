@@ -1,119 +1,142 @@
-import express from "express";
-import { requireAuth, AuthReq } from "../middleware/auth";
-import User from "../models/User";
-import Message from "../models/Message";
+import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
+import Message from '../models/Message';
+import User from '../models/User';
+import { requireAuth, AuthReq } from '../middleware/auth';
 
-const router = express.Router();
+const router = Router();
 
-// Send a message
-router.post("/send", requireAuth, async (req: AuthReq, res) => {
+// Helper function to generate conversation ID
+const getConversationId = (userId1: string, userId2: string): string => {
+  return [userId1, userId2].sort().join('-');
+};
+
+// Send a new message
+router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { receiverId, text } = req.body;
-    const senderId = req.userId;
+    const { receiverId, content, messageType = 'text' } = req.body;
+    const senderId = req.userId; // Use userId from AuthReq
 
-    if (!receiverId || !text) {
-      return res.status(400).json({ error: "Missing required fields: receiverId, text" });
+    if (!receiverId || !content || !senderId) {
+      return res.status(400).json({ 
+        error: 'Receiver ID and content are required' 
+      });
     }
 
-    // Check if receiver exists
+    // Verify receiver exists
     const receiver = await User.findById(receiverId);
     if (!receiver) {
-      return res.status(404).json({ error: "Receiver not found" });
+      return res.status(404).json({ error: 'Receiver not found' });
     }
 
-    // Create conversation ID (consistent between users)
-    const conversationId = [senderId, receiverId].sort().join('-');
+    // Generate conversation ID
+    const conversationId = getConversationId(senderId, receiverId);
 
     // Create message
-    const message = await Message.create({
-      conversationId,
-      senderId,
-      receiverId,
-      text: text.trim(),
-      timestamp: new Date(),
-      isRead: false
+    const message = new Message({
+      sender: senderId,
+      receiver: receiverId,
+      content: content.trim(),
+      messageType,
+      conversationId
     });
 
-    // Populate sender info
-    const populatedMessage = await Message.findById(message._id)
-      .populate('senderId', 'name profilePicture')
-      .populate('receiverId', 'name profilePicture');
+    await message.save();
 
-    res.status(201).json({ 
-      success: true, 
-      message: "Message sent successfully",
-      data: populatedMessage 
+    // Populate sender info for response
+    await message.populate('sender', 'name phone profilePicture');
+    await message.populate('receiver', 'name phone profilePicture');
+
+    res.status(201).json({
+      success: true,
+      message,
+      conversationId
     });
   } catch (error) {
-    console.error("Error sending message:", error);
-    res.status(500).json({ error: "Failed to send message" });
+    console.error('Send message error:', error);
+    res.status(500).json({ error: 'Failed to send message' });
   }
 });
 
-// Get messages for a conversation
-router.get("/conversation/:userId", requireAuth, async (req: AuthReq, res) => {
+// Get conversation history between two users
+router.get('/conversation/:userId', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { userId: otherUserId } = req.params;
-    const currentUserId = req.userId;
+    const { userId } = req.params;
+    const currentUserId = req.userId; // Use userId from AuthReq
+    const { page = 1, limit = 50 } = req.query;
 
-    // Create conversation ID
-    const conversationId = [currentUserId, otherUserId].sort().join('-');
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-    // Get messages for this conversation
+    // Generate conversation ID
+    const conversationId = getConversationId(currentUserId, userId);
+
+    // Get messages with pagination
     const messages = await Message.find({ conversationId })
-      .populate('senderId', 'name profilePicture')
-      .populate('receiverId', 'name profilePicture')
-      .sort({ timestamp: 1 }) // Oldest first
-      .limit(100); // Limit to last 100 messages
+      .populate('sender', 'name phone profilePicture')
+      .populate('receiver', 'name phone profilePicture')
+      .sort({ createdAt: -1 })
+      .limit(Number(limit))
+      .skip((Number(page) - 1) * Number(limit));
 
-    // Mark messages as read
+    // Mark messages as read where current user is receiver
     await Message.updateMany(
       { 
-        conversationId, 
-        receiverId: currentUserId, 
+        conversationId,
+        receiver: currentUserId,
         isRead: false 
       },
-      { isRead: true }
+      { 
+        isRead: true,
+        readAt: new Date()
+      }
     );
 
-    res.json({ success: true, data: messages });
+    res.json({
+      success: true,
+      messages: messages.reverse(), // Reverse to show oldest first
+      page: Number(page),
+      hasMore: messages.length === Number(limit)
+    });
   } catch (error) {
-    console.error("Error fetching messages:", error);
-    res.status(500).json({ error: "Failed to fetch messages" });
+    console.error('Get conversation error:', error);
+    res.status(500).json({ error: 'Failed to get conversation' });
   }
 });
 
 // Get all conversations for current user
-router.get("/conversations", requireAuth, async (req: AuthReq, res) => {
+router.get('/conversations', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const userId = req.userId;
+    const currentUserId = req.userId; // Use userId from AuthReq
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
     // Get all messages where user is sender or receiver
-    const messages = await Message.aggregate([
+    const conversations = await Message.aggregate([
       {
         $match: {
           $or: [
-            { senderId: userId },
-            { receiverId: userId }
+            { sender: new mongoose.Types.ObjectId(currentUserId) },
+            { receiver: new mongoose.Types.ObjectId(currentUserId) }
           ]
         }
       },
       {
-        $sort: { timestamp: -1 }
+        $sort: { createdAt: -1 }
       },
       {
         $group: {
           _id: "$conversationId",
-          lastMessage: { $first: "$text" },
-          lastMessageTime: { $first: "$timestamp" },
-          senderId: { $first: "$senderId" },
-          receiverId: { $first: "$receiverId" },
+          lastMessage: { $first: "$$ROOT" },
           unreadCount: {
             $sum: {
               $cond: [
                 { 
                   $and: [
-                    { $eq: ["$receiverId", userId] },
+                    { $eq: ["$receiver", new mongoose.Types.ObjectId(currentUserId)] },
                     { $eq: ["$isRead", false] }
                   ]
                 },
@@ -123,32 +146,145 @@ router.get("/conversations", requireAuth, async (req: AuthReq, res) => {
             }
           }
         }
+      },
+      {
+        $sort: { "lastMessage.createdAt": -1 }
       }
     ]);
 
-    // Get other user details for each conversation
-    const conversations = await Promise.all(
-      messages.map(async (msg) => {
-        const otherUserId = msg.senderId.toString() === userId ? msg.receiverId : msg.senderId;
-        const otherUser = await User.findById(otherUserId).select('name profilePicture phone');
+    // Populate user details for each conversation
+    const populatedConversations = await Promise.all(
+      conversations.map(async (conv) => {
+        const lastMessage = conv.lastMessage;
         
+        // Determine the other participant
+        const otherUserId = lastMessage.sender.toString() === currentUserId 
+          ? lastMessage.receiver 
+          : lastMessage.sender;
+
+        const otherUser = await User.findById(otherUserId)
+          .select('name phone profilePicture');
+
         return {
-          id: msg._id,
-          userId: otherUserId,
-          name: otherUser?.name || 'Unknown User',
-          profilePicture: otherUser?.profilePicture,
-          lastMessage: msg.lastMessage,
-          lastMessageTime: msg.lastMessageTime,
-          unreadCount: msg.unreadCount,
-          isOnline: false // Could implement real-time status later
+          conversationId: conv._id,
+          otherUser,
+          lastMessage: {
+            content: lastMessage.content,
+            createdAt: lastMessage.createdAt,
+            sender: lastMessage.sender.toString(),
+            messageType: lastMessage.messageType
+          },
+          unreadCount: conv.unreadCount
         };
       })
     );
 
-    res.json({ success: true, data: conversations });
+    res.json({
+      success: true,
+      conversations: populatedConversations
+    });
   } catch (error) {
-    console.error("Error fetching conversations:", error);
-    res.status(500).json({ error: "Failed to fetch conversations" });
+    console.error('Get conversations error:', error);
+    res.status(500).json({ error: 'Failed to get conversations' });
+  }
+});
+
+// Mark messages as read
+router.put('/mark-read/:conversationId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { conversationId } = req.params;
+    const currentUserId = req.userId; // Use userId from AuthReq
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    await Message.updateMany(
+      { 
+        conversationId,
+        receiver: currentUserId,
+        isRead: false 
+      },
+      { 
+        isRead: true,
+        readAt: new Date()
+      }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Mark read error:', error);
+    res.status(500).json({ error: 'Failed to mark messages as read' });
+  }
+});
+
+// Delete a message
+router.delete('/:messageId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageId } = req.params;
+    const currentUserId = req.userId; // Use userId from AuthReq
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const message = await Message.findOne({
+      _id: messageId,
+      sender: currentUserId
+    });
+
+    if (!message) {
+      return res.status(404).json({ 
+        error: 'Message not found or you do not have permission to delete it' 
+      });
+    }
+
+    await Message.findByIdAndDelete(messageId);
+
+    res.json({ 
+      success: true, 
+      message: 'Message deleted successfully' 
+    });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ error: 'Failed to delete message' });
+  }
+});
+
+// Search messages in a conversation
+router.get('/search/:userId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { q } = req.query;
+    const currentUserId = req.userId; // Use userId from AuthReq
+
+    if (!q) {
+      return res.status(400).json({ error: 'Search query is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const conversationId = getConversationId(currentUserId, userId);
+
+    const messages = await Message.find({
+      conversationId,
+      content: { $regex: q, $options: 'i' }
+    })
+    .populate('sender', 'name phone profilePicture')
+    .populate('receiver', 'name phone profilePicture')
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+    res.json({
+      success: true,
+      messages,
+      query: q
+    });
+  } catch (error) {
+    console.error('Search messages error:', error);
+    res.status(500).json({ error: 'Failed to search messages' });
   }
 });
 
