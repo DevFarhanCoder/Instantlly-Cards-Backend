@@ -122,20 +122,43 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       phoneNumber: contact.phoneNumber.replace(/[\s\-\(\)]/g, '') // Remove formatting
     }));
 
-    // Extract phone numbers from contacts to find app users
+    // Extract phone numbers from contacts and create variations for matching
     const phoneNumbers = normalizedContacts.map(contact => contact.phoneNumber);
     
-    // Find users in the app with these phone numbers
+    // Create all possible phone number variations for matching
+    const allPhoneVariations: string[] = [];
+    phoneNumbers.forEach(phone => {
+      allPhoneVariations.push(phone); // Original: 9326664680
+      if (phone.startsWith('91') && phone.length === 12) {
+        allPhoneVariations.push('+' + phone); // Add +: +919326664680
+      } else if (!phone.startsWith('91') && phone.length === 10) {
+        allPhoneVariations.push('91' + phone); // Add 91: 919326664680
+        allPhoneVariations.push('+91' + phone); // Add +91: +919326664680
+      }
+    });
+    
+    // Find users in the app with these phone numbers (check all variations)
     const appUsers = await User.find({
-      phone: { $in: phoneNumbers },
+      phone: { $in: allPhoneVariations },
       _id: { $ne: userId } // Exclude current user
     }).select('name phone profilePicture about');
 
-    // Create a map of phone numbers to users
+    // Create a map of phone numbers to users (normalize for comparison)
     const phoneToUserMap = new Map();
     appUsers.forEach(user => {
       if (user.phone) {
-        phoneToUserMap.set(user.phone, user);
+        const normalizedUserPhone = user.phone.replace(/[\s\-\(\)\+]/g, ''); // Remove + and formatting
+        phoneToUserMap.set(normalizedUserPhone, user);
+        
+        // Also map original contact phone format
+        phoneNumbers.forEach(contactPhone => {
+          const normalizedContactPhone = contactPhone.replace(/[\s\-\(\)\+]/g, '');
+          if (normalizedUserPhone === normalizedContactPhone || 
+              normalizedUserPhone === '91' + normalizedContactPhone ||
+              normalizedUserPhone === normalizedContactPhone.substring(2)) { // Remove country code
+            phoneToUserMap.set(contactPhone, user);
+          }
+        });
       }
     });
 
@@ -234,20 +257,43 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
       return res.json({ success: true, message: "No contacts to refresh", updated: 0 });
     }
     
-    // Extract phone numbers
+    // Extract phone numbers and create variations for matching
     const phoneNumbers = contacts.map(contact => contact.phoneNumber);
     
-    // Find users in the app with these phone numbers
+    // Create all possible phone number variations for matching
+    const allPhoneVariations: string[] = [];
+    phoneNumbers.forEach(phone => {
+      allPhoneVariations.push(phone); // Original: 9326664680
+      if (phone.startsWith('91') && phone.length === 12) {
+        allPhoneVariations.push('+' + phone); // Add +: +919326664680
+      } else if (!phone.startsWith('91') && phone.length === 10) {
+        allPhoneVariations.push('91' + phone); // Add 91: 919326664680
+        allPhoneVariations.push('+91' + phone); // Add +91: +919326664680
+      }
+    });
+    
+    // Find users in the app with these phone numbers (check all variations)
     const appUsers = await User.find({
-      phone: { $in: phoneNumbers },
+      phone: { $in: allPhoneVariations },
       _id: { $ne: userId }
     }).select('name phone profilePicture about');
     
-    // Create a map of phone numbers to users
+    // Create a map of phone numbers to users (normalize for comparison)
     const phoneToUserMap = new Map();
     appUsers.forEach(user => {
       if (user.phone) {
-        phoneToUserMap.set(user.phone, user);
+        const normalizedUserPhone = user.phone.replace(/[\s\-\(\)\+]/g, ''); // Remove + and formatting
+        phoneToUserMap.set(normalizedUserPhone, user);
+        
+        // Also map original contact phone format
+        phoneNumbers.forEach(contactPhone => {
+          const normalizedContactPhone = contactPhone.replace(/[\s\-\(\)\+]/g, '');
+          if (normalizedUserPhone === normalizedContactPhone || 
+              normalizedUserPhone === '91' + normalizedContactPhone ||
+              normalizedUserPhone === normalizedContactPhone.substring(2)) { // Remove country code
+            phoneToUserMap.set(contactPhone, user);
+          }
+        });
       }
     });
     
