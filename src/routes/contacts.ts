@@ -206,6 +206,9 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
       profilePicture: (contact.appUserId && typeof contact.appUserId === 'object' && 'profilePicture' in contact.appUserId)
         ? (contact.appUserId as any).profilePicture
         : undefined,
+      about: (contact.appUserId && typeof contact.appUserId === 'object' && 'about' in contact.appUserId)
+        ? (contact.appUserId as any).about
+        : undefined,
       appUserId: (contact.appUserId && typeof contact.appUserId === 'object' && '_id' in contact.appUserId)
         ? (contact.appUserId as any)._id
         : contact.appUserId,
