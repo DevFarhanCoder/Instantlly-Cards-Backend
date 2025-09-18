@@ -37,21 +37,15 @@ router.post("/sync", requireAuth, async (req: AuthReq, res) => {
     
     // Find users in the app with these phone numbers
     const appUsers = await User.find({
-      $or: [
-        { personalPhone: { $in: phoneNumbers } },
-        { companyPhone: { $in: phoneNumbers } }
-      ],
+      phone: { $in: phoneNumbers },
       _id: { $ne: userId } // Exclude current user
-    }).select('name personalPhone companyPhone profilePicture');
+    }).select('name phone profilePicture about');
 
     // Create a map of phone numbers to users
     const phoneToUserMap = new Map();
     appUsers.forEach(user => {
-      if (user.personalPhone) {
-        phoneToUserMap.set(user.personalPhone, user);
-      }
-      if (user.companyPhone) {
-        phoneToUserMap.set(user.companyPhone, user);
+      if (user.phone) {
+        phoneToUserMap.set(user.phone, user);
       }
     });
 
@@ -90,12 +84,12 @@ router.get("/app-users", requireAuth, async (req: AuthReq, res) => {
     // In a real app, you'd return only synced contacts
     const appUsers = await User.find({
       _id: { $ne: userId }
-    }).select('name personalPhone companyPhone profilePicture').limit(50);
+    }).select('name phone profilePicture about').limit(50);
 
     const contacts: AppContact[] = appUsers.map(user => ({
       _id: user._id.toString(),
       name: user.name || 'Unknown User',
-      phoneNumber: user.personalPhone || user.companyPhone || '',
+      phoneNumber: user.phone || '',
       profilePicture: user.profilePicture,
       isAppUser: true,
       lastMessage: "Tap to start messaging",
@@ -124,21 +118,15 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
     
     // Find users in the app with these phone numbers
     const appUsers = await User.find({
-      $or: [
-        { personalPhone: { $in: phoneNumbers } },
-        { companyPhone: { $in: phoneNumbers } }
-      ],
+      phone: { $in: phoneNumbers },
       _id: { $ne: userId } // Exclude current user
-    }).select('name personalPhone companyPhone profilePicture');
+    }).select('name phone profilePicture about');
 
     // Create a map of phone numbers to users
     const phoneToUserMap = new Map();
     appUsers.forEach(user => {
-      if (user.personalPhone) {
-        phoneToUserMap.set(user.personalPhone, user);
-      }
-      if (user.companyPhone) {
-        phoneToUserMap.set(user.companyPhone, user);
+      if (user.phone) {
+        phoneToUserMap.set(user.phone, user);
       }
     });
 
@@ -197,7 +185,7 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
     const userId = req.userId;
     
     const contacts = await Contact.find({ userId })
-      .populate({ path: 'appUserId', select: 'name profilePicture', model: User })
+      .populate({ path: 'appUserId', select: 'name profilePicture about', model: User })
       .sort({ isAppUser: -1, name: 1 }) // App users first, then alphabetical
       .lean();
 
@@ -219,6 +207,76 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
   } catch (error) {
     console.error("Error fetching all contacts:", error);
     res.status(500).json({ error: "Failed to fetch contacts" });
+  }
+});
+
+// Refresh contact app user status (should be called when users sign up or update phone numbers)
+router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    
+    // Get all contacts for this user
+    const contacts = await Contact.find({ userId });
+    
+    if (contacts.length === 0) {
+      return res.json({ success: true, message: "No contacts to refresh", updated: 0 });
+    }
+    
+    // Extract phone numbers
+    const phoneNumbers = contacts.map(contact => contact.phoneNumber);
+    
+    // Find users in the app with these phone numbers
+    const appUsers = await User.find({
+      phone: { $in: phoneNumbers },
+      _id: { $ne: userId }
+    }).select('name phone profilePicture about');
+    
+    // Create a map of phone numbers to users
+    const phoneToUserMap = new Map();
+    appUsers.forEach(user => {
+      if (user.phone) {
+        phoneToUserMap.set(user.phone, user);
+      }
+    });
+    
+    // Update contact records
+    let updatedCount = 0;
+    const bulkOps = contacts.map(contact => {
+      const appUser = phoneToUserMap.get(contact.phoneNumber);
+      const wasAppUser = contact.isAppUser;
+      const isAppUser = !!appUser;
+      
+      if (wasAppUser !== isAppUser || (isAppUser && !contact.appUserId)) {
+        updatedCount++;
+        return {
+          updateOne: {
+            filter: { _id: contact._id },
+            update: {
+              $set: {
+                isAppUser,
+                appUserId: appUser ? appUser._id : undefined,
+                lastSynced: new Date()
+              }
+            }
+          }
+        };
+      }
+      return null;
+    }).filter(op => op !== null);
+    
+    if (bulkOps.length > 0) {
+      await Contact.bulkWrite(bulkOps);
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Refreshed contact status`,
+      updated: updatedCount,
+      totalChecked: contacts.length
+    });
+  } catch (error) {
+    console.error("Error refreshing contact app status:", error);
+    res.status(500).json({ error: "Failed to refresh contact status" });
   }
 });
 

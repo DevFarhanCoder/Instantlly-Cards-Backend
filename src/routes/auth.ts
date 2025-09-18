@@ -141,6 +141,13 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    // If phone number was updated, trigger contact refresh for all users
+    if (phone !== undefined) {
+      // Note: In a production app, you'd want to do this asynchronously
+      // For now, we'll just let other users refresh their contacts manually
+      console.log(`Phone number updated for user ${userId}, consider refreshing contacts for all users`);
+    }
+
     res.json({
       _id: user._id,
       name: user.name,
