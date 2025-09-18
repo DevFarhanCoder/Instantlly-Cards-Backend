@@ -109,14 +109,17 @@ router.post("/signup", async (req, res) => {
     // Normalize phone number (remove spaces, dashes, parentheses)
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
 
-    // Check if phone number already exists
+    // Check if phone number already exists (this is the primary check for phone-based auth)
     const existingPhone = await User.findOne({ phone: normalizedPhone }).lean();
     if (existingPhone) return res.status(409).json({ message: "Phone number already exists" });
 
-    // Only check email if it's provided and not empty
+    // For phone-based auth, we don't require or check email
+    // Email is optional and only checked if explicitly provided
+    let finalEmail = undefined;
     if (email && email.trim() !== "") {
       const existingEmail = await User.findOne({ email: email.trim() }).lean();
       if (existingEmail) return res.status(409).json({ message: "Email already exists" });
+      finalEmail = email.trim();
     }
 
     const hash = await bcrypt.hash(password, 10);
@@ -124,7 +127,7 @@ router.post("/signup", async (req, res) => {
       name, 
       phone: normalizedPhone,
       password: hash, 
-      email: email?.trim() || undefined // Don't store empty strings
+      email: finalEmail // Use the processed email (undefined if not provided)
     });
 
     const token = jwt.sign(

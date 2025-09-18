@@ -16,7 +16,11 @@ const UserSchema = new Schema(
       }
     },
     password: { type: String, required: true, select: false }, // <- key
-    email: { type: String, default: "", sparse: true }, // Made optional
+    email: { 
+      type: String, 
+      default: undefined,
+      sparse: true
+    }, // Made fully optional for phone-based auth
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },
   },
