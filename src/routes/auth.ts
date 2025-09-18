@@ -113,9 +113,9 @@ router.post("/signup", async (req, res) => {
     const existingPhone = await User.findOne({ phone: normalizedPhone }).lean();
     if (existingPhone) return res.status(409).json({ message: "Phone number already exists" });
 
-    // Check if email exists (if provided)
-    if (email) {
-      const existingEmail = await User.findOne({ email }).lean();
+    // Only check email if it's provided and not empty
+    if (email && email.trim() !== "") {
+      const existingEmail = await User.findOne({ email: email.trim() }).lean();
       if (existingEmail) return res.status(409).json({ message: "Email already exists" });
     }
 
@@ -124,7 +124,7 @@ router.post("/signup", async (req, res) => {
       name, 
       phone: normalizedPhone,
       password: hash, 
-      email: email || ""
+      email: email?.trim() || undefined // Don't store empty strings
     });
 
     const token = jwt.sign(
@@ -136,6 +136,7 @@ router.post("/signup", async (req, res) => {
     // After successful registration, notify users who have this phone in their contacts
     try {
       await notifyContactsOfNewUser(user._id.toString(), normalizedPhone);
+      console.log(`Signup successful for ${normalizedPhone}, contact notifications sent`);
     } catch (notificationError) {
       console.error("Error sending contact notifications:", notificationError);
       // Don't fail the signup if notifications fail
