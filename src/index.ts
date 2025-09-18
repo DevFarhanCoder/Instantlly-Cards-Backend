@@ -11,6 +11,7 @@ import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
+import notificationsRouter from "./routes/notifications";
 
 const app = express();
 app.use(cors());
@@ -38,6 +39,7 @@ const port = Number(process.env.PORT) || 8080;
 app.use("/api/auth", authRouter);            
 app.use("/api/cards", cardsRouter);          
 app.use("/api/contacts", contactsRouter);    
+app.use("/api/notifications", notificationsRouter);    
 
 // Start the server
 const server = app.listen(port, '0.0.0.0', () => {

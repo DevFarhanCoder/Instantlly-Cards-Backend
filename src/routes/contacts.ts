@@ -32,8 +32,14 @@ router.post("/sync", requireAuth, async (req: AuthReq, res) => {
       return res.status(400).json({ error: "Invalid contacts data" });
     }
 
+    // Normalize phone numbers for consistent matching
+    const normalizedContacts = contacts.map(contact => ({
+      name: contact.name,
+      phoneNumber: contact.phoneNumber.replace(/[\s\-\(\)]/g, '') // Remove formatting
+    }));
+
     // Extract phone numbers from contacts
-    const phoneNumbers = contacts.map(contact => contact.phoneNumber);
+    const phoneNumbers = normalizedContacts.map(contact => contact.phoneNumber);
     
     // Find users in the app with these phone numbers
     const appUsers = await User.find({
@@ -50,7 +56,7 @@ router.post("/sync", requireAuth, async (req: AuthReq, res) => {
     });
 
     // Match contacts with app users
-    const syncedContacts = contacts.map(contact => {
+    const syncedContacts = normalizedContacts.map(contact => {
       const appUser = phoneToUserMap.get(contact.phoneNumber);
       return {
         name: appUser ? appUser.name : contact.name,
@@ -60,9 +66,6 @@ router.post("/sync", requireAuth, async (req: AuthReq, res) => {
         profilePicture: appUser?.profilePicture
       };
     }).filter(contact => contact.isAppUser); // Only return app users
-
-    // You might want to save this sync data to database for future use
-    // await ContactSync.create({ userId, syncedAt: new Date(), contacts: syncedContacts });
 
     res.json({ 
       success: true, 
@@ -113,8 +116,14 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       return res.status(400).json({ error: "Invalid contacts data" });
     }
 
+    // Normalize phone numbers for consistent matching
+    const normalizedContacts = contacts.map(contact => ({
+      name: contact.name,
+      phoneNumber: contact.phoneNumber.replace(/[\s\-\(\)]/g, '') // Remove formatting
+    }));
+
     // Extract phone numbers from contacts to find app users
-    const phoneNumbers = contacts.map(contact => contact.phoneNumber);
+    const phoneNumbers = normalizedContacts.map(contact => contact.phoneNumber);
     
     // Find users in the app with these phone numbers
     const appUsers = await User.find({
@@ -131,7 +140,7 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
     });
 
     // Prepare contacts for bulk upsert
-    const contactsToSave = contacts.map(contact => {
+    const contactsToSave = normalizedContacts.map(contact => {
       const appUser = phoneToUserMap.get(contact.phoneNumber);
       return {
         updateOne: {
@@ -160,17 +169,17 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
     }
 
     // Return summary
-    const appUserContacts = contacts.filter(contact => {
+    const appUserContacts = normalizedContacts.filter(contact => {
       return phoneToUserMap.has(contact.phoneNumber);
     });
 
     res.json({ 
       success: true, 
-      message: `Synced ${contacts.length} contacts`,
+      message: `Synced ${normalizedContacts.length} contacts`,
       stats: {
-        total: contacts.length,
+        total: normalizedContacts.length,
         appUsers: appUserContacts.length,
-        nonAppUsers: contacts.length - appUserContacts.length
+        nonAppUsers: normalizedContacts.length - appUserContacts.length
       }
     });
   } catch (error) {
