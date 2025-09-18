@@ -289,4 +289,64 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// Get contacts categorized by app usage status
+router.get("/categorized", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    
+    const contacts = await Contact.find({ userId })
+      .populate({ path: 'appUserId', select: 'name phone profilePicture about', model: User })
+      .sort({ name: 1 })
+      .lean();
+
+    // Separate contacts into app users and non-app users
+    const appUsers: any[] = [];
+    const inviteContacts: any[] = [];
+
+    contacts.forEach(contact => {
+      const contactData = {
+        _id: contact._id,
+        name: contact.name,
+        phoneNumber: contact.phoneNumber,
+        lastSynced: contact.lastSynced
+      };
+
+      if (contact.isAppUser && contact.appUserId) {
+        const appUserData = contact.appUserId as any;
+        appUsers.push({
+          ...contactData,
+          profilePicture: appUserData.profilePicture || "",
+          about: appUserData.about || "Available",
+          appUserId: appUserData._id,
+          isAppUser: true
+        });
+      } else {
+        inviteContacts.push({
+          ...contactData,
+          isAppUser: false
+        });
+      }
+    });
+
+    res.json({ 
+      success: true, 
+      data: {
+        appUsers,
+        inviteContacts,
+        stats: {
+          total: contacts.length,
+          onApp: appUsers.length,
+          toInvite: inviteContacts.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching categorized contacts:", error);
+    res.status(500).json({ error: "Failed to fetch categorized contacts" });
+  }
+});
+
 export default router;

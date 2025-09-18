@@ -96,9 +96,9 @@ async function notifyContactsOfNewUser(newUserId: string, phoneNumber: string) {
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body ?? {};
-    if (!name || !email || !password || !phone) {
-      return res.status(400).json({ message: "Missing required fields: name, email, password, phone" });
+    const { name, phone, password, email } = req.body ?? {};
+    if (!name || !phone || !password) {
+      return res.status(400).json({ message: "Missing required fields: name, phone, password" });
     }
 
     // Validate phone number format
@@ -109,22 +109,26 @@ router.post("/signup", async (req, res) => {
     // Normalize phone number (remove spaces, dashes, parentheses)
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
 
-    const existingEmail = await User.findOne({ email }).lean();
-    if (existingEmail) return res.status(409).json({ message: "Email already exists" });
-
+    // Check if phone number already exists
     const existingPhone = await User.findOne({ phone: normalizedPhone }).lean();
     if (existingPhone) return res.status(409).json({ message: "Phone number already exists" });
+
+    // Check if email exists (if provided)
+    if (email) {
+      const existingEmail = await User.findOne({ email }).lean();
+      if (existingEmail) return res.status(409).json({ message: "Email already exists" });
+    }
 
     const hash = await bcrypt.hash(password, 10);
     const user = await User.create({ 
       name, 
-      email, 
+      phone: normalizedPhone,
       password: hash, 
-      phone: normalizedPhone 
+      email: email || ""
     });
 
     const token = jwt.sign(
-      { sub: user._id.toString(), email },
+      { sub: user._id.toString(), phone: user.phone },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
@@ -142,8 +146,8 @@ router.post("/signup", async (req, res) => {
       user: { 
         id: user._id, 
         name: user.name, 
-        email: user.email, 
-        phone: user.phone 
+        phone: user.phone,
+        email: user.email 
       },
     });
   } catch (e) {
@@ -160,27 +164,40 @@ router.post("/signup", async (req, res) => {
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
-    if (!email || !password) {
-      return res.status(400).json({ message: "Missing fields" });
+    const { phone, password } = req.body ?? {};
+    if (!phone || !password) {
+      return res.status(400).json({ message: "Missing fields: phone, password" });
     }
 
+    // Validate phone number format
+    if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
+      return res.status(400).json({ message: "Invalid phone number format" });
+    }
+
+    // Normalize phone number
+    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+
     // IMPORTANT: select the password hash
-    const user = await User.findOne({ email }).select("+password");
+    const user = await User.findOne({ phone: normalizedPhone }).select("+password");
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
     const token = jwt.sign(
-      { sub: user._id.toString(), email: user.email },
+      { sub: user._id.toString(), phone: user.phone },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
 
     res.json({
       token,
-      user: { id: user._id, name: user.name, email: user.email },
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        phone: user.phone,
+        email: user.email 
+      },
     });
   } catch (e) {
     console.error("LOGIN ERROR", e);
@@ -312,6 +329,38 @@ router.post("/upload-profile-picture", requireAuth, upload.single('profilePictur
     });
   } catch (error) {
     console.error("UPLOAD PROFILE PICTURE ERROR", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// POST /api/auth/check-phone - Check if phone number is registered
+router.post("/check-phone", async (req, res) => {
+  try {
+    const { phone } = req.body ?? {};
+    if (!phone) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+
+    // Validate phone number format
+    if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
+      return res.status(400).json({ message: "Invalid phone number format" });
+    }
+
+    // Normalize phone number
+    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+
+    const user = await User.findOne({ phone: normalizedPhone }).select('name phone profilePicture');
+    
+    res.json({
+      exists: !!user,
+      user: user ? {
+        name: user.name,
+        phone: user.phone,
+        profilePicture: user.profilePicture
+      } : null
+    });
+  } catch (error) {
+    console.error("CHECK PHONE ERROR", error);
     res.status(500).json({ message: "Server error" });
   }
 });
