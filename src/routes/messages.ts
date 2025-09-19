@@ -134,7 +134,7 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
   }
 });
 
-// Check for pending messages (simulate message delivery)
+// Check for pending messages (FIXED - Don't mark as delivered immediately)
 router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { userId } = req.params;
@@ -152,24 +152,8 @@ router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Resp
       isDelivered: false
     }).populate('sender', 'name phone profilePicture');
 
-    // Mark messages as delivered and read (since they were successfully received)
-    if (pendingMessages.length > 0) {
-      await Message.updateMany(
-        {
-          receiver: currentUserId,
-          sender: userId,
-          isPendingDelivery: true,
-          isDelivered: false
-        },
-        {
-          isDelivered: true,
-          deliveredAt: new Date(),
-          isPendingDelivery: false,
-          isRead: true, // Mark as read since user opened the chat
-          readAt: new Date()
-        }
-      );
-    }
+    // DON'T mark as delivered immediately - only return the messages
+    console.log(`📥 Found ${pendingMessages.length} pending messages from ${userId} to ${currentUserId}`);
 
     // Format messages for frontend
     const formattedMessages = pendingMessages.map((msg: any) => ({
@@ -177,8 +161,9 @@ router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Resp
       text: msg.content,
       timestamp: msg.createdAt,
       isFromMe: false,
-      status: 'delivered',
+      status: 'pending',
       senderName: msg.sender.name,
+      senderId: msg.sender._id.toString(),
       backendMessageId: msg._id.toString()
     }));
     
@@ -192,7 +177,7 @@ router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Resp
   }
 });
 
-// Check for all pending messages for current user
+// Check for all pending messages for current user (FIXED - Don't mark as delivered immediately)
 router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const currentUserId = req.userId;
@@ -224,28 +209,15 @@ router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response
         text: msg.content,
         timestamp: msg.createdAt,
         isFromMe: false,
-        status: 'delivered',
+        status: 'pending',
         backendMessageId: msg._id.toString()
       });
       
       return acc;
     }, {});
 
-    // Mark all messages as delivered
-    if (pendingMessages.length > 0) {
-      await Message.updateMany(
-        {
-          receiver: currentUserId,
-          isPendingDelivery: true,
-          isDelivered: false
-        },
-        {
-          isDelivered: true,
-          deliveredAt: new Date(),
-          isPendingDelivery: false
-        }
-      );
-    }
+    // DON'T mark as delivered yet - only when specifically confirmed by the receiving device
+    console.log(`📥 Found ${pendingMessages.length} pending messages for user ${currentUserId}`);
     
     res.json({
       success: true,
@@ -291,6 +263,43 @@ router.put('/update-status/:messageId', requireAuth, async (req: AuthReq, res: R
   } catch (error) {
     console.error('Update message status error:', error);
     res.status(500).json({ error: 'Failed to update message status' });
+  }
+});
+
+// Mark messages as delivered (called after the receiving device actually processes them)
+router.post('/mark-delivered', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageIds } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId || !messageIds || !Array.isArray(messageIds)) {
+      return res.status(400).json({ error: 'User ID and message IDs are required' });
+    }
+
+    // Mark messages as delivered
+    const result = await Message.updateMany(
+      {
+        receiver: currentUserId,
+        _id: { $in: messageIds },
+        isPendingDelivery: true,
+        isDelivered: false
+      },
+      {
+        isDelivered: true,
+        deliveredAt: new Date(),
+        isPendingDelivery: false
+      }
+    );
+
+    console.log(`✅ Marked ${result.modifiedCount} messages as delivered for user ${currentUserId}`);
+    
+    res.json({
+      success: true,
+      markedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Mark delivered error:', error);
+    res.status(500).json({ error: 'Failed to mark messages as delivered' });
   }
 });
 
