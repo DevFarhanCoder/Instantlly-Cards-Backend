@@ -238,4 +238,166 @@ router.put("/:groupId", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// Transfer admin rights
+router.put("/:groupId/transfer-admin", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { groupId } = req.params;
+    const { newAdminId } = req.body;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (!newAdminId) {
+      return res.status(400).json({ message: "New admin ID is required" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Check if user is current admin
+    if (group.admin.toString() !== userId) {
+      return res.status(403).json({ message: "Only current admin can transfer admin rights" });
+    }
+
+    // Check if new admin is a member of the group
+    if (!group.members.includes(newAdminId as any)) {
+      return res.status(400).json({ message: "New admin must be a member of the group" });
+    }
+
+    // Transfer admin rights
+    group.admin = newAdminId as any;
+    await group.save();
+
+    // Get user info for notifications
+    const currentAdmin = await User.findById(userId);
+    const newAdmin = await User.findById(newAdminId);
+
+    // Notify new admin
+    await Notification.create({
+      userId: newAdminId,
+      type: 'GENERAL',
+      title: 'Group Admin',
+      message: `You are now an admin of "${group.name}"`,
+      data: {
+        groupId: group._id,
+        groupName: group.name,
+        previousAdminId: userId,
+        previousAdminName: currentAdmin?.name
+      }
+    });
+
+    // Notify all other members about admin change
+    const otherMembers = group.members.filter(
+      memberId => memberId.toString() !== userId && memberId.toString() !== newAdminId
+    );
+
+    if (otherMembers.length > 0) {
+      const notifications = otherMembers.map(memberId => ({
+        userId: memberId,
+        type: 'GENERAL',
+        title: 'Admin Changed',
+        message: `${newAdmin?.name || 'Someone'} is now admin of "${group.name}"`,
+        data: {
+          groupId: group._id,
+          groupName: group.name,
+          newAdminId: newAdminId,
+          newAdminName: newAdmin?.name,
+          previousAdminId: userId,
+          previousAdminName: currentAdmin?.name
+        }
+      }));
+
+      await Notification.insertMany(notifications);
+    }
+
+    const populatedGroup = await Group.findById(group._id)
+      .populate('members', 'name phoneNumber profilePicture')
+      .populate('admin', 'name phoneNumber profilePicture');
+
+    res.status(200).json({
+      message: "Admin rights transferred successfully",
+      group: populatedGroup
+    });
+
+  } catch (error) {
+    console.error("Error transferring admin rights:", error);
+    res.status(500).json({ message: "Failed to transfer admin rights" });
+  }
+});
+
+// Leave group
+router.post("/:groupId/leave", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { groupId } = req.params;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Check if user is a member
+    if (!group.members.includes(userId as any)) {
+      return res.status(400).json({ message: "You are not a member of this group" });
+    }
+
+    // If user is admin and there are other members, they must transfer admin rights first
+    if (group.admin.toString() === userId && group.members.length > 1) {
+      return res.status(400).json({ 
+        message: "As admin, you must transfer admin rights to another member before leaving" 
+      });
+    }
+
+    // Remove user from group
+    group.members = group.members.filter(memberId => memberId.toString() !== userId);
+
+    // If this was the last member, delete the group
+    if (group.members.length === 0) {
+      await Group.findByIdAndDelete(groupId);
+      return res.status(200).json({
+        message: "Successfully left group. Group has been deleted as it has no members.",
+        groupDeleted: true
+      });
+    }
+
+    await group.save();
+
+    // Get user info for notification
+    const user = await User.findById(userId);
+    const userName = user?.name || "Someone";
+
+    // Notify remaining members
+    const notifications = group.members.map(memberId => ({
+      userId: memberId,
+      type: 'GENERAL',
+      title: 'Member Left',
+      message: `${userName} left the group "${group.name}"`,
+      data: {
+        groupId: group._id,
+        groupName: group.name,
+        leftMemberId: userId,
+        leftMemberName: userName
+      }
+    }));
+
+    await Notification.insertMany(notifications);
+
+    res.status(200).json({
+      message: "Successfully left group"
+    });
+
+  } catch (error) {
+    console.error("Error leaving group:", error);
+    res.status(500).json({ message: "Failed to leave group" });
+  }
+});
+
 export default router;
