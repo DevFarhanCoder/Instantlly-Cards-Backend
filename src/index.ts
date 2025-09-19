@@ -13,6 +13,7 @@ import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
 import messagesRouter from "./routes/messages";
+import groupsRouter from "./routes/groups";
 
 const app = express();
 app.use(cors());
@@ -42,6 +43,7 @@ app.use("/api/cards", cardsRouter);
 app.use("/api/contacts", contactsRouter);    
 app.use("/api/notifications", notificationsRouter);    
 app.use("/api/messages", messagesRouter);    
+app.use("/api/groups", groupsRouter);    
 
 // Start the server
 const server = app.listen(port, '0.0.0.0', () => {
