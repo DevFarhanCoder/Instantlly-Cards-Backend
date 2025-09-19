@@ -533,4 +533,80 @@ router.get('/search/:userId', requireAuth, async (req: AuthReq, res: Response) =
   }
 });
 
+// Store for typing status (in-memory for now)
+const typingStatus = new Map<string, { isTyping: boolean, lastUpdate: Date }>();
+
+// Set typing status
+router.post('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { isTyping } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const conversationId = getConversationId(currentUserId, userId);
+    const key = `${conversationId}-${currentUserId}`;
+
+    typingStatus.set(key, {
+      isTyping: Boolean(isTyping),
+      lastUpdate: new Date()
+    });
+
+    // Clean up old typing statuses (older than 10 seconds)
+    const now = new Date();
+    for (const [statusKey, status] of typingStatus.entries()) {
+      if (now.getTime() - status.lastUpdate.getTime() > 10000) {
+        typingStatus.delete(statusKey);
+      }
+    }
+
+    console.log(`💬 User ${currentUserId} typing status: ${isTyping} in conversation with ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Typing status updated'
+    });
+  } catch (error) {
+    console.error('Set typing status error:', error);
+    res.status(500).json({ error: 'Failed to set typing status' });
+  }
+});
+
+// Get typing status
+router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const conversationId = getConversationId(currentUserId, userId);
+    const key = `${conversationId}-${userId}`;
+
+    const status = typingStatus.get(key);
+    
+    // Clean up old typing statuses
+    const now = new Date();
+    if (status && now.getTime() - status.lastUpdate.getTime() > 10000) {
+      typingStatus.delete(key);
+    }
+
+    const isTyping = status ? status.isTyping && (now.getTime() - status.lastUpdate.getTime() < 10000) : false;
+
+    res.json({
+      success: true,
+      isTyping,
+      userId
+    });
+  } catch (error) {
+    console.error('Get typing status error:', error);
+    res.status(500).json({ error: 'Failed to get typing status' });
+  }
+});
+
 export default router;
