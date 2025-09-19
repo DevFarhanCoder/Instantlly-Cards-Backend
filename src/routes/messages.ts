@@ -54,7 +54,7 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
     console.log(`Local message from ${sender.name} to ${receiver.name}: ${content}`);
 
     // Send push notification to the receiver if they have a push token
-    if (receiver.pushToken) {
+    if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
       try {
         await sendMessageNotification(
           receiver.pushToken,
@@ -66,6 +66,8 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
       } catch (error) {
         console.error('Failed to send push notification:', error);
       }
+    } else if (receiver.pushToken === 'expo-go-local-mode') {
+      console.log(`📱 Receiver ${receiver.name} is using Expo Go - notification will be handled locally`);
     } else {
       console.log(`📱 No push token for ${receiver.name}, skipping push notification`);
     }
