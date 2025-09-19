@@ -162,4 +162,38 @@ router.get("/stats", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// POST /api/notifications/register-token - Register push notification token
+router.post("/register-token", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { pushToken, platform } = req.body;
+    
+    if (!pushToken) {
+      return res.status(400).json({ error: "Push token is required" });
+    }
+
+    // Update user with push token (you might want to create a separate model for this)
+    const User = mongoose.model('User');
+    await User.findByIdAndUpdate(userId, {
+      pushToken,
+      platform: platform || 'unknown',
+      pushTokenUpdatedAt: new Date()
+    });
+
+    console.log(`📱 Registered push token for user ${userId}: ${pushToken}`);
+
+    res.json({
+      success: true,
+      message: "Push token registered successfully"
+    });
+  } catch (error) {
+    console.error("Error registering push token:", error);
+    res.status(500).json({ error: "Failed to register push token" });
+  }
+});
+
 export default router;

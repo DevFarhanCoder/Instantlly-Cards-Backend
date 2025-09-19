@@ -23,6 +23,9 @@ const UserSchema = new Schema(
     }, // Made fully optional for phone-based auth
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },
+    pushToken: { type: String },
+    platform: { type: String },
+    pushTokenUpdatedAt: { type: Date },
   },
   { timestamps: true }
 );

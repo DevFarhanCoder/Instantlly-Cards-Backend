@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import Message from '../models/Message';
 import User from '../models/User';
 import { requireAuth, AuthReq } from '../middleware/auth';
+import { sendMessageNotification } from '../services/pushNotifications';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ const getConversationId = (userId1: string, userId2: string): string => {
   return [userId1, userId2].sort().join('-');
 };
 
-// Send a local message (P2P style - no database storage)
+// Send a local message (P2P style - with temporary backend storage for delivery)
 router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { receiverId, content, timestamp, messageId } = req.body;
@@ -34,19 +35,49 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ error: 'Sender not found' });
     }
 
-    // In a real implementation, you would send a push notification here
-    // For now, we'll just return success to indicate the message was "sent"
-    // The frontend will handle local storage
+    // Store message temporarily for delivery (will be deleted after delivery)
+    const message = new Message({
+      _id: new mongoose.Types.ObjectId(),
+      sender: senderId,
+      receiver: receiverId,
+      content: content.trim(),
+      messageType: 'text',
+      conversationId: getConversationId(senderId, receiverId),
+      createdAt: new Date(timestamp),
+      isDelivered: false, // Track delivery status
+      isPendingDelivery: true, // Mark as pending for delivery
+      localMessageId: messageId // Store the frontend message ID
+    });
+
+    await message.save();
     
     console.log(`Local message from ${sender.name} to ${receiver.name}: ${content}`);
 
+    // Send push notification to the receiver if they have a push token
+    if (receiver.pushToken) {
+      try {
+        await sendMessageNotification(
+          receiver.pushToken,
+          sender.name,
+          content,
+          senderId
+        );
+        console.log(`📱 Push notification sent to ${receiver.name}`);
+      } catch (error) {
+        console.error('Failed to send push notification:', error);
+      }
+    } else {
+      console.log(`📱 No push token for ${receiver.name}, skipping push notification`);
+    }
+
     res.status(200).json({
       success: true,
-      message: 'Message sent locally',
+      message: 'Message queued for delivery',
       messageId,
       timestamp,
       receiverName: receiver.name,
-      senderName: sender.name
+      senderName: sender.name,
+      backendMessageId: message._id
     });
   } catch (error) {
     console.error('Send local message error:', error);
@@ -111,17 +142,153 @@ router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Resp
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // In a real implementation, you would check for pending messages
-    // For now, we'll return empty to indicate no pending messages
-    // This would be replaced with a proper message queue or push notification system
+    // Find messages pending delivery to the current user from the specified userId
+    const pendingMessages = await Message.find({
+      receiver: currentUserId,
+      sender: userId,
+      isPendingDelivery: true,
+      isDelivered: false
+    }).populate('sender', 'name phone profilePicture');
+
+    // Mark messages as delivered and read (since they were successfully received)
+    if (pendingMessages.length > 0) {
+      await Message.updateMany(
+        {
+          receiver: currentUserId,
+          sender: userId,
+          isPendingDelivery: true,
+          isDelivered: false
+        },
+        {
+          isDelivered: true,
+          deliveredAt: new Date(),
+          isPendingDelivery: false,
+          isRead: true, // Mark as read since user opened the chat
+          readAt: new Date()
+        }
+      );
+    }
+
+    // Format messages for frontend
+    const formattedMessages = pendingMessages.map((msg: any) => ({
+      id: msg.localMessageId || msg._id.toString(),
+      text: msg.content,
+      timestamp: msg.createdAt,
+      isFromMe: false,
+      status: 'delivered',
+      senderName: msg.sender.name,
+      backendMessageId: msg._id.toString()
+    }));
     
     res.json({
       success: true,
-      messages: [] // No pending messages for demo
+      messages: formattedMessages
     });
   } catch (error) {
     console.error('Check pending messages error:', error);
     res.status(500).json({ error: 'Failed to check pending messages' });
+  }
+});
+
+// Check for all pending messages for current user
+router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Find all messages pending delivery to the current user
+    const pendingMessages = await Message.find({
+      receiver: currentUserId,
+      isPendingDelivery: true,
+      isDelivered: false
+    }).populate('sender', 'name phone profilePicture');
+
+    // Group messages by sender
+    const messagesBySender = pendingMessages.reduce((acc: any, msg: any) => {
+      const senderId = msg.sender._id.toString();
+      if (!acc[senderId]) {
+        acc[senderId] = {
+          senderId,
+          senderName: msg.sender.name,
+          messages: []
+        };
+      }
+      
+      acc[senderId].messages.push({
+        id: msg.localMessageId || msg._id.toString(),
+        text: msg.content,
+        timestamp: msg.createdAt,
+        isFromMe: false,
+        status: 'delivered',
+        backendMessageId: msg._id.toString()
+      });
+      
+      return acc;
+    }, {});
+
+    // Mark all messages as delivered
+    if (pendingMessages.length > 0) {
+      await Message.updateMany(
+        {
+          receiver: currentUserId,
+          isPendingDelivery: true,
+          isDelivered: false
+        },
+        {
+          isDelivered: true,
+          deliveredAt: new Date(),
+          isPendingDelivery: false
+        }
+      );
+    }
+    
+    res.json({
+      success: true,
+      messagesBySender: Object.values(messagesBySender),
+      totalMessages: pendingMessages.length
+    });
+  } catch (error) {
+    console.error('Check all pending messages error:', error);
+    res.status(500).json({ error: 'Failed to check all pending messages' });
+  }
+});
+
+// Update message status (mark as read, etc.)
+router.put('/update-status/:messageId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageId } = req.params;
+    const { status } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const updateData: any = {};
+    
+    if (status === 'read') {
+      updateData.isRead = true;
+      updateData.readAt = new Date();
+    }
+
+    await Message.findOneAndUpdate(
+      {
+        _id: messageId,
+        receiver: currentUserId
+      },
+      updateData
+    );
+
+    res.json({
+      success: true,
+      message: 'Message status updated'
+    });
+  } catch (error) {
+    console.error('Update message status error:', error);
+    res.status(500).json({ error: 'Failed to update message status' });
   }
 });
 

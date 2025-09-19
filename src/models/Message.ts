@@ -10,6 +10,10 @@ interface IMessage extends mongoose.Document {
   conversationId: string;
   createdAt: Date;
   updatedAt: Date;
+  isDelivered: boolean;
+  deliveredAt?: Date;
+  isPendingDelivery: boolean;
+  localMessageId?: string;
 }
 
 interface IMessageModel extends mongoose.Model<IMessage> {
@@ -43,6 +47,20 @@ const messageSchema = new mongoose.Schema({
   },
   readAt: {
     type: Date
+  },
+  isDelivered: {
+    type: Boolean,
+    default: false
+  },
+  deliveredAt: {
+    type: Date
+  },
+  isPendingDelivery: {
+    type: Boolean,
+    default: false
+  },
+  localMessageId: {
+    type: String
   },
   conversationId: {
     type: String,
