@@ -11,7 +11,50 @@ const getConversationId = (userId1: string, userId2: string): string => {
   return [userId1, userId2].sort().join('-');
 };
 
-// Send a new message
+// Send a local message (P2P style - no database storage)
+router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { receiverId, content, timestamp, messageId } = req.body;
+    const senderId = req.userId;
+
+    if (!receiverId || !content || !senderId) {
+      return res.status(400).json({ 
+        error: 'Receiver ID and content are required' 
+      });
+    }
+
+    // Verify receiver exists
+    const receiver = await User.findById(receiverId);
+    if (!receiver) {
+      return res.status(404).json({ error: 'Receiver not found' });
+    }
+
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(404).json({ error: 'Sender not found' });
+    }
+
+    // In a real implementation, you would send a push notification here
+    // For now, we'll just return success to indicate the message was "sent"
+    // The frontend will handle local storage
+    
+    console.log(`Local message from ${sender.name} to ${receiver.name}: ${content}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Message sent locally',
+      messageId,
+      timestamp,
+      receiverName: receiver.name,
+      senderName: sender.name
+    });
+  } catch (error) {
+    console.error('Send local message error:', error);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// Send a new message (Original database-based messaging - kept for compatibility)
 router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { receiverId, content, messageType = 'text' } = req.body;
@@ -55,6 +98,30 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
   } catch (error) {
     console.error('Send message error:', error);
     res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
+// Check for pending messages (simulate message delivery)
+router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // In a real implementation, you would check for pending messages
+    // For now, we'll return empty to indicate no pending messages
+    // This would be replaced with a proper message queue or push notification system
+    
+    res.json({
+      success: true,
+      messages: [] // No pending messages for demo
+    });
+  } catch (error) {
+    console.error('Check pending messages error:', error);
+    res.status(500).json({ error: 'Failed to check pending messages' });
   }
 });
 

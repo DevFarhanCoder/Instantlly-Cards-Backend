@@ -2,8 +2,31 @@ import express from "express";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import Contact from "../models/Contact";
+import Notification from "../models/Notification";
 
 const router = express.Router();
+
+// Helper function to create notifications when a contact joins the app
+const createContactJoinedNotification = async (userId: string, contactName: string, contactUserId: string) => {
+  try {
+    const notification = new Notification({
+      userId,
+      type: 'contact_joined',
+      title: 'Contact Joined InstantllyCards',
+      message: `${contactName} is now on InstantllyCards! Say hello.`,
+      data: {
+        contactUserId,
+        contactName
+      },
+      read: false
+    });
+    
+    await notification.save();
+    console.log(`Created notification for user ${userId}: ${contactName} joined`);
+  } catch (error) {
+    console.error('Error creating contact joined notification:', error);
+  }
+};
 
 // Contact model (you might want to create a separate model)
 interface DeviceContact {
@@ -250,6 +273,10 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
     
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
     // Get all contacts for this user
     const contacts = await Contact.find({ userId });
     
@@ -299,6 +326,7 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
     
     // Update contact records
     let updatedCount = 0;
+    const newlyJoinedContacts: any[] = [];
     const bulkOps = contacts.map(contact => {
       const appUser = phoneToUserMap.get(contact.phoneNumber);
       const wasAppUser = contact.isAppUser;
@@ -306,6 +334,15 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
       
       if (wasAppUser !== isAppUser || (isAppUser && !contact.appUserId)) {
         updatedCount++;
+        
+        // Track newly joined contacts for notifications
+        if (!wasAppUser && isAppUser && appUser) {
+          newlyJoinedContacts.push({
+            name: contact.name || appUser.name,
+            userId: appUser._id
+          });
+        }
+        
         return {
           updateOne: {
             filter: { _id: contact._id },
@@ -326,11 +363,16 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
       await Contact.bulkWrite(bulkOps);
     }
     
+    // Create notifications for newly joined contacts
+    for (const joinedContact of newlyJoinedContacts) {
+      await createContactJoinedNotification(userId, joinedContact.name, joinedContact.userId);
+    }
     res.json({ 
       success: true, 
       message: `Refreshed contact status`,
       updated: updatedCount,
-      totalChecked: contacts.length
+      totalChecked: contacts.length,
+      newNotifications: newlyJoinedContacts.length
     });
   } catch (error) {
     console.error("Error refreshing contact app status:", error);
