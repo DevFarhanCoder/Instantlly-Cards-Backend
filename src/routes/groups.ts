@@ -81,17 +81,8 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
 
     console.log('🔍 Generating invite code...');
 
-    // Generate unique invite code
-    let joinCode: string = '';
-    let isUnique = false;
-    
-    while (!isUnique) {
-      joinCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const existingGroup = await Group.findOne({ joinCode });
-      if (!existingGroup) {
-        isUnique = true;
-      }
-    }
+    // Generate unique invite code using the model's static method
+    const joinCode = await Group.generateInviteCode();
 
     console.log('🔍 Generated invite code:', joinCode);
     console.log('🔍 Creating group with data:', {
