@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import mongoose from 'mongoose';
+import { Types } from 'mongoose';
 import Group from '../models/Group';
 import User from '../models/User';
 import { requireAuth, AuthReq } from '../middleware/auth';
@@ -12,11 +12,14 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const userId = req.userId;
     
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
     const groups = await Group.find({
-      members: userId
+      members: new Types.ObjectId(userId)
     }).populate('members', 'name phone profilePicture')
-      .populate('admin', 'name phone')
-      .sort({ updatedAt: -1 });
+      .populate('admin', 'name phone');
 
     res.json({
       success: true,
@@ -34,18 +37,25 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const { name, description, memberIds, icon } = req.body;
     const adminId = req.userId;
 
+    if (!adminId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
     if (!name || !memberIds || !Array.isArray(memberIds)) {
       return res.status(400).json({ 
         error: 'Group name and member IDs are required' 
       });
     }
 
-    // Verify all member IDs exist
-    const members = await User.find({
-      _id: { $in: [...memberIds, adminId] }
-    });
+    // Convert to ObjectIds
+    const memberObjectIds = memberIds.map((id: string) => new Types.ObjectId(id));
+    const adminObjectId = new Types.ObjectId(adminId);
+    const allMemberIds = [...memberObjectIds, adminObjectId];
 
-    if (members.length !== memberIds.length + 1) {
+    // Verify all member IDs exist
+    const members = await User.find({ _id: { $in: allMemberIds } });
+
+    if (members.length !== allMemberIds.length) {
       return res.status(400).json({ 
         error: 'Some member IDs are invalid' 
       });
@@ -66,12 +76,10 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const group = await Group.create({
       name: name.trim(),
       description: description?.trim() || '',
-      icon: icon || '',
-      members: [...memberIds, adminId],
-      admin: adminId,
-      inviteCode: inviteCode!,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      image: icon || '',
+      members: allMemberIds,
+      admin: adminObjectId,
+      inviteCode: inviteCode!
     });
 
     // Populate the group data
@@ -80,14 +88,14 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('admin', 'name phone');
 
     // Send notifications to all members except admin
-    if (populatedGroup && memberIds.length > 0) {
+    if (memberIds.length > 0) {
       try {
-        const adminData = populatedGroup.admin as any;
-        const adminName = (adminData && adminData.name) ? String(adminData.name) : 'Someone';
+        const admin = await User.findById(adminId);
+        const adminName = admin?.name || 'Someone';
         
         for (const memberId of memberIds) {
           try {
-            const member = await User.findById(memberId);
+            const member = await User.findById(new Types.ObjectId(memberId));
             if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
               await sendMessageNotification(
                 member.pushToken,
@@ -95,9 +103,9 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
                 `${adminName} added you to a new group`,
                 JSON.stringify({ 
                   type: 'group_invite',
-                  groupId: group._id?.toString() || '',
+                  groupId: group._id,
                   groupName: group.name,
-                  adminId: adminId?.toString() || ''
+                  adminId: adminId
                 })
               );
             }
@@ -140,26 +148,28 @@ router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ error: 'Invalid invite code' });
     }
 
-    // Convert userId to ObjectId for comparison
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    
-    if (group.members.some(memberId => memberId.equals(userObjectId))) {
+    if (group.members.includes(new Types.ObjectId(userId))) {
       return res.status(400).json({ error: 'You are already a member of this group' });
     }
 
     // Add user to group
-    group.members.push(userObjectId);
-    group.updatedAt = new Date();
-    await group.save();
+    const updatedGroup = await Group.findByIdAndUpdate(
+      group._id, 
+      {
+        $push: { members: new Types.ObjectId(userId) },
+        updatedAt: new Date()
+      },
+      { new: true }
+    ).populate('members', 'name phone profilePicture')
+     .populate('admin', 'name phone');
 
-    // Populate the updated group
-    const populatedGroup = await Group.findById(group._id)
-      .populate('members', 'name phone profilePicture')
-      .populate('admin', 'name phone');
+    if (!updatedGroup) {
+      return res.status(500).json({ error: 'Failed to join group' });
+    }
 
     res.json({
       success: true,
-      group: populatedGroup,
+      group: updatedGroup,
       message: 'Successfully joined the group'
     });
   } catch (error) {
@@ -183,23 +193,22 @@ router.delete('/:id', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    
     // Check if user is a member of the group
-    if (!group.members.some(memberId => memberId.equals(userObjectId))) {
+    if (!group.members.includes(new Types.ObjectId(userId))) {
       return res.status(403).json({ error: 'You are not a member of this group' });
     }
 
     // If user is admin and there are other members, transfer admin or delete group
-    if (group.admin.equals(userObjectId)) {
-      const otherMembers = group.members.filter(memberId => !memberId.equals(userObjectId));
+    if (group.admin.toString() === userId) {
+      const otherMembers = group.members.filter(memberId => memberId.toString() !== userId);
       
       if (otherMembers.length > 0) {
         // Transfer admin to first remaining member
-        group.admin = otherMembers[0];
-        group.members = otherMembers;
-        group.updatedAt = new Date();
-        await group.save();
+        await Group.findByIdAndUpdate(groupId, {
+          admin: otherMembers[0],
+          members: otherMembers,
+          updatedAt: new Date()
+        });
 
         return res.json({
           success: true,
@@ -218,9 +227,10 @@ router.delete('/:id', requireAuth, async (req: AuthReq, res: Response) => {
       }
     } else {
       // Regular member leaving
-      group.members = group.members.filter(memberId => !memberId.equals(userObjectId));
-      group.updatedAt = new Date();
-      await group.save();
+      await Group.findByIdAndUpdate(groupId, {
+        $pull: { members: new Types.ObjectId(userId) },
+        updatedAt: new Date()
+      });
 
       return res.json({
         success: true,
@@ -239,28 +249,23 @@ router.delete('/', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const userId = req.userId;
     
-    // Remove user from all groups they're a member of
-    await Group.updateMany(
-      { members: userId },
-      { $pull: { members: userId } }
-    );
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
     
-    // Delete groups where user was admin and now has no members
-    await Group.deleteMany({
-      admin: userId,
-      members: { $size: 0 }
-    });
+    // Get all groups where user is a member
+    const userGroups = await Group.find({ members: new Types.ObjectId(userId) });
     
-    // Transfer admin for groups where user was admin but has other members
-    const adminGroups = await Group.find({
-      admin: userId,
-      members: { $exists: true, $not: { $size: 0 } }
-    });
-    
-    for (const group of adminGroups) {
-      if (group.members.length > 0) {
-        group.admin = group.members[0];
-        await group.save();
+    for (const group of userGroups) {
+      if (group.admin.toString() === userId) {
+        // If user is admin, delete the group entirely
+        await Group.findByIdAndDelete(group._id);
+      } else {
+        // If user is just a member, remove them from the group
+        await Group.findByIdAndUpdate(group._id, {
+          $pull: { members: new Types.ObjectId(userId) },
+          updatedAt: new Date()
+        });
       }
     }
 

@@ -3,10 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
-import mongoose from "mongoose";
 import User from "../models/User";
-import Contact from "../models/Contact";
-import Notification from "../models/Notification";
 import { requireAuth, AuthReq } from "../middleware/auth";
 
 const router = Router();
@@ -34,65 +31,6 @@ const upload = multer({
   }
 });
 
-// Function to notify contacts when a new user joins
-async function notifyContactsOfNewUser(newUserId: string, phoneNumber: string) {
-  try {
-    // Find all contacts that have this phone number
-    const contacts = await Contact.find({ 
-      phoneNumber: phoneNumber,
-      isAppUser: false // They weren't app users before
-    }).populate('userId', 'name');
-
-    if (contacts.length === 0) {
-      console.log(`No contacts found for phone number: ${phoneNumber}`);
-      return;
-    }
-
-    // Get the new user's info
-    const newUser = await User.findById(newUserId).select('name phone');
-    if (!newUser) {
-      console.error(`New user ${newUserId} not found`);
-      return;
-    }
-
-    // Update all contacts to mark them as app users
-    await Contact.updateMany(
-      { phoneNumber: phoneNumber },
-      { 
-        $set: { 
-          isAppUser: true, 
-          appUserId: new mongoose.Types.ObjectId(newUserId),
-          lastSynced: new Date()
-        } 
-      }
-    );
-
-    // Create notifications for all users who had this contact
-    const notificationPromises = contacts.map(async (contact) => {
-      const ownerName = (contact.userId as any)?.name || 'Unknown';
-      
-      return Notification.create({
-        userId: contact.userId,
-        type: 'CONTACT_JOINED',
-        title: '🎉 Contact joined InstantllyCards!',
-        message: `${contact.name} is now on InstantllyCards`,
-        data: {
-          contactId: contact._id,
-          newUserId: new mongoose.Types.ObjectId(newUserId),
-          contactName: contact.name,
-          contactPhone: phoneNumber
-        }
-      });
-    });
-
-    await Promise.all(notificationPromises);
-    console.log(`Created ${contacts.length} notifications for new user ${newUser.name}`);
-  } catch (error) {
-    console.error('Error in notifyContactsOfNewUser:', error);
-    throw error;
-  }
-}
-
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
@@ -109,41 +47,33 @@ router.post("/signup", async (req, res) => {
     // Normalize phone number (remove spaces, dashes, parentheses)
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
 
-    // Check if phone number already exists (this is the primary check for phone-based auth)
-    const existingPhone = await User.findOne({ phone: normalizedPhone }).lean();
+    // Check if phone number already exists
+    const existingPhone = await User.findOne({ phone: normalizedPhone });
     if (existingPhone) return res.status(409).json({ message: "Phone number already exists" });
 
-    // For phone-based auth, we don't require or check email
-    // Email is optional and only checked if explicitly provided
+    // Handle email if provided
     let finalEmail = undefined;
     if (email && email.trim() !== "") {
-      const existingEmail = await User.findOne({ email: email.trim() }).lean();
+      const existingEmail = await User.findOne({ email: email.trim() });
       if (existingEmail) return res.status(409).json({ message: "Email already exists" });
       finalEmail = email.trim();
     }
 
-    const hash = await bcrypt.hash(password, 10);
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 12);
+
     const user = await User.create({ 
       name, 
       phone: normalizedPhone,
-      password: hash, 
-      email: finalEmail // Use the processed email (undefined if not provided)
+      password: hashedPassword,
+      email: finalEmail
     });
 
     const token = jwt.sign(
-      { sub: user._id.toString(), phone: user.phone },
+      { sub: user._id, phone: user.phone },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
-
-    // After successful registration, notify users who have this phone in their contacts
-    try {
-      await notifyContactsOfNewUser(user._id.toString(), normalizedPhone);
-      console.log(`Signup successful for ${normalizedPhone}, contact notifications sent`);
-    } catch (notificationError) {
-      console.error("Error sending contact notifications:", notificationError);
-      // Don't fail the signup if notifications fail
-    }
 
     res.status(201).json({
       token,
@@ -156,11 +86,6 @@ router.post("/signup", async (req, res) => {
     });
   } catch (e) {
     console.error("SIGNUP ERROR", e);
-    if ((e as any).code === 11000) {
-      // Duplicate key error
-      const field = Object.keys((e as any).keyPattern)[0];
-      return res.status(409).json({ message: `${field} already exists` });
-    }
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -181,15 +106,14 @@ router.post("/login", async (req, res) => {
     // Normalize phone number
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
 
-    // IMPORTANT: select the password hash
-    const user = await User.findOne({ phone: normalizedPhone }).select("+password");
+    const user = await User.findOne({ phone: normalizedPhone });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
     const token = jwt.sign(
-      { sub: user._id.toString(), phone: user.phone },
+      { sub: user._id, phone: user.phone },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
@@ -226,7 +150,7 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       email: user.email,
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
-      about: user.about || "Available",
+      about: (user as any).about || "Available",
     };
     
     console.log("Sending profile data:", profileData);
@@ -256,38 +180,19 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
       
       // Check if phone number is already taken by another user
-      const existingUser = await User.findOne({ 
-        phone: normalizedPhone, 
-        _id: { $ne: userId } 
-      }).lean();
+      const existingUser = await User.findOne({ phone: normalizedPhone });
       
-      if (existingUser) {
+      if (existingUser && existingUser._id.toString() !== userId) {
         return res.status(409).json({ message: "Phone number already exists" });
       }
       
       updateData.phone = normalizedPhone;
     }
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      updateData,
-      { new: true }
-    );
+    const user = await User.findByIdAndUpdate(userId, updateData, { new: true });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
-    }
-
-    // If phone number was updated, trigger contact refresh and notifications
-    if (phone !== undefined && userId) {
-      try {
-        // Notify users who have this phone in their contacts
-        await notifyContactsOfNewUser(userId, updateData.phone);
-        console.log(`Phone number updated for user ${userId}, notifications sent`);
-      } catch (notificationError) {
-        console.error("Error sending contact notifications after phone update:", notificationError);
-        // Don't fail the update if notifications fail
-      }
     }
 
     res.json({
@@ -296,13 +201,10 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       email: user.email,
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
-      about: user.about || "Available",
+      about: (user as any).about || "Available",
     });
   } catch (error) {
     console.error("UPDATE PROFILE ERROR", error);
-    if ((error as any).code === 11000) {
-      return res.status(409).json({ message: "Phone number already exists" });
-    }
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -317,11 +219,7 @@ router.post("/upload-profile-picture", requireAuth, upload.single('profilePictur
     const userId = req.userId;
     const profilePictureUrl = `/uploads/profiles/${req.file.filename}`;
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { profilePicture: profilePictureUrl },
-      { new: true }
-    );
+    const user = await User.findByIdAndUpdate(userId, { profilePicture: profilePictureUrl }, { new: true });
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -353,7 +251,7 @@ router.post("/check-phone", async (req, res) => {
     // Normalize phone number
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
 
-    const user = await User.findOne({ phone: normalizedPhone }).select('name phone profilePicture');
+    const user = await User.findOne({ phone: normalizedPhone });
     
     res.json({
       exists: !!user,

@@ -4,7 +4,6 @@ dotenv.config();
 
 import express from "express";
 import cors from "cors";
-import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
 import { connectDB } from "./db";
@@ -30,35 +29,36 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // single health route
 app.get("/api/health", (_req, res) => {
-  const mongoUp = mongoose.connection?.readyState === 1; // 1=connected
-  res.status(200).json({ ok: true, mongo: mongoUp ? "up" : "down", ts: Date.now() });
+  res.status(200).json({ ok: true, database: "mongodb", ts: Date.now() });
 });
 
-// Start server immediately
+// Start server with database connection
 const port = Number(process.env.PORT) || 8080;
 
-// Add routes first
-app.use("/api/auth", authRouter);            
-app.use("/api/cards", cardsRouter);          
-app.use("/api/contacts", contactsRouter);    
-app.use("/api/notifications", notificationsRouter);    
-app.use("/api/messages", messagesRouter);    
-app.use("/api/groups", groupsRouter);    
-
-// Start the server
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`🚀 API server listening on 0.0.0.0:${port}`);
-  console.log(`📡 Health check: http://0.0.0.0:${port}/api/health`);
-});
-
-// Connect to MongoDB in background
-(async () => {
+async function startServer() {
   try {
     console.log("🔄 Connecting to MongoDB...");
-    await connectDB();                           
+    await connectDB();
     console.log("✅ MongoDB connected successfully!");
-  } catch (err) {
-    console.error("❌ MongoDB connection failed:", err instanceof Error ? err.message : String(err));
-    console.log("⚠️  Server running without database connection");
+
+    // Add routes after DB connection
+    app.use("/api/auth", authRouter);            
+    app.use("/api/cards", cardsRouter);          
+    app.use("/api/contacts", contactsRouter);    
+    app.use("/api/notifications", notificationsRouter);    
+    app.use("/api/messages", messagesRouter);    
+    app.use("/api/groups", groupsRouter);    
+
+    // Start the server
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log(`🚀 API server listening on 0.0.0.0:${port}`);
+      console.log(`📡 Health check: http://0.0.0.0:${port}/api/health`);
+    });
+
+  } catch (error) {
+    console.error("❌ Failed to start server:", error);
+    process.exit(1);
   }
-})();
+}
+
+startServer();
