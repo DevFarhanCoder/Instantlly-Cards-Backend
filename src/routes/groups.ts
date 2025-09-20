@@ -34,35 +34,52 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
 // POST /api/groups - Create a new group
 router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
   try {
+    console.log('🔍 Group creation started - Request body:', JSON.stringify(req.body, null, 2));
     const { name, description, memberIds, members, icon } = req.body;
     const adminId = req.userId;
 
+    console.log('🔍 Admin ID:', adminId);
+
     if (!adminId) {
+      console.log('❌ No admin ID found');
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
     // Support both 'memberIds' and 'members' field names for compatibility
     const memberList = memberIds || members;
+    console.log('🔍 Member list:', memberList);
 
     if (!name || !memberList || !Array.isArray(memberList)) {
+      console.log('❌ Validation failed - name:', name, 'memberList:', memberList);
       return res.status(400).json({ 
         error: 'Group name and member IDs are required' 
       });
     }
 
+    console.log('🔍 Converting member IDs to ObjectIds...');
     // Convert to ObjectIds
     const memberObjectIds = memberList.map((id: string) => new Types.ObjectId(id));
     const adminObjectId = new Types.ObjectId(adminId);
     const allMemberIds = [...memberObjectIds, adminObjectId];
 
+    console.log('🔍 All member IDs:', allMemberIds.map(id => id.toString()));
+
     // Verify all member IDs exist
+    console.log('🔍 Verifying members exist in database...');
     const foundUsers = await User.find({ _id: { $in: allMemberIds } });
 
+    console.log('🔍 Found users:', foundUsers.length, 'Expected:', allMemberIds.length);
+    
     if (foundUsers.length !== allMemberIds.length) {
+      console.log('❌ Some member IDs are invalid');
+      console.log('Expected IDs:', allMemberIds.map(id => id.toString()));
+      console.log('Found users:', foundUsers.map(user => user._id.toString()));
       return res.status(400).json({ 
         error: 'Some member IDs are invalid' 
       });
     }
+
+    console.log('🔍 Generating invite code...');
 
     // Generate unique invite code
     let inviteCode: string;
@@ -76,6 +93,16 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       }
     }
 
+    console.log('🔍 Generated invite code:', inviteCode);
+    console.log('🔍 Creating group with data:', {
+      name: name.trim(),
+      description: description?.trim() || '',
+      icon: icon || '',
+      members: allMemberIds.map(id => id.toString()),
+      admin: adminObjectId.toString(),
+      inviteCode: inviteCode!
+    });
+
     const group = await Group.create({
       name: name.trim(),
       description: description?.trim() || '',
@@ -84,6 +111,8 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       admin: adminObjectId,
       inviteCode: inviteCode!
     });
+
+    console.log('✅ Group created successfully:', group._id);
 
     // Populate the group data
     const populatedGroup = await Group.findById(group._id)
@@ -131,7 +160,8 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       inviteCode: inviteCode!
     });
   } catch (error) {
-    console.error('Create group error:', error);
+    console.error('❌ Create group error:', error);
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     res.status(500).json({ error: 'Failed to create group' });
   }
 });
