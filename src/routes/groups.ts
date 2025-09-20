@@ -34,21 +34,24 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
 // POST /api/groups - Create a new group
 router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { name, description, memberIds, icon } = req.body;
+    const { name, description, memberIds, members, icon } = req.body;
     const adminId = req.userId;
 
     if (!adminId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    if (!name || !memberIds || !Array.isArray(memberIds)) {
+    // Support both 'memberIds' and 'members' field names for compatibility
+    const memberList = memberIds || members;
+
+    if (!name || !memberList || !Array.isArray(memberList)) {
       return res.status(400).json({ 
         error: 'Group name and member IDs are required' 
       });
     }
 
     // Convert to ObjectIds
-    const memberObjectIds = memberIds.map((id: string) => new Types.ObjectId(id));
+    const memberObjectIds = memberList.map((id: string) => new Types.ObjectId(id));
     const adminObjectId = new Types.ObjectId(adminId);
     const allMemberIds = [...memberObjectIds, adminObjectId];
 
@@ -88,14 +91,14 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('admin', 'name phone');
 
     // Send notifications to all members except admin (don't let this fail group creation)
-    if (memberIds.length > 0) {
+    if (memberList.length > 0) {
       // Run notifications in background - don't await
       setImmediate(async () => {
         try {
           const admin = await User.findById(adminId);
           const adminName = admin?.name || 'Someone';
           
-          for (const memberId of memberIds) {
+          for (const memberId of memberList) {
             try {
               const member = await User.findById(new Types.ObjectId(memberId));
               if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
