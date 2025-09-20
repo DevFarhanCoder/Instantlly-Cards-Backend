@@ -227,4 +227,19 @@ router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Resp
   }
 });
 
+// GET /check-all-pending - stub endpoint for pending messages
+router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    // TODO: Implement logic to fetch pending messages for the user
+    // For now, just return a success response
+    res.status(200).json({
+      success: true,
+      message: 'No pending messages found.'
+    });
+  } catch (error) {
+    console.error('Error in check-all-pending:', error);
+    res.status(500).json({ error: 'Failed to check pending messages' });
+  }
+});
+
 export default router;
