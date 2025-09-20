@@ -82,25 +82,25 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     console.log('🔍 Generating invite code...');
 
     // Generate unique invite code
-    let inviteCode: string;
+    let joinCode: string;
     let isUnique = false;
     
     while (!isUnique) {
-      inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const existingGroup = await Group.findOne({ inviteCode });
+      joinCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const existingGroup = await Group.findOne({ joinCode });
       if (!existingGroup) {
         isUnique = true;
       }
     }
 
-    console.log('🔍 Generated invite code:', inviteCode);
+    console.log('🔍 Generated invite code:', joinCode);
     console.log('🔍 Creating group with data:', {
       name: name.trim(),
       description: description?.trim() || '',
       icon: icon || '',
       members: allMemberIds.map(id => id.toString()),
       admin: adminObjectId.toString(),
-      inviteCode: inviteCode!
+      joinCode: joinCode!
     });
 
     const group = await Group.create({
@@ -109,7 +109,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       icon: icon || '',
       members: allMemberIds,
       admin: adminObjectId,
-      inviteCode: inviteCode!
+      joinCode: joinCode!
     });
 
     console.log('✅ Group created successfully:', group._id);
@@ -119,7 +119,8 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('members', 'name phone profilePicture')
       .populate('admin', 'name phone');
 
-    // Send notifications to all members except admin (don't let this fail group creation)
+
+      // Send notifications to all members except admin (don't let this fail group creation)
     if (memberList.length > 0) {
       // Run notifications in background - don't await
       setImmediate(async () => {
@@ -157,7 +158,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     res.status(201).json({
       success: true,
       group: populatedGroup,
-      inviteCode: inviteCode!
+      joinCode: joinCode!
     });
   } catch (error) {
     console.error('❌ Create group error:', error);
@@ -169,10 +170,13 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
 // POST /api/groups/join - Join a group using invite code
 router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { inviteCode } = req.body;
+    const { inviteCode, joinCode } = req.body;
     const userId = req.userId;
 
-    if (!inviteCode) {
+    // Support both field names for backward compatibility
+    const code = inviteCode || joinCode;
+
+    if (!code) {
       return res.status(400).json({ error: 'Invite code is required' });
     }
 
@@ -180,7 +184,7 @@ router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const group = await Group.findOne({ inviteCode: inviteCode.toUpperCase() });
+    const group = await Group.findOne({ joinCode: code.toUpperCase() });
     if (!group) {
       return res.status(404).json({ error: 'Invalid invite code' });
     }
