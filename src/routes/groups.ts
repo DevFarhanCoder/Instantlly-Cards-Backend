@@ -56,9 +56,9 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const allMemberIds = [...memberObjectIds, adminObjectId];
 
     // Verify all member IDs exist
-    const members = await User.find({ _id: { $in: allMemberIds } });
+    const foundUsers = await User.find({ _id: { $in: allMemberIds } });
 
-    if (members.length !== allMemberIds.length) {
+    if (foundUsers.length !== allMemberIds.length) {
       return res.status(400).json({ 
         error: 'Some member IDs are invalid' 
       });
