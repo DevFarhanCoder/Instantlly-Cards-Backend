@@ -52,20 +52,72 @@ export async function sendPushNotification(
 
 export async function sendMessageNotification(
   pushToken: string,
+  title: string,
+  body: string,
+  data?: string | any
+): Promise<boolean> {
+  // If data is a string, parse it, otherwise use as-is
+  let notificationData = data;
+  if (typeof data === 'string') {
+    try {
+      notificationData = JSON.parse(data);
+    } catch (error) {
+      console.error('Failed to parse notification data:', error);
+      notificationData = { rawData: data };
+    }
+  }
+
+  return await sendPushNotification(
+    pushToken,
+    title,
+    body,
+    {
+      ...notificationData,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
+export async function sendGroupMessageNotification(
+  pushToken: string,
+  groupName: string,
   senderName: string,
   messageText: string,
-  senderId: string,
-  type: 'individual' | 'group' = 'individual'
+  groupId: string,
+  senderId: string
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    type === 'group' ? senderName : `New message from ${senderName}`,
-    messageText,
+    groupName,
+    `${senderName}: ${messageText}`,
     {
-      type: 'message',
+      type: 'group_message',
+      groupId,
+      groupName,
       senderId,
       senderName,
-      messageType: type
+      messageText,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
+export async function sendIndividualMessageNotification(
+  pushToken: string,
+  senderName: string,
+  messageText: string,
+  senderId: string
+): Promise<boolean> {
+  return await sendPushNotification(
+    pushToken,
+    `New message from ${senderName}`,
+    messageText,
+    {
+      type: 'individual_message',
+      senderId,
+      senderName,
+      messageText,
+      timestamp: new Date().toISOString()
     }
   );
 }

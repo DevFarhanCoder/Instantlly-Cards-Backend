@@ -168,4 +168,110 @@ router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
   }
 });
 
+// DELETE /api/groups/:id - Delete or leave a group
+router.delete('/:id', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
+    // Check if user is a member of the group
+    if (!group.members.some(memberId => memberId.equals(userObjectId))) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
+
+    // If user is admin and there are other members, transfer admin or delete group
+    if (group.admin.equals(userObjectId)) {
+      const otherMembers = group.members.filter(memberId => !memberId.equals(userObjectId));
+      
+      if (otherMembers.length > 0) {
+        // Transfer admin to first remaining member
+        group.admin = otherMembers[0];
+        group.members = otherMembers;
+        group.updatedAt = new Date();
+        await group.save();
+
+        return res.json({
+          success: true,
+          message: 'You left the group and admin was transferred',
+          action: 'left'
+        });
+      } else {
+        // Delete the group if admin is the only member
+        await Group.findByIdAndDelete(groupId);
+        
+        return res.json({
+          success: true,
+          message: 'Group deleted successfully',
+          action: 'deleted'
+        });
+      }
+    } else {
+      // Regular member leaving
+      group.members = group.members.filter(memberId => !memberId.equals(userObjectId));
+      group.updatedAt = new Date();
+      await group.save();
+
+      return res.json({
+        success: true,
+        message: 'You left the group successfully',
+        action: 'left'
+      });
+    }
+  } catch (error) {
+    console.error('Delete group error:', error);
+    res.status(500).json({ error: 'Failed to delete/leave group' });
+  }
+});
+
+// DELETE /api/groups - Clear all groups (for cleanup)
+router.delete('/', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId;
+    
+    // Remove user from all groups they're a member of
+    await Group.updateMany(
+      { members: userId },
+      { $pull: { members: userId } }
+    );
+    
+    // Delete groups where user was admin and now has no members
+    await Group.deleteMany({
+      admin: userId,
+      members: { $size: 0 }
+    });
+    
+    // Transfer admin for groups where user was admin but has other members
+    const adminGroups = await Group.find({
+      admin: userId,
+      members: { $exists: true, $not: { $size: 0 } }
+    });
+    
+    for (const group of adminGroups) {
+      if (group.members.length > 0) {
+        group.admin = group.members[0];
+        await group.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'All groups cleared successfully'
+    });
+  } catch (error) {
+    console.error('Clear groups error:', error);
+    res.status(500).json({ error: 'Failed to clear groups' });
+  }
+});
+
 export default router;

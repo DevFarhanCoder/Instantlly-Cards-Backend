@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import User from '../models/User';
 import { requireAuth, AuthReq } from '../middleware/auth';
-import { sendMessageNotification } from '../services/pushNotifications';
+import { sendIndividualMessageNotification, sendGroupMessageNotification } from '../services/pushNotifications';
 
 const router = Router();
 
@@ -33,12 +33,11 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
     // Send push notification to the receiver if they have a push token
     if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
       try {
-        await sendMessageNotification(
+        await sendIndividualMessageNotification(
           receiver.pushToken,
           sender.name,
           messagePreview,
-          senderId,
-          'individual'
+          senderId
         );
         console.log(`📱 Push notification sent to ${receiver.name}`);
       } catch (error) {
@@ -89,12 +88,13 @@ router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: R
       try {
         const member = await User.findById(memberId);
         if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
-          await sendMessageNotification(
+          await sendGroupMessageNotification(
             member.pushToken,
             groupName,
-            `${sender.name}: ${messagePreview}`,
-            senderId,
-            'group'
+            sender.name,
+            messagePreview,
+            'group-id-placeholder', // You may want to pass actual group ID
+            senderId
           );
           console.log(`📱 Group notification sent to ${member.name}`);
         }
