@@ -41,15 +41,11 @@ const GroupSchema = new Schema<IGroup>({
     type: String,
     required: true,
     unique: true,
-    length: 6,
-    index: true
+    length: 6
   }
 }, {
   timestamps: true
 });
-
-// Ensure invite codes are unique
-GroupSchema.index({ inviteCode: 1 }, { unique: true });
 
 // Generate a unique 6-character invite code
 GroupSchema.statics.generateInviteCode = async function(): Promise<string> {
