@@ -32,6 +32,18 @@ app.get("/api/health", (_req, res) => {
   res.status(200).json({ ok: true, database: "mongodb", ts: Date.now() });
 });
 
+// Debug endpoint to check environment variables
+app.get("/api/debug", (_req, res) => {
+  res.status(200).json({ 
+    hasJwtSecret: !!process.env.JWT_SECRET,
+    jwtSecretLength: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
+    hasMongoUri: !!process.env.MONGODB_URI,
+    hasExpoToken: !!process.env.EXPO_ACCESS_TOKEN,
+    nodeEnv: process.env.NODE_ENV || 'not set',
+    port: process.env.PORT || 'not set'
+  });
+});
+
 // Start server with database connection
 const port = Number(process.env.PORT) || 8080;
 
