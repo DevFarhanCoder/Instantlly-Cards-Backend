@@ -82,7 +82,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     console.log('🔍 Generating invite code...');
 
     // Generate unique invite code
-    let joinCode: string;
+    let joinCode: string = '';
     let isUnique = false;
     
     while (!isUnique) {
@@ -100,7 +100,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       icon: icon || '',
       members: allMemberIds.map(id => id.toString()),
       admin: adminObjectId.toString(),
-      joinCode: joinCode!
+      joinCode: joinCode
     });
 
     const group = await Group.create({
@@ -109,7 +109,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       icon: icon || '',
       members: allMemberIds,
       admin: adminObjectId,
-      joinCode: joinCode!
+      joinCode: joinCode
     });
 
     console.log('✅ Group created successfully:', group._id);
@@ -118,6 +118,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const populatedGroup = await Group.findById(group._id)
       .populate('members', 'name phone profilePicture')
       .populate('admin', 'name phone');
+
 
 
       // Send notifications to all members except admin (don't let this fail group creation)
@@ -158,7 +159,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     res.status(201).json({
       success: true,
       group: populatedGroup,
-      joinCode: joinCode!
+      joinCode: joinCode
     });
   } catch (error) {
     console.error('❌ Create group error:', error);
