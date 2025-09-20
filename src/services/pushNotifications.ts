@@ -54,16 +54,18 @@ export async function sendMessageNotification(
   pushToken: string,
   senderName: string,
   messageText: string,
-  senderId: string
+  senderId: string,
+  type: 'individual' | 'group' = 'individual'
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    `New message from ${senderName}`,
+    type === 'group' ? senderName : `New message from ${senderName}`,
     messageText,
     {
       type: 'message',
       senderId,
-      senderName
+      senderName,
+      messageType: type
     }
   );
 }

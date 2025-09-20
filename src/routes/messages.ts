@@ -1,26 +1,19 @@
 import { Router, Request, Response } from 'express';
-import mongoose from 'mongoose';
-import Message from '../models/Message';
 import User from '../models/User';
 import { requireAuth, AuthReq } from '../middleware/auth';
 import { sendMessageNotification } from '../services/pushNotifications';
 
 const router = Router();
 
-// Helper function to generate conversation ID
-const getConversationId = (userId1: string, userId2: string): string => {
-  return [userId1, userId2].sort().join('-');
-};
-
-// Send a local message (P2P style - with temporary backend storage for delivery)
-router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
+// Send notification for local message (no message storage on backend)
+router.post('/send-notification', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { receiverId, content, timestamp, messageId } = req.body;
+    const { receiverId, messagePreview, messageId } = req.body;
     const senderId = req.userId;
 
-    if (!receiverId || !content || !senderId) {
+    if (!receiverId || !messagePreview || !senderId) {
       return res.status(400).json({ 
-        error: 'Receiver ID and content are required' 
+        error: 'Receiver ID and message preview are required' 
       });
     }
 
@@ -35,23 +28,7 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ error: 'Sender not found' });
     }
 
-    // Store message temporarily for delivery (will be deleted after delivery)
-    const message = new Message({
-      _id: new mongoose.Types.ObjectId(),
-      sender: senderId,
-      receiver: receiverId,
-      content: content.trim(),
-      messageType: 'text',
-      conversationId: getConversationId(senderId, receiverId),
-      createdAt: new Date(timestamp),
-      isDelivered: false, // Track delivery status
-      isPendingDelivery: true, // Mark as pending for delivery
-      localMessageId: messageId // Store the frontend message ID
-    });
-
-    await message.save();
-    
-    console.log(`Local message from ${sender.name} to ${receiver.name}: ${content}`);
+    console.log(`📱 Sending notification from ${sender.name} to ${receiver.name}: ${messagePreview}`);
 
     // Send push notification to the receiver if they have a push token
     if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
@@ -59,8 +36,9 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
         await sendMessageNotification(
           receiver.pushToken,
           sender.name,
-          content,
-          senderId
+          messagePreview,
+          senderId,
+          'individual'
         );
         console.log(`📱 Push notification sent to ${receiver.name}`);
       } catch (error) {
@@ -74,462 +52,101 @@ router.post('/send-local', requireAuth, async (req: AuthReq, res: Response) => {
 
     res.status(200).json({
       success: true,
-      message: 'Message queued for delivery',
+      message: 'Notification sent successfully',
       messageId,
-      timestamp,
       receiverName: receiver.name,
-      senderName: sender.name,
-      backendMessageId: message._id
+      senderName: sender.name
     });
   } catch (error) {
-    console.error('Send local message error:', error);
-    res.status(500).json({ error: 'Failed to send message' });
+    console.error('Send notification error:', error);
+    res.status(500).json({ error: 'Failed to send notification' });
   }
 });
 
-// Send a new message (Original database-based messaging - kept for compatibility)
-router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
+// Send notification for group message
+router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { receiverId, content, messageType = 'text' } = req.body;
-    const senderId = req.userId; // Use userId from AuthReq
+    const { groupName, memberIds, messagePreview, messageId } = req.body;
+    const senderId = req.userId;
 
-    if (!receiverId || !content || !senderId) {
+    if (!groupName || !memberIds || !Array.isArray(memberIds) || !messagePreview || !senderId) {
       return res.status(400).json({ 
-        error: 'Receiver ID and content are required' 
+        error: 'Group name, member IDs, and message preview are required' 
       });
     }
 
-    // Verify receiver exists
-    const receiver = await User.findById(receiverId);
-    if (!receiver) {
-      return res.status(404).json({ error: 'Receiver not found' });
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(404).json({ error: 'Sender not found' });
     }
 
-    // Generate conversation ID
-    const conversationId = getConversationId(senderId, receiverId);
+    console.log(`📱 Sending group notification from ${sender.name} to group ${groupName}`);
 
-    // Create message
-    const message = new Message({
-      sender: senderId,
-      receiver: receiverId,
-      content: content.trim(),
-      messageType,
-      conversationId
-    });
+    // Send notifications to all group members except sender
+    const otherMemberIds = memberIds.filter((id: string) => id !== senderId);
+    
+    for (const memberId of otherMemberIds) {
+      try {
+        const member = await User.findById(memberId);
+        if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
+          await sendMessageNotification(
+            member.pushToken,
+            groupName,
+            `${sender.name}: ${messagePreview}`,
+            senderId,
+            'group'
+          );
+          console.log(`📱 Group notification sent to ${member.name}`);
+        }
+      } catch (error) {
+        console.error(`Failed to send group notification to member ${memberId}:`, error);
+      }
+    }
 
-    await message.save();
-
-    // Populate sender info for response
-    await message.populate('sender', 'name phone profilePicture');
-    await message.populate('receiver', 'name phone profilePicture');
-
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message,
-      conversationId
+      message: 'Group notifications sent successfully',
+      messageId,
+      senderName: sender.name,
+      notificationsSent: otherMemberIds.length
     });
   } catch (error) {
-    console.error('Send message error:', error);
-    res.status(500).json({ error: 'Failed to send message' });
+    console.error('Send group notification error:', error);
+    res.status(500).json({ error: 'Failed to send group notifications' });
   }
 });
 
-// Check for pending messages (FIXED - Don't mark as delivered immediately)
-router.get('/check-pending/:userId', requireAuth, async (req: AuthReq, res: Response) => {
+// Get online status of users (for real-time features)
+router.post('/check-online-status', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { userId } = req.params;
+    const { userIds } = req.body;
     const currentUserId = req.userId;
 
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
+    if (!userIds || !Array.isArray(userIds)) {
+      return res.status(400).json({ error: 'User IDs array is required' });
     }
 
-    // Find messages pending delivery to the current user from the specified userId
-    const pendingMessages = await Message.find({
-      receiver: currentUserId,
-      sender: userId,
-      isPendingDelivery: true,
-      isDelivered: false
-    }).populate('sender', 'name phone profilePicture');
+    // For simplicity, we'll just return basic user info
+    // In a real implementation, you might track last seen timestamps
+    const users = await User.find({
+      _id: { $in: userIds }
+    }).select('_id name profilePicture updatedAt');
 
-    // DON'T mark as delivered immediately - only return the messages
-    console.log(`📥 Found ${pendingMessages.length} pending messages from ${userId} to ${currentUserId}`);
-
-    // Format messages for frontend
-    const formattedMessages = pendingMessages.map((msg: any) => ({
-      id: msg.localMessageId || msg._id.toString(),
-      text: msg.content,
-      timestamp: msg.createdAt,
-      isFromMe: false,
-      status: 'pending',
-      senderName: msg.sender.name,
-      senderId: msg.sender._id.toString(),
-      backendMessageId: msg._id.toString()
+    const onlineStatus = users.map(user => ({
+      userId: user._id,
+      name: user.name,
+      profilePicture: user.profilePicture,
+      isOnline: false, // You can implement real online tracking here
+      lastSeen: user.updatedAt
     }));
-    
-    res.json({
-      success: true,
-      messages: formattedMessages
-    });
-  } catch (error) {
-    console.error('Check pending messages error:', error);
-    res.status(500).json({ error: 'Failed to check pending messages' });
-  }
-});
-
-// Check for all pending messages for current user (FIXED - Don't mark as delivered immediately)
-router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const currentUserId = req.userId;
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // Find all messages pending delivery to the current user
-    const pendingMessages = await Message.find({
-      receiver: currentUserId,
-      isPendingDelivery: true,
-      isDelivered: false
-    }).populate('sender', 'name phone profilePicture');
-
-    // Group messages by sender
-    const messagesBySender = pendingMessages.reduce((acc: any, msg: any) => {
-      const senderId = msg.sender._id.toString();
-      if (!acc[senderId]) {
-        acc[senderId] = {
-          senderId,
-          senderName: msg.sender.name,
-          messages: []
-        };
-      }
-      
-      acc[senderId].messages.push({
-        id: msg.localMessageId || msg._id.toString(),
-        text: msg.content,
-        timestamp: msg.createdAt,
-        isFromMe: false,
-        status: 'pending',
-        backendMessageId: msg._id.toString()
-      });
-      
-      return acc;
-    }, {});
-
-    // DON'T mark as delivered yet - only when specifically confirmed by the receiving device
-    console.log(`📥 Found ${pendingMessages.length} pending messages for user ${currentUserId}`);
-    
-    res.json({
-      success: true,
-      messagesBySender: Object.values(messagesBySender),
-      totalMessages: pendingMessages.length
-    });
-  } catch (error) {
-    console.error('Check all pending messages error:', error);
-    res.status(500).json({ error: 'Failed to check all pending messages' });
-  }
-});
-
-// Update message status (mark as read, etc.)
-router.put('/update-status/:messageId', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { messageId } = req.params;
-    const { status } = req.body;
-    const currentUserId = req.userId;
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const updateData: any = {};
-    
-    if (status === 'read') {
-      updateData.isRead = true;
-      updateData.readAt = new Date();
-    }
-
-    await Message.findOneAndUpdate(
-      {
-        _id: messageId,
-        receiver: currentUserId
-      },
-      updateData
-    );
 
     res.json({
       success: true,
-      message: 'Message status updated'
+      onlineStatus
     });
   } catch (error) {
-    console.error('Update message status error:', error);
-    res.status(500).json({ error: 'Failed to update message status' });
-  }
-});
-
-// Mark messages as delivered (called after the receiving device actually processes them)
-router.post('/mark-delivered', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { messageIds } = req.body;
-    const currentUserId = req.userId;
-
-    if (!currentUserId || !messageIds || !Array.isArray(messageIds)) {
-      return res.status(400).json({ error: 'User ID and message IDs are required' });
-    }
-
-    // Mark messages as delivered
-    const result = await Message.updateMany(
-      {
-        receiver: currentUserId,
-        _id: { $in: messageIds },
-        isPendingDelivery: true,
-        isDelivered: false
-      },
-      {
-        isDelivered: true,
-        deliveredAt: new Date(),
-        isPendingDelivery: false
-      }
-    );
-
-    console.log(`✅ Marked ${result.modifiedCount} messages as delivered for user ${currentUserId}`);
-    
-    res.json({
-      success: true,
-      markedCount: result.modifiedCount
-    });
-  } catch (error) {
-    console.error('Mark delivered error:', error);
-    res.status(500).json({ error: 'Failed to mark messages as delivered' });
-  }
-});
-
-// Get conversation history between two users
-router.get('/conversation/:userId', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { userId } = req.params;
-    const currentUserId = req.userId; // Use userId from AuthReq
-    const { page = 1, limit = 50 } = req.query;
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // Generate conversation ID
-    const conversationId = getConversationId(currentUserId, userId);
-
-    // Get messages with pagination
-    const messages = await Message.find({ conversationId })
-      .populate('sender', 'name phone profilePicture')
-      .populate('receiver', 'name phone profilePicture')
-      .sort({ createdAt: -1 })
-      .limit(Number(limit))
-      .skip((Number(page) - 1) * Number(limit));
-
-    // Mark messages as read where current user is receiver
-    await Message.updateMany(
-      { 
-        conversationId,
-        receiver: currentUserId,
-        isRead: false 
-      },
-      { 
-        isRead: true,
-        readAt: new Date()
-      }
-    );
-
-    res.json({
-      success: true,
-      messages: messages.reverse(), // Reverse to show oldest first
-      page: Number(page),
-      hasMore: messages.length === Number(limit)
-    });
-  } catch (error) {
-    console.error('Get conversation error:', error);
-    res.status(500).json({ error: 'Failed to get conversation' });
-  }
-});
-
-// Get all conversations for current user
-router.get('/conversations', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const currentUserId = req.userId; // Use userId from AuthReq
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // Get all messages where user is sender or receiver
-    const conversations = await Message.aggregate([
-      {
-        $match: {
-          $or: [
-            { sender: new mongoose.Types.ObjectId(currentUserId) },
-            { receiver: new mongoose.Types.ObjectId(currentUserId) }
-          ]
-        }
-      },
-      {
-        $sort: { createdAt: -1 }
-      },
-      {
-        $group: {
-          _id: "$conversationId",
-          lastMessage: { $first: "$$ROOT" },
-          unreadCount: {
-            $sum: {
-              $cond: [
-                { 
-                  $and: [
-                    { $eq: ["$receiver", new mongoose.Types.ObjectId(currentUserId)] },
-                    { $eq: ["$isRead", false] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          }
-        }
-      },
-      {
-        $sort: { "lastMessage.createdAt": -1 }
-      }
-    ]);
-
-    // Populate user details for each conversation
-    const populatedConversations = await Promise.all(
-      conversations.map(async (conv) => {
-        const lastMessage = conv.lastMessage;
-        
-        // Determine the other participant
-        const otherUserId = lastMessage.sender.toString() === currentUserId 
-          ? lastMessage.receiver 
-          : lastMessage.sender;
-
-        const otherUser = await User.findById(otherUserId)
-          .select('name phone profilePicture');
-
-        return {
-          conversationId: conv._id,
-          otherUser,
-          lastMessage: {
-            content: lastMessage.content,
-            createdAt: lastMessage.createdAt,
-            sender: lastMessage.sender.toString(),
-            messageType: lastMessage.messageType
-          },
-          unreadCount: conv.unreadCount
-        };
-      })
-    );
-
-    res.json({
-      success: true,
-      conversations: populatedConversations
-    });
-  } catch (error) {
-    console.error('Get conversations error:', error);
-    res.status(500).json({ error: 'Failed to get conversations' });
-  }
-});
-
-// Mark messages as read
-router.put('/mark-read/:conversationId', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { conversationId } = req.params;
-    const currentUserId = req.userId; // Use userId from AuthReq
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    await Message.updateMany(
-      { 
-        conversationId,
-        receiver: currentUserId,
-        isRead: false 
-      },
-      { 
-        isRead: true,
-        readAt: new Date()
-      }
-    );
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Mark read error:', error);
-    res.status(500).json({ error: 'Failed to mark messages as read' });
-  }
-});
-
-// Delete a message
-router.delete('/:messageId', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { messageId } = req.params;
-    const currentUserId = req.userId; // Use userId from AuthReq
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const message = await Message.findOne({
-      _id: messageId,
-      sender: currentUserId
-    });
-
-    if (!message) {
-      return res.status(404).json({ 
-        error: 'Message not found or you do not have permission to delete it' 
-      });
-    }
-
-    await Message.findByIdAndDelete(messageId);
-
-    res.json({ 
-      success: true, 
-      message: 'Message deleted successfully' 
-    });
-  } catch (error) {
-    console.error('Delete message error:', error);
-    res.status(500).json({ error: 'Failed to delete message' });
-  }
-});
-
-// Search messages in a conversation
-router.get('/search/:userId', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const { userId } = req.params;
-    const { q } = req.query;
-    const currentUserId = req.userId; // Use userId from AuthReq
-
-    if (!q) {
-      return res.status(400).json({ error: 'Search query is required' });
-    }
-
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const conversationId = getConversationId(currentUserId, userId);
-
-    const messages = await Message.find({
-      conversationId,
-      content: { $regex: q, $options: 'i' }
-    })
-    .populate('sender', 'name phone profilePicture')
-    .populate('receiver', 'name phone profilePicture')
-    .sort({ createdAt: -1 })
-    .limit(20);
-
-    res.json({
-      success: true,
-      messages,
-      query: q
-    });
-  } catch (error) {
-    console.error('Search messages error:', error);
-    res.status(500).json({ error: 'Failed to search messages' });
+    console.error('Check online status error:', error);
+    res.status(500).json({ error: 'Failed to check online status' });
   }
 });
 
@@ -547,7 +164,8 @@ router.post('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Res
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const conversationId = getConversationId(currentUserId, userId);
+    // Generate conversation ID (sorted user IDs)
+    const conversationId = [currentUserId, userId].sort().join('-');
     const key = `${conversationId}-${currentUserId}`;
 
     typingStatus.set(key, {
@@ -585,7 +203,7 @@ router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Resp
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const conversationId = getConversationId(currentUserId, userId);
+    const conversationId = [currentUserId, userId].sort().join('-');
     const key = `${conversationId}-${userId}`;
 
     const status = typingStatus.get(key);
