@@ -78,10 +78,13 @@ router.post("/signup", async (req, res) => {
     res.status(201).json({
       token,
       user: { 
-        id: user._id, 
+        id: user._id,
+        _id: user._id, 
         name: user.name, 
         phone: user.phone,
-        email: user.email 
+        email: user.email,
+        profilePicture: user.profilePicture || "",
+        about: (user as any).about || "Available"
       },
     });
   } catch (e) {
@@ -93,38 +96,63 @@ router.post("/signup", async (req, res) => {
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
+    console.log("Login attempt - Request body:", { phone: req.body?.phone, hasPassword: !!req.body?.password });
+    
     const { phone, password } = req.body ?? {};
     if (!phone || !password) {
+      console.log("Missing fields in login request");
       return res.status(400).json({ message: "Missing fields: phone, password" });
     }
 
     // Validate phone number format
     if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
+      console.log("Invalid phone format:", phone);
       return res.status(400).json({ message: "Invalid phone number format" });
     }
 
     // Normalize phone number
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    console.log("Looking for user with normalized phone:", normalizedPhone);
 
     const user = await User.findOne({ phone: normalizedPhone });
-    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+    if (!user) {
+      console.log("User not found for phone:", normalizedPhone);
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    console.log("User found:", user.name);
 
     const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+    if (!ok) {
+      console.log("Password mismatch for user:", user.name);
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    console.log("Password verified. JWT_SECRET exists:", !!process.env.JWT_SECRET);
+    
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not set!");
+      return res.status(500).json({ message: "Server configuration error" });
+    }
 
     const token = jwt.sign(
-      { sub: user._id, phone: user.phone },
-      process.env.JWT_SECRET!,
-      { expiresIn: "7d" }
+      { sub: user._id.toString(), phone: user.phone },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
     );
+
+    console.log("Token generated successfully for user:", user.name);
 
     res.json({
       token,
       user: { 
         id: user._id, 
+        _id: user._id,
         name: user.name, 
         phone: user.phone,
-        email: user.email 
+        email: user.email,
+        profilePicture: user.profilePicture || "",
+        about: (user as any).about || "Available"
       },
     });
   } catch (e) {
