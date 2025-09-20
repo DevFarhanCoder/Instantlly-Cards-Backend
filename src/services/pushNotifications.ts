@@ -2,9 +2,16 @@ import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 
 // Create a new Expo SDK client
 const expo = new Expo({
-  accessToken: process.env.EXPO_ACCESS_TOKEN, // Optional: for higher rate limits
+  accessToken: process.env.EXPO_ACCESS_TOKEN || undefined, // Optional: for higher rate limits
   useFcmV1: true, // Use FCM v1 API
 });
+
+// Log the status of EXPO_ACCESS_TOKEN
+if (process.env.EXPO_ACCESS_TOKEN) {
+  console.log('✅ EXPO_ACCESS_TOKEN is configured');
+} else {
+  console.warn('⚠️ EXPO_ACCESS_TOKEN is not set - push notifications may have rate limits');
+}
 
 export async function sendPushNotification(
   pushToken: string,

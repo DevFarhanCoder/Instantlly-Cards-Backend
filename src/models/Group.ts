@@ -41,7 +41,8 @@ const GroupSchema = new Schema<IGroup>({
     type: String,
     required: true,
     unique: true,
-    length: 6
+    minlength: 6,
+    maxlength: 6
   }
 }, {
   timestamps: true

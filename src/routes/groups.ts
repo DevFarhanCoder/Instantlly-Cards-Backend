@@ -87,35 +87,39 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('members', 'name phone profilePicture')
       .populate('admin', 'name phone');
 
-    // Send notifications to all members except admin
+    // Send notifications to all members except admin (don't let this fail group creation)
     if (memberIds.length > 0) {
-      try {
-        const admin = await User.findById(adminId);
-        const adminName = admin?.name || 'Someone';
-        
-        for (const memberId of memberIds) {
-          try {
-            const member = await User.findById(new Types.ObjectId(memberId));
-            if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
-              await sendMessageNotification(
-                member.pushToken,
-                `New Group: ${group.name}`,
-                `${adminName} added you to a new group`,
-                JSON.stringify({ 
-                  type: 'group_invite',
-                  groupId: group._id,
-                  groupName: group.name,
-                  adminId: adminId
-                })
-              );
+      // Run notifications in background - don't await
+      setImmediate(async () => {
+        try {
+          const admin = await User.findById(adminId);
+          const adminName = admin?.name || 'Someone';
+          
+          for (const memberId of memberIds) {
+            try {
+              const member = await User.findById(new Types.ObjectId(memberId));
+              if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
+                await sendMessageNotification(
+                  member.pushToken,
+                  `New Group: ${group.name}`,
+                  `${adminName} added you to a new group`,
+                  JSON.stringify({ 
+                    type: 'group_invite',
+                    groupId: group._id,
+                    groupName: group.name,
+                    adminId: adminId
+                  })
+                );
+                console.log(`📱 Group invite notification sent to ${member.name}`);
+              }
+            } catch (memberError) {
+              console.error(`Failed to send notification to member ${memberId}:`, memberError);
             }
-          } catch (memberError) {
-            console.error(`Failed to send notification to member ${memberId}:`, memberError);
           }
+        } catch (notificationError) {
+          console.error('Failed to send group notifications:', notificationError);
         }
-      } catch (notificationError) {
-        console.error('Failed to send group notifications:', notificationError);
-      }
+      });
     }
 
     res.status(201).json({
