@@ -76,7 +76,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const group = await Group.create({
       name: name.trim(),
       description: description?.trim() || '',
-      image: icon || '',
+      icon: icon || '',
       members: allMemberIds,
       admin: adminObjectId,
       inviteCode: inviteCode!

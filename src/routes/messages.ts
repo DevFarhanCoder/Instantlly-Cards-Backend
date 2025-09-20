@@ -5,7 +5,9 @@ import { sendIndividualMessageNotification, sendGroupMessageNotification } from 
 
 const router = Router();
 
-// Send notification for local message (no message storage on backend)
+// Note: Messages are NOT stored in database - only notifications and typing effects are handled
+
+// Send notification for individual message (no message storage)
 router.post('/send-notification', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { receiverId, messagePreview, messageId } = req.body;
@@ -54,7 +56,8 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
       message: 'Notification sent successfully',
       messageId,
       receiverName: receiver.name,
-      senderName: sender.name
+      senderName: sender.name,
+      note: 'Message was not stored in database - only notification sent'
     });
   } catch (error) {
     console.error('Send notification error:', error);
@@ -62,10 +65,10 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
   }
 });
 
-// Send notification for group message
+// Send notification for group message (no message storage)
 router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { groupName, memberIds, messagePreview, messageId } = req.body;
+    const { groupName, groupId, memberIds, messagePreview, messageId } = req.body;
     const senderId = req.userId;
 
     if (!groupName || !memberIds || !Array.isArray(memberIds) || !messagePreview || !senderId) {
@@ -83,6 +86,7 @@ router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: R
 
     // Send notifications to all group members except sender
     const otherMemberIds = memberIds.filter((id: string) => id !== senderId);
+    let notificationsSent = 0;
     
     for (const memberId of otherMemberIds) {
       try {
@@ -93,10 +97,11 @@ router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: R
             groupName,
             sender.name,
             messagePreview,
-            'group-id-placeholder', // You may want to pass actual group ID
+            groupId || 'group-id-placeholder',
             senderId
           );
           console.log(`📱 Group notification sent to ${member.name}`);
+          notificationsSent++;
         }
       } catch (error) {
         console.error(`Failed to send group notification to member ${memberId}:`, error);
@@ -108,7 +113,8 @@ router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: R
       message: 'Group notifications sent successfully',
       messageId,
       senderName: sender.name,
-      notificationsSent: otherMemberIds.length
+      notificationsSent,
+      note: 'Message was not stored in database - only notifications sent'
     });
   } catch (error) {
     console.error('Send group notification error:', error);
@@ -150,10 +156,10 @@ router.post('/check-online-status', requireAuth, async (req: AuthReq, res: Respo
   }
 });
 
-// Store for typing status (in-memory for now)
+// Store for typing status (in-memory for now - not stored in database)
 const typingStatus = new Map<string, { isTyping: boolean, lastUpdate: Date }>();
 
-// Set typing status
+// Set typing status for individual chat
 router.post('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { userId } = req.params;
@@ -185,7 +191,8 @@ router.post('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Res
 
     res.json({
       success: true,
-      message: 'Typing status updated'
+      message: 'Typing status updated',
+      conversationId
     });
   } catch (error) {
     console.error('Set typing status error:', error);
@@ -193,7 +200,7 @@ router.post('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Res
   }
 });
 
-// Get typing status
+// Get typing status for individual chat
 router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const { userId } = req.params;
@@ -219,7 +226,8 @@ router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Resp
     res.json({
       success: true,
       isTyping,
-      userId
+      userId,
+      conversationId
     });
   } catch (error) {
     console.error('Get typing status error:', error);
@@ -227,18 +235,128 @@ router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Resp
   }
 });
 
-// GET /check-all-pending - stub endpoint for pending messages
+// Set typing status for group chat
+router.post('/group-typing-status/:groupId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { groupId } = req.params;
+    const { isTyping } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const key = `group-${groupId}-${currentUserId}`;
+
+    typingStatus.set(key, {
+      isTyping: Boolean(isTyping),
+      lastUpdate: new Date()
+    });
+
+    // Clean up old typing statuses (older than 10 seconds)
+    const now = new Date();
+    for (const [statusKey, status] of typingStatus.entries()) {
+      if (now.getTime() - status.lastUpdate.getTime() > 10000) {
+        typingStatus.delete(statusKey);
+      }
+    }
+
+    console.log(`💬 User ${currentUserId} typing status: ${isTyping} in group ${groupId}`);
+
+    res.json({
+      success: true,
+      message: 'Group typing status updated',
+      groupId
+    });
+  } catch (error) {
+    console.error('Set group typing status error:', error);
+    res.status(500).json({ error: 'Failed to set group typing status' });
+  }
+});
+
+// Get typing status for group chat
+router.get('/group-typing-status/:groupId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { groupId } = req.params;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Find all users typing in this group (excluding current user)
+    const now = new Date();
+    const typingUsers: string[] = [];
+
+    for (const [statusKey, status] of typingStatus.entries()) {
+      if (statusKey.startsWith(`group-${groupId}-`) && 
+          statusKey !== `group-${groupId}-${currentUserId}` &&
+          status.isTyping && 
+          (now.getTime() - status.lastUpdate.getTime() < 10000)) {
+        
+        const userId = statusKey.split('-').pop();
+        if (userId) {
+          typingUsers.push(userId);
+        }
+      }
+    }
+
+    // Clean up old statuses
+    for (const [statusKey, status] of typingStatus.entries()) {
+      if (now.getTime() - status.lastUpdate.getTime() > 10000) {
+        typingStatus.delete(statusKey);
+      }
+    }
+
+    res.json({
+      success: true,
+      typingUsers,
+      groupId,
+      isAnyoneTyping: typingUsers.length > 0
+    });
+  } catch (error) {
+    console.error('Get group typing status error:', error);
+    res.status(500).json({ error: 'Failed to get group typing status' });
+  }
+});
+
+// GET /check-all-pending - Since messages aren't stored, return empty
 router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    // TODO: Implement logic to fetch pending messages for the user
-    // For now, just return a success response
     res.status(200).json({
       success: true,
-      message: 'No pending messages found.'
+      message: 'No pending messages - messages are not stored in database',
+      pendingMessages: []
     });
   } catch (error) {
     console.error('Error in check-all-pending:', error);
     res.status(500).json({ error: 'Failed to check pending messages' });
+  }
+});
+
+// Add endpoint to clear typing statuses (useful for debugging)
+router.delete('/typing-status/clear', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const currentUserId = req.userId;
+    
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Clear all typing statuses for current user
+    for (const [key] of typingStatus.entries()) {
+      if (key.includes(currentUserId)) {
+        typingStatus.delete(key);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Typing statuses cleared'
+    });
+  } catch (error) {
+    console.error('Clear typing status error:', error);
+    res.status(500).json({ error: 'Failed to clear typing status' });
   }
 });
 
