@@ -114,7 +114,7 @@ router.post("/login", async (req, res) => {
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
     console.log("Looking for user with normalized phone:", normalizedPhone);
 
-    const user = await User.findOne({ phone: normalizedPhone });
+    const user = await User.findOne({ phone: normalizedPhone }).select('+password');
     if (!user) {
       console.log("User not found for phone:", normalizedPhone);
       return res.status(401).json({ message: "Invalid credentials" });
