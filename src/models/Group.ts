@@ -6,7 +6,7 @@ export interface IGroup extends Document {
   icon?: string;
   members: mongoose.Types.ObjectId[];
   admin: mongoose.Types.ObjectId;
-  joinCode: string; // 6-digit code for joining
+  inviteCode: string; // 6-character alphanumeric code for joining
   createdAt: Date;
   updatedAt: Date;
 }
@@ -37,7 +37,7 @@ const GroupSchema = new Schema<IGroup>({
     ref: "User",
     required: true
   },
-  joinCode: {
+  inviteCode: {
     type: String,
     required: true,
     unique: true,
@@ -48,26 +48,26 @@ const GroupSchema = new Schema<IGroup>({
   timestamps: true
 });
 
-// Ensure join codes are unique
-GroupSchema.index({ joinCode: 1 }, { unique: true });
+// Ensure invite codes are unique
+GroupSchema.index({ inviteCode: 1 }, { unique: true });
 
-// Generate a unique 6-digit join code
-GroupSchema.statics.generateJoinCode = async function(): Promise<string> {
-  let joinCode: string;
+// Generate a unique 6-character invite code
+GroupSchema.statics.generateInviteCode = async function(): Promise<string> {
+  let inviteCode: string;
   let isUnique = false;
   
   while (!isUnique) {
-    // Generate 6-digit random number
-    joinCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate 6-character alphanumeric code
+    inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     
     // Check if this code already exists
-    const existingGroup = await this.findOne({ joinCode });
+    const existingGroup = await this.findOne({ inviteCode });
     if (!existingGroup) {
       isUnique = true;
     }
   }
   
-  return joinCode!;
+  return inviteCode!;
 };
 
 export default mongoose.model<IGroup>("Group", GroupSchema);
