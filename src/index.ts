@@ -29,7 +29,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // single health route
 app.get("/api/health", (_req, res) => {
-  res.status(200).json({ ok: true, database: "mongodb", ts: Date.now() });
+  res.status(200).json({ ok: true, database: "mongodb", ts: Date.now(), version: "1.1" });
 });
 
 // Debug endpoint to check environment variables
