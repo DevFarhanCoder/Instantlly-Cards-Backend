@@ -96,9 +96,13 @@ router.post("/signup", async (req, res) => {
     });
   } catch (e) {
     console.error("SIGNUP ERROR DETAILS:", e);
-    console.error("Error name:", e.name);
-    console.error("Error message:", e.message);
-    console.error("Error stack:", e.stack);
+    if (e instanceof Error) {
+      console.error("Error name:", e.name);
+      console.error("Error message:", e.message);
+      console.error("Error stack:", e.stack);
+    } else {
+      console.error("Unknown error type:", typeof e);
+    }
     res.status(500).json({ message: "Server error" });
   }
 });
