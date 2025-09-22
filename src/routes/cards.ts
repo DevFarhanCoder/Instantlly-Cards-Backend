@@ -244,4 +244,53 @@ r.post("/shared/:id/view", async (req: AuthReq, res) => {
   }
 });
 
+// GET SHARED CARDS BETWEEN TWO USERS (for chat conversations)
+r.get("/shared-with/:userId", async (req: AuthReq, res) => {
+  try {
+    const currentUserId = req.userId!;
+    const otherUserId = req.params.userId;
+    
+    // Find all shared cards between these two users (in both directions)
+    const sharedCards = await SharedCard.find({
+      $or: [
+        { senderId: currentUserId, recipientId: otherUserId },
+        { senderId: otherUserId, recipientId: currentUserId }
+      ]
+    })
+    .populate('cardId', 'companyName name companyPhoto')
+    .populate('senderId', 'name profilePicture')
+    .populate('recipientId', 'name profilePicture')
+    .sort({ sentAt: 1 }) // Chronological order for chat timeline
+    .lean();
+
+    // Format the response
+    const formattedCards = sharedCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      senderId: share.senderId._id,
+      recipientId: share.recipientId._id,
+      senderName: share.senderName,
+      recipientName: share.recipientName,
+      senderProfilePicture: share.senderId.profilePicture,
+      recipientProfilePicture: share.recipientId.profilePicture,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      sentAt: share.sentAt,
+      status: share.status,
+      message: share.message,
+      viewedAt: share.viewedAt,
+      isFromMe: share.senderId.toString() === currentUserId,
+      isToMe: share.recipientId.toString() === currentUserId
+    }));
+
+    res.json({
+      success: true,
+      data: formattedCards
+    });
+  } catch (err) {
+    console.error("GET SHARED CARDS BETWEEN USERS ERROR", err);
+    res.status(500).json({ message: "Failed to fetch shared cards" });
+  }
+});
+
 export default r;
