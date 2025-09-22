@@ -34,22 +34,29 @@ const upload = multer({
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
+    console.log("SIGNUP REQUEST - Body:", req.body);
     const { name, phone, password, email } = req.body ?? {};
     if (!name || !phone || !password) {
+      console.log("SIGNUP ERROR - Missing fields:", { name: !!name, phone: !!phone, password: !!password });
       return res.status(400).json({ message: "Missing required fields: name, phone, password" });
     }
 
     // Validate phone number format
     if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
+      console.log("SIGNUP ERROR - Invalid phone format:", phone);
       return res.status(400).json({ message: "Invalid phone number format" });
     }
 
     // Normalize phone number (remove spaces, dashes, parentheses)
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    console.log("SIGNUP - Checking phone:", normalizedPhone);
 
     // Check if phone number already exists
     const existingPhone = await User.findOne({ phone: normalizedPhone });
-    if (existingPhone) return res.status(409).json({ message: "Phone number already exists" });
+    if (existingPhone) {
+      console.log("SIGNUP ERROR - Phone already exists:", normalizedPhone);
+      return res.status(409).json({ message: "Phone number already exists" });
+    }
 
     // Handle email if provided
     let finalEmail = undefined;
@@ -88,7 +95,10 @@ router.post("/signup", async (req, res) => {
       },
     });
   } catch (e) {
-    console.error("SIGNUP ERROR", e);
+    console.error("SIGNUP ERROR DETAILS:", e);
+    console.error("Error name:", e.name);
+    console.error("Error message:", e.message);
+    console.error("Error stack:", e.stack);
     res.status(500).json({ message: "Server error" });
   }
 });
