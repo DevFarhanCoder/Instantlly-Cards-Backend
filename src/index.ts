@@ -6,6 +6,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
+import mongoose from "mongoose";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import cardsRouter from "./routes/cards";
@@ -28,8 +29,39 @@ if (!fs.existsSync(uploadsDir)) {
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // single health route
-app.get("/api/health", (_req, res) => {
-  res.status(200).json({ ok: true, database: "mongodb", ts: Date.now(), version: "1.1" });
+app.get("/api/health", async (_req, res) => {
+  try {
+    // Check database connection
+    const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+    let dbPing = "failed";
+    
+    if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
+      try {
+        await mongoose.connection.db.admin().ping();
+        dbPing = "ok";
+      } catch (pingError) {
+        console.error("DB ping failed:", pingError);
+      }
+    }
+    
+    res.status(200).json({ 
+      ok: true, 
+      database: "mongodb", 
+      dbStatus: dbStatus,
+      dbPing: dbPing,
+      ts: Date.now(), 
+      version: "1.2",
+      hasJwtSecret: !!process.env.JWT_SECRET,
+      hasMongoUri: !!process.env.MONGODB_URI
+    });
+  } catch (error) {
+    console.error("Health check failed:", error);
+    res.status(500).json({ 
+      ok: false, 
+      error: "Health check failed",
+      ts: Date.now()
+    });
+  }
 });
 
 // Debug endpoint to check environment variables

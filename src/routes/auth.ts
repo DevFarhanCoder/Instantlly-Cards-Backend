@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
+import mongoose from "mongoose";
 import User from "../models/User";
 import { requireAuth, AuthReq } from "../middleware/auth";
 
@@ -37,11 +38,26 @@ router.post("/signup", async (req, res) => {
   console.log("Request headers:", req.headers);
   console.log("Request body:", req.body);
   
+  // Check critical environment variables
+  if (!process.env.JWT_SECRET) {
+    console.error("CRITICAL: JWT_SECRET is missing!");
+    return res.status(500).json({ message: "Server configuration error: JWT_SECRET missing" });
+  }
+  
+  if (!process.env.MONGODB_URI) {
+    console.error("CRITICAL: MONGODB_URI is missing!");
+    return res.status(500).json({ message: "Server configuration error: Database not configured" });
+  }
+  
+  // Check database connection
+  if (mongoose.connection.readyState !== 1) {
+    console.error("CRITICAL: Database not connected. ReadyState:", mongoose.connection.readyState);
+    return res.status(503).json({ message: "Database connection unavailable. Please try again." });
+  }
+  
   try {
-    console.log("SIGNUP REQUEST - Body:", req.body);
     const { name, phone, password, email } = req.body ?? {};
-    
-    console.log("Extracted fields:", { name: !!name, phone: !!phone, password: !!password, email: !!email });
+    console.log("SIGNUP REQUEST - Body:", { name: !!name, phone: !!phone, password: !!password, email: !!email });
     
     if (!name || !phone || !password) {
       console.log("SIGNUP ERROR - Missing fields:", { name: !!name, phone: !!phone, password: !!password });
@@ -56,13 +72,10 @@ router.post("/signup", async (req, res) => {
 
     // Normalize phone number (remove spaces, dashes, parentheses)
     const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
-    console.log("SIGNUP - Checking phone:", normalizedPhone);
+    console.log("SIGNUP - Processing phone:", normalizedPhone);
 
     // Check if phone number already exists
-    console.log("About to check for existing phone in database...");
     const existingPhone = await User.findOne({ phone: normalizedPhone });
-    console.log("Database check result:", existingPhone ? "Phone exists" : "Phone not found");
-    
     if (existingPhone) {
       console.log("SIGNUP ERROR - Phone already exists:", normalizedPhone);
       return res.status(409).json({ message: "Phone number already exists" });
@@ -71,7 +84,6 @@ router.post("/signup", async (req, res) => {
     // Handle email if provided
     let finalEmail = undefined;
     if (email && email.trim() !== "") {
-      console.log("Checking email:", email.trim());
       const existingEmail = await User.findOne({ email: email.trim() });
       if (existingEmail) {
         console.log("SIGNUP ERROR - Email already exists:", email.trim());
@@ -81,18 +93,14 @@ router.post("/signup", async (req, res) => {
     }
 
     // Hash password
-    console.log("About to hash password...");
     let hashedPassword;
     try {
       hashedPassword = await bcrypt.hash(password, 12);
-      console.log("Password hashed successfully");
     } catch (hashError) {
       console.error("FAILED AT PASSWORD HASHING:", hashError);
       throw hashError;
     }
 
-    console.log("About to create user in database...");
-    
     // Create user object, only include email if it was provided
     const userData: any = {
       name, 
@@ -105,8 +113,6 @@ router.post("/signup", async (req, res) => {
       userData.email = finalEmail;
     }
     
-    console.log("User data to save:", { ...userData, password: '[HIDDEN]' });
-    
     let user;
     try {
       user = await User.create(userData);
@@ -116,7 +122,6 @@ router.post("/signup", async (req, res) => {
       throw createError;
     }
 
-    console.log("About to create JWT token...");
     let token;
     try {
       token = jwt.sign(
@@ -124,13 +129,11 @@ router.post("/signup", async (req, res) => {
         process.env.JWT_SECRET!,
         { expiresIn: "365d" } // 1 year expiration instead of 7 days
       );
-      console.log("JWT token created successfully");
     } catch (jwtError) {
       console.error("FAILED AT JWT CREATION:", jwtError);
       throw jwtError;
     }
 
-    console.log("About to send success response...");
     try {
       res.status(201).json({
         token,
@@ -151,14 +154,44 @@ router.post("/signup", async (req, res) => {
     }
   } catch (e) {
     console.error("SIGNUP ERROR DETAILS:", e);
+    
+    // More specific error handling
     if (e instanceof Error) {
       console.error("Error name:", e.name);
       console.error("Error message:", e.message);
       console.error("Error stack:", e.stack);
+      
+      // Handle specific MongoDB errors
+      if (e.message.includes('duplicate key') || e.message.includes('E11000')) {
+        if (e.message.includes('phone')) {
+          return res.status(409).json({ message: "Phone number already exists" });
+        }
+        if (e.message.includes('email')) {
+          return res.status(409).json({ message: "Email already exists" });
+        }
+      }
+      
+      // Handle validation errors
+      if (e.name === 'ValidationError') {
+        return res.status(400).json({ message: "Invalid data provided: " + e.message });
+      }
+      
+      // Handle MongoDB connection errors
+      if (e.message.includes('connection') || e.message.includes('timeout')) {
+        return res.status(503).json({ message: "Database connection error. Please try again." });
+      }
+      
+      // Handle JWT errors
+      if (e.message.includes('jwt') || e.message.includes('secret')) {
+        return res.status(500).json({ message: "Authentication configuration error" });
+      }
+      
+      // Return the actual error message for debugging
+      return res.status(500).json({ message: "Server error: " + e.message });
     } else {
       console.error("Unknown error type:", typeof e);
+      return res.status(500).json({ message: "Unknown server error" });
     }
-    res.status(500).json({ message: "Server error" });
   }
 });
 

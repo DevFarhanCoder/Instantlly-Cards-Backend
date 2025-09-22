@@ -9,15 +9,21 @@ export async function connectDB() {
   console.log("Attempting MongoDB connection...");
   
   await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 5000, // wait up to 5s for a node (reduced from 15s)
-    socketTimeoutMS: 10000, // reduced timeout
-    connectTimeoutMS: 5000, // connection timeout
+    serverSelectionTimeoutMS: 10000, // Increased from 5s to 10s for better reliability
+    socketTimeoutMS: 15000, // Increased from 10s to 15s
+    connectTimeoutMS: 10000, // Increased from 5s to 10s
+    maxPoolSize: 10, // Maintain up to 10 socket connections
+    minPoolSize: 5,  // Maintain minimum 5 socket connections
+    maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
+    retryWrites: true,
+    retryReads: true
   });
 
   const c = mongoose.connection;
-  c.on("connected", () => console.log("Mongo connected"));
-  c.on("error", (e) => console.error("Mongo error", e));
-  c.on("disconnected", () => console.warn("Mongo disconnected"));
+  c.on("connected", () => console.log("✅ MongoDB connected"));
+  c.on("error", (e) => console.error("❌ MongoDB error:", e));
+  c.on("disconnected", () => console.warn("⚠️ MongoDB disconnected"));
+  c.on("reconnected", () => console.log("🔄 MongoDB reconnected"));
   
   console.log("MongoDB connection established");
 }
