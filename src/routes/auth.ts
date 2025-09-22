@@ -72,7 +72,7 @@ router.post("/signup", async (req, res) => {
     const token = jwt.sign(
       { sub: user._id, phone: user.phone },
       process.env.JWT_SECRET!,
-      { expiresIn: "7d" }
+      { expiresIn: "365d" } // 1 year expiration instead of 7 days
     );
 
     res.status(201).json({
@@ -145,7 +145,7 @@ router.post("/login", async (req, res) => {
     const token = jwt.sign(
       { sub: user._id.toString(), phone: user.phone },
       process.env.JWT_SECRET,
-      { expiresIn: "24h" }
+      { expiresIn: "365d" } // 1 year expiration instead of 24 hours
     );
 
     console.log("Token generated successfully for user:", user.name);

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import User from '../models/User';
+import TempMessage from '../models/TempMessage';
 import { requireAuth, AuthReq } from '../middleware/auth';
 import { sendIndividualMessageNotification, sendGroupMessageNotification } from '../services/pushNotifications';
 
@@ -7,15 +8,15 @@ const router = Router();
 
 // Note: Messages are NOT stored in database - only notifications and typing effects are handled
 
-// Send notification for individual message (no message storage)
-router.post('/send-notification', requireAuth, async (req: AuthReq, res: Response) => {
+// Send message to individual user (stores temporarily for notifications)
+router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { receiverId, messagePreview, messageId } = req.body;
+    const { receiverId, text, messageId } = req.body;
     const senderId = req.userId;
 
-    if (!receiverId || !messagePreview || !senderId) {
+    if (!receiverId || !text || !messageId || !senderId) {
       return res.status(400).json({ 
-        error: 'Receiver ID and message preview are required' 
+        error: 'Receiver ID, message text, and message ID are required' 
       });
     }
 
@@ -30,7 +31,23 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
       return res.status(404).json({ error: 'Sender not found' });
     }
 
-    console.log(`📱 Sending notification from ${sender.name} to ${receiver.name}: ${messagePreview}`);
+    // Store message temporarily for notification delivery tracking
+    try {
+      await TempMessage.create({
+        senderId,
+        receiverId,
+        text: text.trim(),
+        messageId,
+        isDelivered: false
+      });
+      
+      console.log(`� Message stored temporarily for notification tracking: ${messageId}`);
+    } catch (dbError) {
+      console.error('Failed to store temp message:', dbError);
+      // Continue with notification even if storage fails
+    }
+
+    console.log(`📱 Sending message from ${sender.name} to ${receiver.name}: ${text}`);
 
     // Send push notification to the receiver if they have a push token
     if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
@@ -38,7 +55,7 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
         await sendIndividualMessageNotification(
           receiver.pushToken,
           sender.name,
-          messagePreview,
+          text,
           senderId
         );
         console.log(`📱 Push notification sent to ${receiver.name}`);
@@ -53,27 +70,28 @@ router.post('/send-notification', requireAuth, async (req: AuthReq, res: Respons
 
     res.status(200).json({
       success: true,
-      message: 'Notification sent successfully',
+      message: 'Message sent successfully',
       messageId,
       receiverName: receiver.name,
       senderName: sender.name,
-      note: 'Message was not stored in database - only notification sent'
+      timestamp: new Date().toISOString(),
+      note: 'Message stored temporarily for 15 days for notification purposes only'
     });
   } catch (error) {
-    console.error('Send notification error:', error);
-    res.status(500).json({ error: 'Failed to send notification' });
+    console.error('Send message error:', error);
+    res.status(500).json({ error: 'Failed to send message' });
   }
 });
 
-// Send notification for group message (no message storage)
-router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: Response) => {
+// Send group message (stores temporarily for notifications)
+router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
   try {
-    const { groupName, groupId, memberIds, messagePreview, messageId } = req.body;
+    const { groupId, text, messageId } = req.body;
     const senderId = req.userId;
 
-    if (!groupName || !memberIds || !Array.isArray(memberIds) || !messagePreview || !senderId) {
+    if (!groupId || !text || !messageId || !senderId) {
       return res.status(400).json({ 
-        error: 'Group name, member IDs, and message preview are required' 
+        error: 'Group ID, message text, and message ID are required' 
       });
     }
 
@@ -82,43 +100,35 @@ router.post('/send-group-notification', requireAuth, async (req: AuthReq, res: R
       return res.status(404).json({ error: 'Sender not found' });
     }
 
-    console.log(`📱 Sending group notification from ${sender.name} to group ${groupName}`);
-
-    // Send notifications to all group members except sender
-    const otherMemberIds = memberIds.filter((id: string) => id !== senderId);
-    let notificationsSent = 0;
-    
-    for (const memberId of otherMemberIds) {
-      try {
-        const member = await User.findById(memberId);
-        if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
-          await sendGroupMessageNotification(
-            member.pushToken,
-            groupName,
-            sender.name,
-            messagePreview,
-            groupId || 'group-id-placeholder',
-            senderId
-          );
-          console.log(`📱 Group notification sent to ${member.name}`);
-          notificationsSent++;
-        }
-      } catch (error) {
-        console.error(`Failed to send group notification to member ${memberId}:`, error);
-      }
+    // Store message temporarily for notification delivery tracking
+    try {
+      await TempMessage.create({
+        senderId,
+        groupId,
+        text: text.trim(),
+        messageId,
+        isDelivered: false
+      });
+      
+      console.log(`� Group message stored temporarily for notification tracking: ${messageId}`);
+    } catch (dbError) {
+      console.error('Failed to store temp group message:', dbError);
+      // Continue with notification even if storage fails
     }
+
+    console.log(`📱 Sending group message from ${sender.name} to group ${groupId}: ${text}`);
 
     res.status(200).json({
       success: true,
-      message: 'Group notifications sent successfully',
+      message: 'Group message sent successfully',
       messageId,
       senderName: sender.name,
-      notificationsSent,
-      note: 'Message was not stored in database - only notifications sent'
+      timestamp: new Date().toISOString(),
+      note: 'Message stored temporarily for 15 days for notification purposes only'
     });
   } catch (error) {
-    console.error('Send group notification error:', error);
-    res.status(500).json({ error: 'Failed to send group notifications' });
+    console.error('Send group message error:', error);
+    res.status(500).json({ error: 'Failed to send group message' });
   }
 });
 
@@ -320,17 +330,122 @@ router.get('/group-typing-status/:groupId', requireAuth, async (req: AuthReq, re
   }
 });
 
-// GET /check-all-pending - Since messages aren't stored, return empty
+// GET /check-all-pending - Get undelivered messages for current user
 router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
   try {
+    const currentUserId = req.userId;
+    
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Find all undelivered messages for this user
+    const pendingMessages = await TempMessage.find({
+      receiverId: currentUserId,
+      isDelivered: false
+    }).populate('senderId', 'name profilePicture').sort({ createdAt: 1 });
+
+    // Group messages by sender
+    const messagesBySender: any[] = [];
+    const senderMap = new Map();
+
+    for (const message of pendingMessages) {
+      const senderData = message.senderId as any;
+      const senderId = senderData._id.toString();
+      
+      if (!senderMap.has(senderId)) {
+        senderMap.set(senderId, {
+          senderId,
+          senderName: senderData.name,
+          senderProfilePicture: senderData.profilePicture,
+          messages: []
+        });
+        messagesBySender.push(senderMap.get(senderId));
+      }
+      
+      senderMap.get(senderId).messages.push({
+        id: message.messageId,
+        backendMessageId: message._id,
+        text: message.text,
+        timestamp: message.createdAt,
+        messageId: message.messageId
+      });
+    }
+
+    console.log(`📬 Found ${pendingMessages.length} pending messages for user ${currentUserId} from ${messagesBySender.length} senders`);
+
     res.status(200).json({
       success: true,
-      message: 'No pending messages - messages are not stored in database',
-      pendingMessages: []
+      messagesBySender,
+      totalPendingMessages: pendingMessages.length,
+      note: 'Messages will auto-delete after 15 days'
     });
   } catch (error) {
     console.error('Error in check-all-pending:', error);
     res.status(500).json({ error: 'Failed to check pending messages' });
+  }
+});
+
+// Mark messages as delivered
+router.post('/mark-delivered', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageIds, senderId } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!messageIds || !Array.isArray(messageIds)) {
+      return res.status(400).json({ error: 'Message IDs array is required' });
+    }
+
+    // Mark messages as delivered
+    const result = await TempMessage.updateMany(
+      {
+        receiverId: currentUserId,
+        messageId: { $in: messageIds },
+        isDelivered: false
+      },
+      {
+        $set: {
+          isDelivered: true,
+          deliveredAt: new Date()
+        }
+      }
+    );
+
+    console.log(`📬 Marked ${result.modifiedCount} messages as delivered for user ${currentUserId}`);
+
+    res.json({
+      success: true,
+      markedCount: result.modifiedCount,
+      message: 'Messages marked as delivered'
+    });
+  } catch (error) {
+    console.error('Mark delivered error:', error);
+    res.status(500).json({ error: 'Failed to mark messages as delivered' });
+  }
+});
+
+// Clean up expired messages manually (MongoDB TTL should handle this automatically)
+router.delete('/cleanup-expired', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const now = new Date();
+    const result = await TempMessage.deleteMany({
+      expiresAt: { $lt: now }
+    });
+
+    console.log(`🧹 Cleaned up ${result.deletedCount} expired messages`);
+
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      message: 'Expired messages cleaned up'
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ error: 'Failed to cleanup expired messages' });
   }
 });
 
