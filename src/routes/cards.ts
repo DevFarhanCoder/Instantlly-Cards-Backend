@@ -90,21 +90,7 @@ r.post("/:id/share", async (req: AuthReq, res) => {
       return res.status(404).json({ message: "Sender not found" });
     }
 
-    // Check if card was already shared to this recipient
-    const existingShare = await SharedCard.findOne({ 
-      cardId, 
-      senderId, 
-      recipientId 
-    });
-
-    if (existingShare) {
-      return res.status(409).json({ 
-        message: "Card already shared with this recipient",
-        sharedCardId: existingShare._id 
-      });
-    }
-
-    // Create shared card record
+    // Create shared card record (allowing duplicates)
     const sharedCard = await SharedCard.create({
       cardId,
       senderId,
