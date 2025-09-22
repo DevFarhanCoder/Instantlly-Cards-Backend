@@ -1,5 +1,7 @@
 import { Router } from "express";
 import Card from "../models/Card";
+import SharedCard from "../models/SharedCard";
+import User from "../models/User";
 import { AuthReq, requireAuth } from "../middleware/auth";
 
 const r = Router();
@@ -58,108 +60,187 @@ r.delete("/:id", async (req: AuthReq, res) => {
   }
 });
 
-// SHARE CARD (send to another user)
+// SHARE CARD (send to another user within the app)
 r.post("/:id/share", async (req: AuthReq, res) => {
   try {
-    const { recipientId, recipientPhone, message } = req.body;
+    const { recipientId, message } = req.body;
     const cardId = req.params.id;
+    const senderId = req.userId!;
     
-    // Verify the card belongs to the sender
-    const card = await Card.findOne({ _id: cardId, userId: req.userId! });
-    if (!card) {
-      return res.status(404).json({ message: "Card not found" });
+    if (!recipientId) {
+      return res.status(400).json({ message: "Recipient ID is required" });
     }
 
-    // For now, we'll create a simple sharing record
-    // In a real app, you'd want a separate SharedCard model
-    const sharedCard = {
-      cardId,
-      senderId: req.userId!,
-      recipientId: recipientId || null,
-      recipientPhone: recipientPhone || null,
-      cardTitle: card.companyName || card.name || 'Business Card',
-      sentAt: new Date(),
-      status: 'sent',
-      message: message || null
-    };
+    // Verify the card belongs to the sender
+    const card = await Card.findOne({ _id: cardId, userId: senderId });
+    if (!card) {
+      return res.status(404).json({ message: "Card not found or access denied" });
+    }
 
-    // You could save this to a SharedCards collection
-    // await SharedCard.create(sharedCard);
+    // Verify recipient exists
+    const recipient = await User.findById(recipientId);
+    if (!recipient) {
+      return res.status(404).json({ message: "Recipient not found" });
+    }
+
+    // Get sender info
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Check if card was already shared to this recipient
+    const existingShare = await SharedCard.findOne({ 
+      cardId, 
+      senderId, 
+      recipientId 
+    });
+
+    if (existingShare) {
+      return res.status(409).json({ 
+        message: "Card already shared with this recipient",
+        sharedCardId: existingShare._id 
+      });
+    }
+
+    // Create shared card record
+    const sharedCard = await SharedCard.create({
+      cardId,
+      senderId,
+      recipientId,
+      message: message || "",
+      cardTitle: card.companyName || card.name || 'Business Card',
+      senderName: sender.name,
+      recipientName: recipient.name,
+      status: 'sent'
+    });
+
+    console.log(`📧 Card shared: ${sender.name} → ${recipient.name} (${card.companyName || card.name})`);
     
     res.json({ 
       success: true, 
       message: "Card shared successfully",
-      data: sharedCard 
+      data: {
+        sharedCardId: sharedCard._id,
+        cardTitle: sharedCard.cardTitle,
+        recipientName: recipient.name,
+        sentAt: sharedCard.sentAt
+      }
     });
   } catch (err) {
     console.error("SHARE CARD ERROR", err);
-    res.status(400).json({ message: "Failed to share card" });
+    res.status(500).json({ message: "Failed to share card" });
   }
 });
 
 // GET SENT CARDS
 r.get("/sent", async (req: AuthReq, res) => {
   try {
-    // For now, return mock data
-    // In a real app, you'd query a SharedCards collection
-    const sentCards = [
-      {
-        _id: "sent1",
-        cardId: "card123",
-        recipientId: "user456",
-        recipientName: "John Doe",
-        cardTitle: "My Business Card",
-        sentAt: new Date(Date.now() - 86400000), // 1 day ago
-        status: "delivered"
-      },
-      {
-        _id: "sent2",
-        cardId: "card124",
-        recipientId: "user789",
-        recipientName: "Jane Smith",
-        cardTitle: "Company Card",
-        sentAt: new Date(Date.now() - 172800000), // 2 days ago
-        status: "viewed"
-      }
-    ];
+    const senderId = req.userId!;
+    
+    // Find all cards shared by this user, populate with card and recipient details
+    const sentCards = await SharedCard.find({ senderId })
+      .populate('cardId', 'companyName name companyPhoto')
+      .populate('recipientId', 'name profilePicture')
+      .sort({ sentAt: -1 })
+      .lean();
 
-    res.json({ success: true, data: sentCards });
+    // Format the response
+    const formattedCards = sentCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      recipientId: share.recipientId._id,
+      recipientName: share.recipientName,
+      recipientProfilePicture: share.recipientId.profilePicture,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      sentAt: share.sentAt,
+      status: share.status,
+      message: share.message,
+      viewedAt: share.viewedAt
+    }));
+
+    res.json({
+      success: true,
+      data: formattedCards
+    });
   } catch (err) {
     console.error("GET SENT CARDS ERROR", err);
     res.status(500).json({ message: "Failed to fetch sent cards" });
   }
 });
 
-// GET RECEIVED CARDS
+// GET RECEIVED CARDS - Cards that have been shared with the current user
 r.get("/received", async (req: AuthReq, res) => {
   try {
-    // For now, return mock data
-    // In a real app, you'd query a SharedCards collection
-    const receivedCards = [
-      {
-        _id: "received1",
-        cardId: "card789",
-        senderId: "user123",
-        senderName: "Alice Johnson",
-        cardTitle: "Marketing Director",
-        receivedAt: new Date(Date.now() - 43200000), // 12 hours ago
-        isViewed: false
-      },
-      {
-        _id: "received2",
-        cardId: "card790",
-        senderId: "user456",
-        senderName: "Bob Wilson",
-        cardTitle: "Software Engineer",
-        receivedAt: new Date(Date.now() - 259200000), // 3 days ago
-        isViewed: true
-      }
-    ];
+    const recipientId = req.userId!;
+    
+    // Find all cards shared with this user, populate with card and sender details
+    const receivedCards = await SharedCard.find({ recipientId })
+      .populate('cardId', 'companyName name companyPhoto')
+      .populate('senderId', 'name profilePicture')
+      .sort({ sentAt: -1 })
+      .lean();
 
-    res.json({ success: true, data: receivedCards });
+    // Format the response
+    const formattedCards = receivedCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      senderId: share.senderId._id,
+      senderName: share.senderName,
+      senderProfilePicture: share.senderId.profilePicture,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      receivedAt: share.sentAt, // Use sentAt as receivedAt
+      sentAt: share.sentAt,
+      isViewed: share.status === 'viewed',
+      status: share.status,
+      message: share.message,
+      viewedAt: share.viewedAt
+    }));
+
+    res.json({
+      success: true,
+      data: formattedCards
+    });
   } catch (err) {
     console.error("GET RECEIVED CARDS ERROR", err);
     res.status(500).json({ message: "Failed to fetch received cards" });
+  }
+});
+
+// MARK CARD AS VIEWED
+r.post("/shared/:id/view", async (req: AuthReq, res) => {
+  try {
+    const sharedCardId = req.params.id;
+    const userId = req.userId!;
+    
+    // Update the shared card status to viewed
+    const updatedCard = await SharedCard.findOneAndUpdate(
+      { 
+        _id: sharedCardId, 
+        recipientId: userId,
+        status: { $ne: 'viewed' } // Only update if not already viewed
+      },
+      { 
+        status: 'viewed',
+        viewedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!updatedCard) {
+      return res.status(404).json({ message: "Shared card not found or already viewed" });
+    }
+
+    res.json({ 
+      success: true, 
+      message: "Card marked as viewed",
+      viewedAt: updatedCard.viewedAt
+    });
+  } catch (err) {
+    console.error("MARK CARD VIEWED ERROR", err);
+    res.status(500).json({ message: "Failed to mark card as viewed" });
   }
 });
 
