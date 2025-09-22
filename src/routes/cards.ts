@@ -3,6 +3,7 @@ import Card from "../models/Card";
 import SharedCard from "../models/SharedCard";
 import User from "../models/User";
 import { AuthReq, requireAuth } from "../middleware/auth";
+import { sendCardSharingNotification } from "../services/pushNotifications";
 
 const r = Router();
 
@@ -116,6 +117,30 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     });
 
     console.log(`📧 Card shared: ${sender.name} → ${recipient.name} (${card.companyName || card.name})`);
+    
+    // Send push notification to recipient if they have a push token
+    if (recipient.pushToken) {
+      try {
+        const notificationSent = await sendCardSharingNotification(
+          recipient.pushToken,
+          sender.name,
+          sharedCard.cardTitle,
+          senderId,
+          cardId
+        );
+        
+        if (notificationSent) {
+          console.log(`🔔 Card sharing notification sent to ${recipient.name}`);
+        } else {
+          console.log(`❌ Failed to send card sharing notification to ${recipient.name}`);
+        }
+      } catch (notificationError) {
+        console.error('Error sending card sharing notification:', notificationError);
+        // Don't fail the card sharing if notification fails
+      }
+    } else {
+      console.log(`📱 No push token for ${recipient.name}, skipping notification`);
+    }
     
     res.json({ 
       success: true, 

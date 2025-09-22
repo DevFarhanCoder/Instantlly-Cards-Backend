@@ -129,6 +129,28 @@ export async function sendIndividualMessageNotification(
   );
 }
 
+export async function sendCardSharingNotification(
+  pushToken: string,
+  senderName: string,
+  cardTitle: string,
+  senderId: string,
+  cardId: string
+): Promise<boolean> {
+  return await sendPushNotification(
+    pushToken,
+    `${senderName} sent you a Card`,
+    `Check out ${cardTitle}`,
+    {
+      type: 'card_shared',
+      senderId,
+      senderName,
+      cardTitle,
+      cardId,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
 export async function sendBulkPushNotifications(
   notifications: Array<{
     pushToken: string;
