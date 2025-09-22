@@ -58,6 +58,7 @@ router.post("/signup", async (req, res) => {
   try {
     const { name, phone, password, email } = req.body ?? {};
     console.log("SIGNUP REQUEST - Body:", { name: !!name, phone: !!phone, password: !!password, email: !!email });
+    console.log("SIGNUP REQUEST - Email value:", email, "Type:", typeof email, "Empty:", email === "" || email === null || email === undefined);
     
     if (!name || !phone || !password) {
       console.log("SIGNUP ERROR - Missing fields:", { name: !!name, phone: !!phone, password: !!password });

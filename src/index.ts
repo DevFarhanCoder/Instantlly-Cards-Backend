@@ -50,7 +50,7 @@ app.get("/api/health", async (_req, res) => {
       dbStatus: dbStatus,
       dbPing: dbPing,
       ts: Date.now(), 
-      version: "1.2",
+      version: "1.3",
       hasJwtSecret: !!process.env.JWT_SECRET,
       hasMongoUri: !!process.env.MONGODB_URI
     });
