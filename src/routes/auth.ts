@@ -82,8 +82,14 @@ router.post("/signup", async (req, res) => {
 
     // Hash password
     console.log("About to hash password...");
-    const hashedPassword = await bcrypt.hash(password, 12);
-    console.log("Password hashed successfully");
+    let hashedPassword;
+    try {
+      hashedPassword = await bcrypt.hash(password, 12);
+      console.log("Password hashed successfully");
+    } catch (hashError) {
+      console.error("FAILED AT PASSWORD HASHING:", hashError);
+      throw hashError;
+    }
 
     console.log("About to create user in database...");
     
@@ -99,31 +105,50 @@ router.post("/signup", async (req, res) => {
       userData.email = finalEmail;
     }
     
-    const user = await User.create(userData);
-    console.log("User created successfully:", user._id);
+    console.log("User data to save:", { ...userData, password: '[HIDDEN]' });
+    
+    let user;
+    try {
+      user = await User.create(userData);
+      console.log("User created successfully:", user._id);
+    } catch (createError) {
+      console.error("FAILED AT USER CREATION:", createError);
+      throw createError;
+    }
 
     console.log("About to create JWT token...");
-    const token = jwt.sign(
-      { sub: user._id, phone: user.phone },
-      process.env.JWT_SECRET!,
-      { expiresIn: "365d" } // 1 year expiration instead of 7 days
-    );
-    console.log("JWT token created successfully");
+    let token;
+    try {
+      token = jwt.sign(
+        { sub: user._id, phone: user.phone },
+        process.env.JWT_SECRET!,
+        { expiresIn: "365d" } // 1 year expiration instead of 7 days
+      );
+      console.log("JWT token created successfully");
+    } catch (jwtError) {
+      console.error("FAILED AT JWT CREATION:", jwtError);
+      throw jwtError;
+    }
 
     console.log("About to send success response...");
-    res.status(201).json({
-      token,
-      user: { 
-        id: user._id,
-        _id: user._id, 
-        name: user.name, 
-        phone: user.phone,
-        email: user.email,
-        profilePicture: user.profilePicture || "",
-        about: (user as any).about || "Available"
-      },
-    });
-    console.log("SUCCESS: User signup completed for:", user.name);
+    try {
+      res.status(201).json({
+        token,
+        user: { 
+          id: user._id,
+          _id: user._id, 
+          name: user.name, 
+          phone: user.phone,
+          email: user.email,
+          profilePicture: user.profilePicture || "",
+          about: (user as any).about || "Available"
+        },
+      });
+      console.log("SUCCESS: User signup completed for:", user.name);
+    } catch (responseError) {
+      console.error("FAILED AT RESPONSE SENDING:", responseError);
+      throw responseError;
+    }
   } catch (e) {
     console.error("SIGNUP ERROR DETAILS:", e);
     if (e instanceof Error) {
