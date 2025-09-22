@@ -1,9 +1,9 @@
 const https = require('https');
 
 const data = JSON.stringify({
-  name: "TestUser", 
-  phone: "+919876543210",
-  password: "Test123"
+  name: "Dinky", 
+  phone: "+919326664680", // Original failing number
+  password: "Dinky90"
 });
 
 const options = {

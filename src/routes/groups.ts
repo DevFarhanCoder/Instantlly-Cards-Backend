@@ -40,6 +40,13 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
 
     console.log('🔍 Admin ID:', adminId);
 
+    // Check if icon is a local file path and ignore it
+    let groupIcon = '';
+    if (icon && !icon.startsWith('file://') && !icon.startsWith('/data/')) {
+      groupIcon = icon;
+    }
+    console.log('🔍 Group icon:', groupIcon || 'No icon (local path ignored)');
+
     if (!adminId) {
       console.log('❌ No admin ID found');
       return res.status(401).json({ error: 'User not authenticated' });
@@ -88,7 +95,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     console.log('🔍 Creating group with data:', {
       name: name.trim(),
       description: description?.trim() || '',
-      icon: icon || '',
+      icon: groupIcon,
       members: allMemberIds.map(id => id.toString()),
       admin: adminObjectId.toString(),
       joinCode: joinCode
@@ -97,7 +104,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     const group = await Group.create({
       name: name.trim(),
       description: description?.trim() || '',
-      icon: icon || '',
+      icon: groupIcon,
       members: allMemberIds,
       admin: adminObjectId,
       joinCode: joinCode

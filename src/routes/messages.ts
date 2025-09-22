@@ -372,7 +372,10 @@ router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response
       });
     }
 
-    console.log(`📬 Found ${pendingMessages.length} pending messages for user ${currentUserId} from ${messagesBySender.length} senders`);
+    // Only log if there are pending messages to avoid spam
+    if (pendingMessages.length > 0) {
+      console.log(`📬 Found ${pendingMessages.length} pending messages for user ${currentUserId} from ${messagesBySender.length} senders`);
+    }
 
     res.status(200).json({
       success: true,
