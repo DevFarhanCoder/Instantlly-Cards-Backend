@@ -152,12 +152,24 @@ router.post("/signup", async (req, res) => {
 
   } catch (error: any) {
     console.error('💥 Signup error:', error);
+    console.error('💥 Error details:', {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      keyValue: error.keyValue,
+      keyPattern: error.keyPattern,
+      stack: error.stack?.split('\n')[0]
+    });
     
     // Handle MongoDB duplicate key errors
     if (error.code === 11000) {
       const duplicateField = Object.keys(error.keyValue || {})[0];
       
-      console.log('❌ Duplicate key error:', { field: duplicateField });
+      console.log('❌ Duplicate key error details:', { 
+        field: duplicateField,
+        value: error.keyValue?.[duplicateField],
+        keyPattern: error.keyPattern
+      });
       
       if (duplicateField === 'phone') {
         return res.status(409).json({ 
