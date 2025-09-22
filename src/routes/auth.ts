@@ -35,9 +35,9 @@ const upload = multer({
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
-    console.log('🚀 Starting signup process...');
+    console.log('🚀 Starting simple signup process...');
     
-    const { name, phone, password, email } = req.body;
+    const { name, phone, password } = req.body;
 
     // Validate environment variables
     if (!process.env.JWT_SECRET || !process.env.MONGODB_URI) {
@@ -55,20 +55,20 @@ router.post("/signup", async (req, res) => {
       });
     }
 
-    // Validate required fields
+    // Validate required fields - ONLY name, phone, password
     if (!name?.trim() || !phone?.trim() || !password?.trim()) {
       console.log('❌ Missing required fields');
       return res.status(400).json({ 
-        message: 'Name, phone, and password are required',
-        received: { name: !!name, phone: !!phone, password: !!password }
+        message: 'Name, phone, and password are required'
       });
     }
 
-    // Clean and validate phone number
+    // Clean input data
     const cleanPhone = phone.trim();
     const cleanName = name.trim();
+    const cleanPassword = password.trim();
     
-    // Validate phone format (basic validation)
+    // Validate phone format
     if (!/^\+[1-9]\d{1,14}$/.test(cleanPhone)) {
       console.log('❌ Invalid phone format:', cleanPhone);
       return res.status(400).json({ 
@@ -86,51 +86,20 @@ router.post("/signup", async (req, res) => {
       });
     }
 
-    // If email is provided, validate and check uniqueness
-    let cleanEmail = undefined;
-    if (email && typeof email === 'string' && email.trim() !== '') {
-      cleanEmail = email.trim().toLowerCase();
-      
-      // Basic email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(cleanEmail)) {
-        console.log('❌ Invalid email format:', cleanEmail);
-        return res.status(400).json({ 
-          message: 'Invalid email format' 
-        });
-      }
-
-      // Check if email already exists
-      console.log('🔍 Checking if email already exists:', cleanEmail);
-      const existingEmailUser = await User.findOne({ email: cleanEmail });
-      if (existingEmailUser) {
-        console.log('❌ Email already exists');
-        return res.status(409).json({ 
-          message: 'Email already registered' 
-        });
-      }
-    }
-
     // Hash password
     console.log('🔐 Hashing password...');
-    const hashedPassword = await bcrypt.hash(password.trim(), 12);
+    const hashedPassword = await bcrypt.hash(cleanPassword, 12);
 
-    // Create user data object - only include email if provided
-    const userData: any = {
+    // Create user data object - ONLY name, phone, password
+    const userData = {
       name: cleanName,
       phone: cleanPhone,
       password: hashedPassword
     };
 
-    // Only include email if provided and valid
-    if (cleanEmail) {
-      userData.email = cleanEmail;
-    }
-
     console.log('👤 Creating new user with data:', { 
       name: userData.name, 
       phone: userData.phone, 
-      email: userData.email || 'not provided',
       hasPassword: !!userData.password 
     });
 
@@ -157,7 +126,6 @@ router.post("/signup", async (req, res) => {
       _id: savedUser._id,
       name: savedUser.name,
       phone: savedUser.phone,
-      email: savedUser.email,
       profilePicture: savedUser.profilePicture || "",
       about: (savedUser as any).about || "Available"
     };
@@ -175,15 +143,10 @@ router.post("/signup", async (req, res) => {
     // Handle MongoDB duplicate key errors
     if (error.code === 11000) {
       const duplicateField = Object.keys(error.keyValue || {})[0];
-      const duplicateValue = error.keyValue?.[duplicateField];
       
-      console.log('❌ Duplicate key error:', { field: duplicateField, value: duplicateValue });
+      console.log('❌ Duplicate key error:', { field: duplicateField });
       
-      if (duplicateField === 'email') {
-        return res.status(409).json({ 
-          message: 'Email already registered' 
-        });
-      } else if (duplicateField === 'phone') {
+      if (duplicateField === 'phone') {
         return res.status(409).json({ 
           message: 'Phone number already registered' 
         });
@@ -197,26 +160,15 @@ router.post("/signup", async (req, res) => {
     // Handle validation errors
     if (error.name === 'ValidationError') {
       console.log('❌ Validation error:', error.message);
-      const validationErrors = Object.values(error.errors).map((err: any) => err.message);
       return res.status(400).json({ 
-        message: 'Validation failed',
-        errors: validationErrors
-      });
-    }
-
-    // Handle connection errors
-    if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
-      console.log('❌ Database connection error');
-      return res.status(503).json({ 
-        message: 'Database temporarily unavailable. Please try again.' 
+        message: 'Invalid data provided'
       });
     }
 
     // Generic server error
     console.error('❌ Unexpected error during signup:', error);
     res.status(500).json({ 
-      message: 'An unexpected error occurred. Please try again.',
-      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+      message: 'An unexpected error occurred. Please try again.'
     });
   }
 });

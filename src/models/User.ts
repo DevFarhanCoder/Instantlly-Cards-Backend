@@ -15,13 +15,9 @@ const UserSchema = new Schema(
         message: 'Phone number must be between 10-15 digits'
       }
     },
-    password: { type: String, required: true, select: false }, // <- key
-    email: { 
-      type: String, 
-      sparse: true, // This allows multiple null/undefined values
-      unique: true // But still enforces uniqueness for non-null values
-      // No default value - field won't exist if not provided
-    }, // Made fully optional for phone-based auth
+    password: { type: String, required: true, select: false },
+    // Email is completely optional - no constraints at all
+    email: { type: String },
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },
     pushToken: { type: String },

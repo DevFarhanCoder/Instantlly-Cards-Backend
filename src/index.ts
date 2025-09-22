@@ -50,7 +50,7 @@ app.get("/api/health", async (_req, res) => {
       dbStatus: dbStatus,
       dbPing: dbPing,
       ts: Date.now(), 
-      version: "1.4", // Clean signup rebuild
+      version: "1.5", // Simple signup - only name, phone, password
       hasJwtSecret: !!process.env.JWT_SECRET,
       hasMongoUri: !!process.env.MONGODB_URI
     });
