@@ -19,7 +19,8 @@ const UserSchema = new Schema(
     email: { 
       type: String, 
       default: undefined,
-      sparse: true
+      sparse: true, // This allows multiple null/undefined values
+      unique: true  // But still enforces uniqueness for non-null values
     }, // Made fully optional for phone-based auth
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },

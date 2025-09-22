@@ -86,12 +86,20 @@ router.post("/signup", async (req, res) => {
     console.log("Password hashed successfully");
 
     console.log("About to create user in database...");
-    const user = await User.create({ 
+    
+    // Create user object, only include email if it was provided
+    const userData: any = {
       name, 
       phone: normalizedPhone,
-      password: hashedPassword,
-      email: finalEmail
-    });
+      password: hashedPassword
+    };
+    
+    // Only add email field if it was provided (to avoid null constraint issues)
+    if (finalEmail) {
+      userData.email = finalEmail;
+    }
+    
+    const user = await User.create(userData);
     console.log("User created successfully:", user._id);
 
     console.log("About to create JWT token...");
