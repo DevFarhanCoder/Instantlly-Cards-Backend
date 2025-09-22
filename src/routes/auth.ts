@@ -82,14 +82,12 @@ router.post("/signup", async (req, res) => {
     }
 
     // Handle email if provided
-    let finalEmail = null; // Use null instead of undefined
     if (email && email.trim() !== "") {
       const existingEmail = await User.findOne({ email: email.trim() });
       if (existingEmail) {
         console.log("SIGNUP ERROR - Email already exists:", email.trim());
         return res.status(409).json({ message: "Email already exists" });
       }
-      finalEmail = email.trim();
     }
 
     // Hash password
@@ -101,13 +99,17 @@ router.post("/signup", async (req, res) => {
       throw hashError;
     }
 
-    // Create user object
+    // Create user object - only include email if provided
     const userData: any = {
       name, 
       phone: normalizedPhone,
-      password: hashedPassword,
-      email: finalEmail // This will be null if no email provided, or the email string if provided
+      password: hashedPassword
     };
+    
+    // Only add email field if it was actually provided
+    if (email && email.trim() !== "") {
+      userData.email = email.trim();
+    }
     
     let user;
     try {
