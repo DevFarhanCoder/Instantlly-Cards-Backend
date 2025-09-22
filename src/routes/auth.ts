@@ -38,6 +38,13 @@ router.post("/signup", async (req, res) => {
     console.log('🚀 Starting simple signup process...');
     
     const { name, phone, password } = req.body;
+    
+    console.log('📝 Raw signup data received:', {
+      name: name || 'undefined',
+      phone: phone || 'undefined', 
+      password: password ? '***' + password.slice(-2) : 'undefined',
+      bodyKeys: Object.keys(req.body)
+    });
 
     // Validate environment variables
     if (!process.env.JWT_SECRET || !process.env.MONGODB_URI) {
@@ -80,11 +87,17 @@ router.post("/signup", async (req, res) => {
     console.log('🔍 Checking if phone already exists:', cleanPhone);
     const existingUser = await User.findOne({ phone: cleanPhone });
     if (existingUser) {
-      console.log('❌ Phone already exists');
+      console.log('❌ Phone already exists - User found:', {
+        id: existingUser._id,
+        name: existingUser.name,
+        phone: existingUser.phone,
+        hasEmail: !!existingUser.email
+      });
       return res.status(409).json({ 
         message: 'Phone number already registered' 
       });
     }
+    console.log('✅ Phone number is available');
 
     // Hash password
     console.log('🔐 Hashing password...');
