@@ -34,163 +34,190 @@ const upload = multer({
 
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
-  console.log("=== SIGNUP ROUTE HIT ===");
-  console.log("Request headers:", req.headers);
-  console.log("Request body:", req.body);
-  
-  // Check critical environment variables
-  if (!process.env.JWT_SECRET) {
-    console.error("CRITICAL: JWT_SECRET is missing!");
-    return res.status(500).json({ message: "Server configuration error: JWT_SECRET missing" });
-  }
-  
-  if (!process.env.MONGODB_URI) {
-    console.error("CRITICAL: MONGODB_URI is missing!");
-    return res.status(500).json({ message: "Server configuration error: Database not configured" });
-  }
-  
-  // Check database connection
-  if (mongoose.connection.readyState !== 1) {
-    console.error("CRITICAL: Database not connected. ReadyState:", mongoose.connection.readyState);
-    return res.status(503).json({ message: "Database connection unavailable. Please try again." });
-  }
-  
   try {
-    const { name, phone, password, email } = req.body ?? {};
-    console.log("SIGNUP REQUEST - Body:", { name: !!name, phone: !!phone, password: !!password, email: !!email });
-    console.log("SIGNUP REQUEST - Email value:", email, "Type:", typeof email, "Empty:", email === "" || email === null || email === undefined);
+    console.log('🚀 Starting signup process...');
     
-    if (!name || !phone || !password) {
-      console.log("SIGNUP ERROR - Missing fields:", { name: !!name, phone: !!phone, password: !!password });
-      return res.status(400).json({ message: "Missing required fields: name, phone, password" });
+    const { name, phone, password, email } = req.body;
+
+    // Validate environment variables
+    if (!process.env.JWT_SECRET || !process.env.MONGODB_URI) {
+      console.error('❌ Missing environment variables');
+      return res.status(500).json({ 
+        message: 'Server configuration error' 
+      });
     }
 
-    // Validate phone number format
-    if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
-      console.log("SIGNUP ERROR - Invalid phone format:", phone);
-      return res.status(400).json({ message: "Invalid phone number format" });
+    // Check database connection
+    if (mongoose.connection.readyState !== 1) {
+      console.error('❌ Database not connected');
+      return res.status(503).json({ 
+        message: 'Database connection unavailable. Please try again.' 
+      });
     }
 
-    // Normalize phone number (remove spaces, dashes, parentheses)
-    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
-    console.log("SIGNUP - Processing phone:", normalizedPhone);
-
-    // Check if phone number already exists
-    const existingPhone = await User.findOne({ phone: normalizedPhone });
-    if (existingPhone) {
-      console.log("SIGNUP ERROR - Phone already exists:", normalizedPhone);
-      return res.status(409).json({ message: "Phone number already exists" });
+    // Validate required fields
+    if (!name?.trim() || !phone?.trim() || !password?.trim()) {
+      console.log('❌ Missing required fields');
+      return res.status(400).json({ 
+        message: 'Name, phone, and password are required',
+        received: { name: !!name, phone: !!phone, password: !!password }
+      });
     }
 
-    // Handle email if provided
-    if (email && email.trim() !== "") {
-      const existingEmail = await User.findOne({ email: email.trim() });
-      if (existingEmail) {
-        console.log("SIGNUP ERROR - Email already exists:", email.trim());
-        return res.status(409).json({ message: "Email already exists" });
+    // Clean and validate phone number
+    const cleanPhone = phone.trim();
+    const cleanName = name.trim();
+    
+    // Validate phone format (basic validation)
+    if (!/^\+[1-9]\d{1,14}$/.test(cleanPhone)) {
+      console.log('❌ Invalid phone format:', cleanPhone);
+      return res.status(400).json({ 
+        message: 'Phone number must be in international format (e.g., +1234567890)' 
+      });
+    }
+
+    // Check if user already exists by phone
+    console.log('🔍 Checking if phone already exists:', cleanPhone);
+    const existingUser = await User.findOne({ phone: cleanPhone });
+    if (existingUser) {
+      console.log('❌ Phone already exists');
+      return res.status(409).json({ 
+        message: 'Phone number already registered' 
+      });
+    }
+
+    // If email is provided, validate and check uniqueness
+    let cleanEmail = undefined;
+    if (email && typeof email === 'string' && email.trim() !== '') {
+      cleanEmail = email.trim().toLowerCase();
+      
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(cleanEmail)) {
+        console.log('❌ Invalid email format:', cleanEmail);
+        return res.status(400).json({ 
+          message: 'Invalid email format' 
+        });
+      }
+
+      // Check if email already exists
+      console.log('🔍 Checking if email already exists:', cleanEmail);
+      const existingEmailUser = await User.findOne({ email: cleanEmail });
+      if (existingEmailUser) {
+        console.log('❌ Email already exists');
+        return res.status(409).json({ 
+          message: 'Email already registered' 
+        });
       }
     }
 
     // Hash password
-    let hashedPassword;
-    try {
-      hashedPassword = await bcrypt.hash(password, 12);
-    } catch (hashError) {
-      console.error("FAILED AT PASSWORD HASHING:", hashError);
-      throw hashError;
-    }
+    console.log('🔐 Hashing password...');
+    const hashedPassword = await bcrypt.hash(password.trim(), 12);
 
-    // Create user object - only include email if provided
+    // Create user data object - only include email if provided
     const userData: any = {
-      name, 
-      phone: normalizedPhone,
+      name: cleanName,
+      phone: cleanPhone,
       password: hashedPassword
     };
-    
-    // Only add email field if it was actually provided
-    if (email && email.trim() !== "") {
-      userData.email = email.trim();
-    }
-    
-    let user;
-    try {
-      user = await User.create(userData);
-      console.log("User created successfully:", user._id);
-    } catch (createError) {
-      console.error("FAILED AT USER CREATION:", createError);
-      throw createError;
+
+    // Only include email if provided and valid
+    if (cleanEmail) {
+      userData.email = cleanEmail;
     }
 
-    let token;
-    try {
-      token = jwt.sign(
-        { sub: user._id, phone: user.phone },
-        process.env.JWT_SECRET!,
-        { expiresIn: "365d" } // 1 year expiration instead of 7 days
-      );
-    } catch (jwtError) {
-      console.error("FAILED AT JWT CREATION:", jwtError);
-      throw jwtError;
-    }
+    console.log('👤 Creating new user with data:', { 
+      name: userData.name, 
+      phone: userData.phone, 
+      email: userData.email || 'not provided',
+      hasPassword: !!userData.password 
+    });
 
-    try {
-      res.status(201).json({
-        token,
-        user: { 
-          id: user._id,
-          _id: user._id, 
-          name: user.name, 
-          phone: user.phone,
-          email: user.email,
-          profilePicture: user.profilePicture || "",
-          about: (user as any).about || "Available"
-        },
+    // Create and save user
+    const user = new User(userData);
+    const savedUser = await user.save();
+
+    console.log('✅ User created successfully with ID:', savedUser._id);
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        sub: savedUser._id, 
+        phone: savedUser.phone,
+        name: savedUser.name 
+      },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '365d' }
+    );
+
+    // Prepare response (exclude password)
+    const userResponse = {
+      id: savedUser._id,
+      _id: savedUser._id,
+      name: savedUser.name,
+      phone: savedUser.phone,
+      email: savedUser.email,
+      profilePicture: savedUser.profilePicture || "",
+      about: (savedUser as any).about || "Available"
+    };
+
+    console.log('🎉 Signup successful for phone:', cleanPhone);
+
+    res.status(201).json({
+      token,
+      user: userResponse
+    });
+
+  } catch (error: any) {
+    console.error('💥 Signup error:', error);
+    
+    // Handle MongoDB duplicate key errors
+    if (error.code === 11000) {
+      const duplicateField = Object.keys(error.keyValue || {})[0];
+      const duplicateValue = error.keyValue?.[duplicateField];
+      
+      console.log('❌ Duplicate key error:', { field: duplicateField, value: duplicateValue });
+      
+      if (duplicateField === 'email') {
+        return res.status(409).json({ 
+          message: 'Email already registered' 
+        });
+      } else if (duplicateField === 'phone') {
+        return res.status(409).json({ 
+          message: 'Phone number already registered' 
+        });
+      }
+      
+      return res.status(409).json({ 
+        message: 'This information is already registered' 
       });
-      console.log("SUCCESS: User signup completed for:", user.name);
-    } catch (responseError) {
-      console.error("FAILED AT RESPONSE SENDING:", responseError);
-      throw responseError;
     }
-  } catch (e) {
-    console.error("SIGNUP ERROR DETAILS:", e);
-    
-    // More specific error handling
-    if (e instanceof Error) {
-      console.error("Error name:", e.name);
-      console.error("Error message:", e.message);
-      console.error("Error stack:", e.stack);
-      
-      // Handle specific MongoDB errors
-      if (e.message.includes('duplicate key') || e.message.includes('E11000')) {
-        if (e.message.includes('phone')) {
-          return res.status(409).json({ message: "Phone number already exists" });
-        }
-        if (e.message.includes('email')) {
-          return res.status(409).json({ message: "Email already exists" });
-        }
-      }
-      
-      // Handle validation errors
-      if (e.name === 'ValidationError') {
-        return res.status(400).json({ message: "Invalid data provided: " + e.message });
-      }
-      
-      // Handle MongoDB connection errors
-      if (e.message.includes('connection') || e.message.includes('timeout')) {
-        return res.status(503).json({ message: "Database connection error. Please try again." });
-      }
-      
-      // Handle JWT errors
-      if (e.message.includes('jwt') || e.message.includes('secret')) {
-        return res.status(500).json({ message: "Authentication configuration error" });
-      }
-      
-      // Return the actual error message for debugging
-      return res.status(500).json({ message: "Server error: " + e.message });
-    } else {
-      console.error("Unknown error type:", typeof e);
-      return res.status(500).json({ message: "Unknown server error" });
+
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      console.log('❌ Validation error:', error.message);
+      const validationErrors = Object.values(error.errors).map((err: any) => err.message);
+      return res.status(400).json({ 
+        message: 'Validation failed',
+        errors: validationErrors
+      });
     }
+
+    // Handle connection errors
+    if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
+      console.log('❌ Database connection error');
+      return res.status(503).json({ 
+        message: 'Database temporarily unavailable. Please try again.' 
+      });
+    }
+
+    // Generic server error
+    console.error('❌ Unexpected error during signup:', error);
+    res.status(500).json({ 
+      message: 'An unexpected error occurred. Please try again.',
+      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+    });
   }
 });
 
