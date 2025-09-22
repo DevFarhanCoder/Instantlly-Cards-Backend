@@ -33,9 +33,16 @@ const upload = multer({
 
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
+  console.log("=== SIGNUP ROUTE HIT ===");
+  console.log("Request headers:", req.headers);
+  console.log("Request body:", req.body);
+  
   try {
     console.log("SIGNUP REQUEST - Body:", req.body);
     const { name, phone, password, email } = req.body ?? {};
+    
+    console.log("Extracted fields:", { name: !!name, phone: !!phone, password: !!password, email: !!email });
+    
     if (!name || !phone || !password) {
       console.log("SIGNUP ERROR - Missing fields:", { name: !!name, phone: !!phone, password: !!password });
       return res.status(400).json({ message: "Missing required fields: name, phone, password" });
@@ -52,7 +59,10 @@ router.post("/signup", async (req, res) => {
     console.log("SIGNUP - Checking phone:", normalizedPhone);
 
     // Check if phone number already exists
+    console.log("About to check for existing phone in database...");
     const existingPhone = await User.findOne({ phone: normalizedPhone });
+    console.log("Database check result:", existingPhone ? "Phone exists" : "Phone not found");
+    
     if (existingPhone) {
       console.log("SIGNUP ERROR - Phone already exists:", normalizedPhone);
       return res.status(409).json({ message: "Phone number already exists" });
@@ -61,27 +71,38 @@ router.post("/signup", async (req, res) => {
     // Handle email if provided
     let finalEmail = undefined;
     if (email && email.trim() !== "") {
+      console.log("Checking email:", email.trim());
       const existingEmail = await User.findOne({ email: email.trim() });
-      if (existingEmail) return res.status(409).json({ message: "Email already exists" });
+      if (existingEmail) {
+        console.log("SIGNUP ERROR - Email already exists:", email.trim());
+        return res.status(409).json({ message: "Email already exists" });
+      }
       finalEmail = email.trim();
     }
 
     // Hash password
+    console.log("About to hash password...");
     const hashedPassword = await bcrypt.hash(password, 12);
+    console.log("Password hashed successfully");
 
+    console.log("About to create user in database...");
     const user = await User.create({ 
       name, 
       phone: normalizedPhone,
       password: hashedPassword,
       email: finalEmail
     });
+    console.log("User created successfully:", user._id);
 
+    console.log("About to create JWT token...");
     const token = jwt.sign(
       { sub: user._id, phone: user.phone },
       process.env.JWT_SECRET!,
       { expiresIn: "365d" } // 1 year expiration instead of 7 days
     );
+    console.log("JWT token created successfully");
 
+    console.log("About to send success response...");
     res.status(201).json({
       token,
       user: { 
@@ -94,6 +115,7 @@ router.post("/signup", async (req, res) => {
         about: (user as any).about || "Available"
       },
     });
+    console.log("SUCCESS: User signup completed for:", user.name);
   } catch (e) {
     console.error("SIGNUP ERROR DETAILS:", e);
     if (e instanceof Error) {
