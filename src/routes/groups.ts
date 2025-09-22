@@ -143,6 +143,10 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
                   })
                 );
                 console.log(`📱 Group invite notification sent to ${member.name}`);
+              } else if (member?.pushToken === 'expo-go-local-mode') {
+                console.log(`📱 Member ${member.name} is using Expo Go - notification will be handled locally`);
+              } else {
+                console.log(`📱 No push token for member ${member.name}, skipping push notification`);
               }
             } catch (memberError) {
               console.error(`Failed to send notification to member ${memberId}:`, memberError);

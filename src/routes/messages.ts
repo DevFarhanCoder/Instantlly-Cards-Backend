@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import User from '../models/User';
 import TempMessage from '../models/TempMessage';
 import { requireAuth, AuthReq } from '../middleware/auth';
@@ -475,6 +476,109 @@ router.delete('/typing-status/clear', requireAuth, async (req: AuthReq, res: Res
   } catch (error) {
     console.error('Clear typing status error:', error);
     res.status(500).json({ error: 'Failed to clear typing status' });
+  }
+});
+
+// GET /check-group-pending/:groupId - Get undelivered messages for a specific group
+router.get('/check-group-pending/:groupId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const currentUserId = req.userId;
+    const { groupId } = req.params;
+    
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!groupId) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    // Check if user is member of this group
+    const Group = mongoose.model('Group');
+    const group = await Group.findById(groupId);
+    if (!group || !group.members.includes(currentUserId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Find all undelivered messages for this group (excluding messages sent by current user)
+    const pendingMessages = await TempMessage.find({
+      groupId: groupId,
+      senderId: { $ne: currentUserId }, // Exclude messages sent by current user
+      isDelivered: false
+    }).populate('senderId', 'name profilePicture').sort({ createdAt: 1 });
+
+    const messages = pendingMessages.map(message => {
+      const senderData = message.senderId as any;
+      return {
+        id: message.messageId,
+        backendMessageId: message._id,
+        senderId: senderData._id.toString(),
+        senderName: senderData.name,
+        senderProfilePicture: senderData.profilePicture,
+        text: message.text,
+        timestamp: message.createdAt,
+        messageId: message.messageId,
+        groupId: message.groupId
+      };
+    });
+
+    // Only log if there are pending messages to avoid spam
+    if (pendingMessages.length > 0) {
+      console.log(`📬 Found ${pendingMessages.length} pending group messages for user ${currentUserId} in group ${groupId}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      messages,
+      totalPendingMessages: pendingMessages.length,
+      groupId,
+      note: 'Messages will auto-delete after 15 days'
+    });
+  } catch (error) {
+    console.error('Error in check-group-pending:', error);
+    res.status(500).json({ error: 'Failed to check pending group messages' });
+  }
+});
+
+// Mark group messages as delivered
+router.post('/mark-group-delivered', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageIds, groupId } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!messageIds || !Array.isArray(messageIds) || !groupId) {
+      return res.status(400).json({ error: 'Message IDs array and group ID are required' });
+    }
+
+    // Mark group messages as delivered
+    const result = await TempMessage.updateMany(
+      {
+        groupId: groupId,
+        messageId: { $in: messageIds },
+        isDelivered: false
+      },
+      {
+        $set: {
+          isDelivered: true,
+          deliveredAt: new Date()
+        }
+      }
+    );
+
+    console.log(`📬 Marked ${result.modifiedCount} group messages as delivered for group ${groupId}`);
+
+    res.json({
+      success: true,
+      markedCount: result.modifiedCount,
+      message: 'Group messages marked as delivered'
+    });
+  } catch (error) {
+    console.error('Mark group delivered error:', error);
+    res.status(500).json({ error: 'Failed to mark group messages as delivered' });
   }
 });
 
