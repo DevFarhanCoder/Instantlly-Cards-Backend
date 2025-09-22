@@ -82,7 +82,7 @@ router.post("/signup", async (req, res) => {
     }
 
     // Handle email if provided
-    let finalEmail = undefined;
+    let finalEmail = null; // Use null instead of undefined
     if (email && email.trim() !== "") {
       const existingEmail = await User.findOne({ email: email.trim() });
       if (existingEmail) {
@@ -101,17 +101,13 @@ router.post("/signup", async (req, res) => {
       throw hashError;
     }
 
-    // Create user object, only include email if it was provided
+    // Create user object
     const userData: any = {
       name, 
       phone: normalizedPhone,
-      password: hashedPassword
+      password: hashedPassword,
+      email: finalEmail // This will be null if no email provided, or the email string if provided
     };
-    
-    // Only add email field if it was provided (to avoid null constraint issues)
-    if (finalEmail) {
-      userData.email = finalEmail;
-    }
     
     let user;
     try {

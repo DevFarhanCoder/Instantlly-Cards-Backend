@@ -18,9 +18,9 @@ const UserSchema = new Schema(
     password: { type: String, required: true, select: false }, // <- key
     email: { 
       type: String, 
-      default: undefined,
       sparse: true, // This allows multiple null/undefined values
-      unique: true  // But still enforces uniqueness for non-null values
+      unique: true, // But still enforces uniqueness for non-null values
+      default: null // Use null instead of undefined
     }, // Made fully optional for phone-based auth
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },
