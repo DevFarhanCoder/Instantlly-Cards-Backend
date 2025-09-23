@@ -59,24 +59,39 @@ export class SocketService {
   private setupSocketAuthentication() {
     this.io.use(async (socket: any, next: any) => {
       try {
+        console.log('🔐 Socket authentication attempt:', {
+          socketId: socket.id,
+          authToken: socket.handshake.auth.token ? 'Present' : 'Missing',
+          authHeader: socket.handshake.headers.authorization ? 'Present' : 'Missing'
+        });
+
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
         
         if (!token) {
+          console.error('❌ Socket auth failed: No token provided');
           return next(new Error('Authentication error: No token provided'));
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as any;
+        console.log('🔑 Verifying JWT token for socket connection...');
+        const jwtSecret = process.env.JWT_SECRET || 'your-secret-key';
+        console.log('🔑 JWT Secret available:', !!jwtSecret, 'Length:', jwtSecret.length);
+        
+        const decoded = jwt.verify(token, jwtSecret) as any;
+        console.log('✅ JWT token decoded successfully:', { userId: decoded.userId });
+
         const user = await User.findById(decoded.userId).select('name email profilePicture');
 
         if (!user) {
+          console.error('❌ Socket auth failed: User not found for ID:', decoded.userId);
           return next(new Error('Authentication error: User not found'));
         }
 
+        console.log('✅ Socket authentication successful for user:', user.name);
         socket.userId = user._id.toString();
         socket.user = user;
         next();
       } catch (error) {
-        console.error('Socket authentication error:', error);
+        console.error('❌ Socket authentication error:', error);
         next(new Error('Authentication error: Invalid token'));
       }
     });
