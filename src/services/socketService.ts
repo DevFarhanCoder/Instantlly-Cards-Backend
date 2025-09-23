@@ -77,12 +77,19 @@ export class SocketService {
         console.log('🔑 JWT Secret available:', !!jwtSecret, 'Length:', jwtSecret.length);
         
         const decoded = jwt.verify(token, jwtSecret) as any;
-        console.log('✅ JWT token decoded successfully:', { userId: decoded.userId });
+        console.log('✅ JWT token decoded successfully:', { sub: decoded.sub, userId: decoded.userId });
 
-        const user = await User.findById(decoded.userId).select('name email profilePicture');
+        // Handle both 'sub' and 'userId' field formats
+        const userId = decoded.sub || decoded.userId;
+        if (!userId) {
+          console.error('❌ Socket auth failed: No user ID found in token');
+          return next(new Error('Authentication error: Invalid token format'));
+        }
+
+        const user = await User.findById(userId).select('name email profilePicture');
 
         if (!user) {
-          console.error('❌ Socket auth failed: User not found for ID:', decoded.userId);
+          console.error('❌ Socket auth failed: User not found for ID:', userId);
           return next(new Error('Authentication error: User not found'));
         }
 
