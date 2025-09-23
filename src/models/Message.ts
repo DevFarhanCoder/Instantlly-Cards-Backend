@@ -226,52 +226,61 @@ messageSchema.statics.getRecentConversations = function(userId: string) {
 };
 
 // Get user's recent groups
-messageSchema.statics.getRecentGroups = function(userId: string) {
-  return this.aggregate([
-    {
-      $match: {
-        groupId: { $exists: true, $ne: null },
-        isDeleted: false
-      }
-    },
-    {
-      $sort: { createdAt: -1 }
-    },
-    {
-      $group: {
-        _id: "$groupId",
-        lastMessage: { $first: "$$ROOT" },
-        unreadCount: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $ne: ["$sender", new mongoose.Types.ObjectId(userId)] },
-                  { $not: { $in: [new mongoose.Types.ObjectId(userId), "$readBy.userId"] } }
-                ]
-              },
-              1,
-              0
-            ]
-          }
-        }
-      }
-    },
-    {
-      $lookup: {
-        from: 'groups',
-        localField: '_id',
-        foreignField: '_id',
-        as: 'group'
-      }
-    },
-    {
-      $unwind: '$group'
-    },
-    {
-      $sort: { 'lastMessage.createdAt': -1 }
-    }
-  ]);
+messageSchema.statics.getRecentGroups = async function(userId: string) {
+  // First get groups where user is a member
+  const groups = await mongoose.model('Group').find({
+    members: new mongoose.Types.ObjectId(userId)
+  }).populate('members', 'name phone profilePicture')
+    .populate('admin', 'name phone');
+
+  const result = [];
+  
+  for (const group of groups) {
+    // Get the latest message for this group
+    const latestMessage = await this.findOne({
+      groupId: group._id,
+      isDeleted: false
+    }).populate('sender', 'name profilePicture')
+      .sort({ createdAt: -1 });
+
+    // Get unread count for this user in this group
+    const unreadCount = await this.countDocuments({
+      groupId: group._id,
+      sender: { $ne: new mongoose.Types.ObjectId(userId) },
+      isDeleted: false,
+      'readBy.userId': { $ne: new mongoose.Types.ObjectId(userId) }
+    });
+
+    result.push({
+      _id: group._id,
+      group: {
+        _id: group._id,
+        name: group.name,
+        description: group.description,
+        icon: group.icon,
+        members: group.members.length,
+        admin: group.admin,
+        joinCode: group.joinCode,
+        createdAt: group.createdAt
+      },
+      lastMessage: latestMessage ? {
+        _id: latestMessage._id,
+        content: latestMessage.content,
+        messageType: latestMessage.messageType,
+        timestamp: latestMessage.createdAt,
+        senderId: latestMessage.sender?._id,
+        sender: latestMessage.sender
+      } : null,
+      unreadCount
+    });
+  }
+
+  // Sort by latest message time
+  return result.sort((a, b) => {
+    const aTime = a.lastMessage?.timestamp || a.group.createdAt;
+    const bTime = b.lastMessage?.timestamp || b.group.createdAt;
+    return new Date(bTime).getTime() - new Date(aTime).getTime();
+  });
 };
 
 // Instance method to mark as read by user

@@ -98,14 +98,18 @@ GroupSchema.index({ isActive: 1 });
 
 // Pre-save hook to ensure joinCode and admin role are set
 GroupSchema.pre('save', async function(next) {
-  if (!this.joinCode) {
+  // Generate joinCode if not present
+  if (!this.joinCode || this.joinCode === '') {
     try {
+      console.log('🔍 Generating joinCode in pre-save hook...');
       this.joinCode = await (this.constructor as any).generateInviteCode();
+      console.log('✅ Generated joinCode:', this.joinCode);
     } catch (error) {
       console.error('Error generating joinCode in pre-save hook:', error);
       // Fallback to timestamp-based code if generation fails
       const timestamp = Date.now().toString(36).toUpperCase();
       this.joinCode = timestamp.substring(timestamp.length - 6);
+      console.log('✅ Fallback joinCode:', this.joinCode);
     }
   }
   

@@ -89,9 +89,18 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     console.log('🔍 Generating invite code...');
 
     // Generate unique invite code using the model's static method
-    const joinCode = await Group.generateInviteCode();
+    let joinCode;
+    try {
+      joinCode = await Group.generateInviteCode();
+      console.log('✅ Generated invite code:', joinCode);
+    } catch (error) {
+      console.error('❌ Error generating invite code:', error);
+      // Fallback code generation
+      const timestamp = Date.now().toString(36).toUpperCase();
+      joinCode = timestamp.substring(timestamp.length - 6);
+      console.log('✅ Fallback invite code:', joinCode);
+    }
 
-    console.log('🔍 Generated invite code:', joinCode);
     console.log('🔍 Creating group with data:', {
       name: name.trim(),
       description: description?.trim() || '',
@@ -110,7 +119,8 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
       joinCode: joinCode
     });
 
-    console.log('✅ Group created successfully:', group._id);
+    console.log('✅ Group created successfully with ID:', group._id);
+    console.log('✅ Group joinCode after creation:', group.joinCode);
 
     // Populate the group data
     const populatedGroup = await Group.findById(group._id)
@@ -161,7 +171,7 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
     res.status(201).json({
       success: true,
       group: populatedGroup,
-      joinCode: joinCode
+      joinCode: populatedGroup?.joinCode || joinCode // Ensure joinCode is always returned
     });
   } catch (error) {
     console.error('❌ Create group error:', error);

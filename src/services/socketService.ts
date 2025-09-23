@@ -274,6 +274,7 @@ export class SocketService {
           const memberSocket = this.onlineUsers.get(memberIdStr);
           if (memberSocket) {
             this.io.to(memberSocket.socketId).emit('new_group_message', messageData);
+            this.io.to(memberSocket.socketId).emit('new_message', messageData); // Also emit general message event
           }
         }
       }
@@ -283,6 +284,24 @@ export class SocketService {
         ...messageData,
         localMessageId: data.localMessageId
       });
+
+      // Update group unread counts for offline members
+      const offlineMembers = group.members.filter(memberId => 
+        memberId.toString() !== data.senderId && !this.onlineUsers.has(memberId.toString())
+      );
+      
+      if (offlineMembers.length > 0) {
+        // Increment unread count for offline members
+        try {
+          await Promise.all(offlineMembers.map(async (memberId) => {
+            // Here you would update unread count in database for the user
+            // This depends on how you're tracking unread counts
+            console.log(`Member ${memberId} is offline, should increment unread count`);
+          }));
+        } catch (error) {
+          console.error('Error updating unread counts for offline members:', error);
+        }
+      }
 
     } catch (error) {
       console.error('Error handling group message:', error);
