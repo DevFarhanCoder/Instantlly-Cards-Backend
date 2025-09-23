@@ -31,7 +31,10 @@ const io = new Server(server, {
   },
   pingTimeout: 60000,
   pingInterval: 25000,
-  transports: ["websocket", "polling"]
+  transports: ["polling", "websocket"], // Start with polling first
+  allowEIO3: true, // Support older Socket.IO versions
+  upgradeTimeout: 30000, // Allow more time for websocket upgrade
+  maxHttpBufferSize: 1e6 // 1MB buffer size
 });
 
 app.use(cors());
