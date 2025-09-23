@@ -1,11 +1,20 @@
 import { Router, Request, Response } from 'express';
 import mongoose from 'mongoose';
 import User from '../models/User';
+import Group from '../models/Group';
 import TempMessage from '../models/TempMessage';
 import { requireAuth, AuthReq } from '../middleware/auth';
 import { sendIndividualMessageNotification, sendGroupMessageNotification } from '../services/pushNotifications';
 
 const router = Router();
+
+// Socket.IO instance will be injected
+let socketIO: any = null;
+
+// Function to set Socket.IO instance
+export const setSocketIO = (io: any) => {
+  socketIO = io;
+};
 
 // Note: Messages are NOT stored in database - only notifications and typing effects are handled
 
@@ -96,6 +105,16 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
       });
     }
 
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    if (!group.members.includes(new mongoose.Types.ObjectId(senderId))) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
+
     const sender = await User.findById(senderId);
     if (!sender) {
       return res.status(404).json({ error: 'Sender not found' });
@@ -111,13 +130,51 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
         isDelivered: false
       });
       
-      console.log(`� Group message stored temporarily for notification tracking: ${messageId}`);
+      console.log(`📦 Group message stored temporarily for notification tracking: ${messageId}`);
     } catch (dbError) {
       console.error('Failed to store temp group message:', dbError);
       // Continue with notification even if storage fails
     }
 
-    console.log(`📱 Sending group message from ${sender.name} to group ${groupId}: ${text}`);
+    // Prepare message data for Socket.IO
+    const messageData = {
+      _id: messageId,
+      senderId,
+      groupId,
+      content: text.trim(),
+      messageType: 'text',
+      timestamp: new Date(),
+      sender: {
+        _id: sender._id,
+        name: sender.name,
+        profilePicture: sender.profilePicture
+      }
+    };
+
+    // Broadcast to all group members via Socket.IO
+    if (socketIO) {
+      console.log(`� Broadcasting group message via Socket.IO to group ${groupId}`);
+      
+      // Emit to all sockets that are members of this group
+      for (const memberId of group.members) {
+        const memberIdStr = memberId.toString();
+        if (memberIdStr !== senderId) { // Don't send to sender
+          // Find all sockets for this user
+          const memberSockets = Array.from(socketIO.sockets.sockets.values())
+            .filter((socket: any) => socket.userId === memberIdStr);
+          
+          memberSockets.forEach((socket: any) => {
+            socket.emit('new_group_message', messageData);
+            socket.emit('new_message', messageData); // Also emit general message event for notifications
+            console.log(`📨 Sent group message to socket ${socket.id} for user ${memberIdStr}`);
+          });
+        }
+      }
+    } else {
+      console.warn('⚠️ Socket.IO not available for real-time group message broadcasting');
+    }
+
+    console.log(`📱 Group message from ${sender.name} to group ${groupId}: ${text}`);
 
     res.status(200).json({
       success: true,
@@ -125,7 +182,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
       messageId,
       senderName: sender.name,
       timestamp: new Date().toISOString(),
-      note: 'Message stored temporarily for 15 days for notification purposes only'
+      note: 'Message broadcasted via Socket.IO and stored temporarily for 15 days'
     });
   } catch (error) {
     console.error('Send group message error:', error);

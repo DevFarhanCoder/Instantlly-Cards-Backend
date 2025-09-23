@@ -14,7 +14,7 @@ import authRouter from "./routes/auth";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
-import messagesRouter from "./routes/messages";
+import messagesRouter, { setSocketIO } from "./routes/messages";
 import groupsRouter from "./routes/groups";
 import chatsRouter from "./routes/chats";
 import { SocketService } from "./services/socketService";
@@ -114,7 +114,11 @@ async function startServer() {
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);
-    console.log("� Socket.IO service initialized");
+    console.log("🔌 Socket.IO service initialized");
+
+    // Inject Socket.IO instance into messages router
+    setSocketIO(io);
+    console.log("🔗 Socket.IO instance injected into messages router");
 
     // Start the server
     const port = process.env.PORT || 3001;
