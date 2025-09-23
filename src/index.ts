@@ -7,6 +7,8 @@ import cors from "cors";
 import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
+import { createServer } from "http";
+import { Server } from "socket.io";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import cardsRouter from "./routes/cards";
@@ -14,8 +16,24 @@ import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
 import messagesRouter from "./routes/messages";
 import groupsRouter from "./routes/groups";
+import chatsRouter from "./routes/chats";
+import { SocketService } from "./services/socketService";
 
 const app = express();
+const server = createServer(app);
+
+// Socket.IO setup with CORS
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ["websocket", "polling"]
+});
+
 app.use(cors());
 app.use(express.json({ limit: "10mb" })); // instead of default
 
@@ -92,11 +110,19 @@ async function startServer() {
     app.use("/api/notifications", notificationsRouter);    
     app.use("/api/messages", messagesRouter);    
     app.use("/api/groups", groupsRouter);    
+    app.use("/api/chats", chatsRouter);    
+
+    // Initialize Socket.IO service
+    const socketService = new SocketService(io);
+    console.log("� Socket.IO service initialized");
 
     // Start the server
-    const server = app.listen(port, '0.0.0.0', () => {
+    const port = process.env.PORT || 3001;
+    server.listen(port, () => {
       console.log(`🚀 API server listening on 0.0.0.0:${port}`);
       console.log(`📡 Health check: http://0.0.0.0:${port}/api/health`);
+      console.log(`🔌 Socket.IO server is running`);
+      console.log(`👥 Real-time chat system is ready`);
     });
 
   } catch (error) {
