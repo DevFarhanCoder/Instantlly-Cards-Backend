@@ -1,7 +1,9 @@
 import { Router } from "express";
 import Card from "../models/Card";
 import SharedCard from "../models/SharedCard";
+import GroupSharedCard from "../models/GroupSharedCard";
 import User from "../models/User";
+import Group from "../models/Group";
 import { AuthReq, requireAuth } from "../middleware/auth";
 import { sendCardSharingNotification } from "../services/pushNotifications";
 
@@ -301,6 +303,198 @@ r.get("/shared-with/:userId", async (req: AuthReq, res) => {
   } catch (err) {
     console.error("GET SHARED CARDS BETWEEN USERS ERROR", err);
     res.status(500).json({ message: "Failed to fetch shared cards" });
+  }
+});
+
+// SHARE CARD TO GROUP
+r.post("/:id/share-to-group", async (req: AuthReq, res) => {
+  try {
+    const { groupId, message } = req.body;
+    const cardId = req.params.id;
+    const senderId = req.userId!;
+    
+    if (!groupId) {
+      return res.status(400).json({ message: "Group ID is required" });
+    }
+
+    // Verify the card belongs to the sender
+    const card = await Card.findOne({ _id: cardId, userId: senderId });
+    if (!card) {
+      return res.status(404).json({ message: "Card not found or access denied" });
+    }
+
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Check if user is a member of the group
+    const isMember = group.members.some(memberId => memberId.toString() === senderId);
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+
+    // Get sender info
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Create group shared card record
+    const groupSharedCard = await GroupSharedCard.create({
+      cardId,
+      senderId,
+      groupId,
+      message: message || "",
+      cardTitle: card.companyName || card.name || 'Business Card',
+      senderName: sender.name,
+      groupName: group.name
+    });
+
+    console.log(`📧 Card shared to group: ${sender.name} → ${group.name} (${card.companyName || card.name})`);
+    
+    res.json({ 
+      success: true, 
+      message: "Card shared to group successfully",
+      data: {
+        sharedCardId: groupSharedCard._id,
+        cardTitle: groupSharedCard.cardTitle,
+        groupName: group.name,
+        sentAt: groupSharedCard.sentAt
+      }
+    });
+  } catch (err) {
+    console.error("SHARE CARD TO GROUP ERROR", err);
+    res.status(500).json({ message: "Failed to share card to group" });
+  }
+});
+
+// GET GROUP SHARED CARDS - Cards shared in a specific group
+r.get("/group/:groupId/shared", async (req: AuthReq, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const currentUserId = req.userId!;
+    
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Check if user is a member of the group
+    const isMember = group.members.some(memberId => memberId.toString() === currentUserId);
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+    
+    // Find all cards shared in this group
+    const groupSharedCards = await GroupSharedCard.find({ groupId })
+      .populate('cardId', 'companyName name companyPhoto userId')
+      .populate('senderId', 'name profilePicture')
+      .sort({ sentAt: -1 })
+      .lean();
+
+    // Format the response
+    const formattedCards = groupSharedCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      senderId: share.senderId._id,
+      senderName: share.senderName,
+      senderProfilePicture: share.senderId.profilePicture,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      sentAt: share.sentAt,
+      message: share.message,
+      isFromMe: share.senderId._id.toString() === currentUserId
+    }));
+
+    res.json({
+      success: true,
+      data: formattedCards
+    });
+  } catch (err) {
+    console.error("GET GROUP SHARED CARDS ERROR", err);
+    res.status(500).json({ message: "Failed to fetch group shared cards" });
+  }
+});
+
+// GET GROUP CARDS SUMMARY - Cards sent and received counts for a group
+r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const currentUserId = req.userId!;
+    
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+
+    // Check if user is a member of the group
+    const isMember = group.members.some(memberId => memberId.toString() === currentUserId);
+    if (!isMember) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+    
+    // Get cards sent by current user to this group
+    const sentCards = await GroupSharedCard.find({ 
+      groupId, 
+      senderId: currentUserId 
+    })
+    .populate('cardId', 'companyName name companyPhoto')
+    .sort({ sentAt: -1 })
+    .lean();
+
+    // Get cards received by current user in this group (sent by others)
+    const receivedCards = await GroupSharedCard.find({ 
+      groupId, 
+      senderId: { $ne: currentUserId } 
+    })
+    .populate('cardId', 'companyName name companyPhoto')
+    .populate('senderId', 'name profilePicture')
+    .sort({ sentAt: -1 })
+    .lean();
+
+    // Format sent cards
+    const formattedSentCards = sentCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      sentAt: share.sentAt,
+      message: share.message
+    }));
+
+    // Format received cards
+    const formattedReceivedCards = receivedCards.map((share: any) => ({
+      _id: share._id,
+      cardId: share.cardId._id,
+      senderId: share.senderId._id,
+      senderName: share.senderName,
+      senderProfilePicture: share.senderId.profilePicture,
+      cardTitle: share.cardTitle,
+      cardPhoto: share.cardId.companyPhoto,
+      sentAt: share.sentAt,
+      message: share.message
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        sent: {
+          count: formattedSentCards.length,
+          cards: formattedSentCards
+        },
+        received: {
+          count: formattedReceivedCards.length,
+          cards: formattedReceivedCards
+        }
+      }
+    });
+  } catch (err) {
+    console.error("GET GROUP CARDS SUMMARY ERROR", err);
+    res.status(500).json({ message: "Failed to fetch group cards summary" });
   }
 });
 
