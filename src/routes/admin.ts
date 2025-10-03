@@ -7,6 +7,7 @@ import Chat from "../models/Chat";
 import Group from "../models/Group";
 import Contact from "../models/Contact";
 import Notification from "../models/Notification";
+import SharedCard from "../models/SharedCard";
 
 const router = express.Router();
 
@@ -338,12 +339,12 @@ router.delete("/users/:userId", adminAuth, async (req: Request, res: Response) =
       Notification.deleteMany({ userId }),
       
       // Delete user's shared cards
-      User.model('SharedCard').deleteMany({ 
+      SharedCard.deleteMany({ 
         $or: [
           { senderId: userId },
           { receiverId: userId }
         ]
-      }).catch(() => {}), // Ignore if model doesn't exist
+      }),
       
       // Delete user's group memberships
       Group.updateMany(
