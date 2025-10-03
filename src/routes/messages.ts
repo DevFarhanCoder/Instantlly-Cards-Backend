@@ -59,8 +59,20 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
 
     console.log(`📱 Sending message from ${sender.name} to ${receiver.name}: ${text}`);
 
-    // Send push notification to the receiver if they have a push token
-    if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
+    // Check if receiver is online (connected via Socket.IO)
+    let isReceiverOnline = false;
+    if (socketIO) {
+      const receiverSockets = Array.from(socketIO.sockets.sockets.values())
+        .filter((socket: any) => socket.userId === receiverId);
+      
+      if (receiverSockets.length > 0) {
+        isReceiverOnline = true;
+        console.log(`✅ Receiver ${receiver.name} is ONLINE - message delivered via Socket.IO`);
+      }
+    }
+
+    // Send push notification ONLY if receiver is OFFLINE
+    if (!isReceiverOnline && receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
       try {
         await sendIndividualMessageNotification(
           receiver.pushToken,
@@ -68,10 +80,12 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
           text,
           senderId
         );
-        console.log(`📱 Push notification sent to ${receiver.name}`);
+        console.log(`📱 Push notification sent to ${receiver.name} (OFFLINE)`);
       } catch (error) {
         console.error('Failed to send push notification:', error);
       }
+    } else if (isReceiverOnline) {
+      console.log(`📱 Receiver ${receiver.name} is ONLINE - skipping push notification`);
     } else if (receiver.pushToken === 'expo-go-local-mode') {
       console.log(`📱 Receiver ${receiver.name} is using Expo Go - notification will be handled locally`);
     } else {
