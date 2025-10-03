@@ -307,4 +307,75 @@ router.get("/users/:userId/contacts/export", adminAuth, async (req: Request, res
   }
 });
 
+// Delete user and all related data
+router.delete("/users/:userId", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete all related data in parallel
+    await Promise.all([
+      // Delete user's cards
+      Card.deleteMany({ userId }),
+      
+      // Delete user's contacts
+      Contact.deleteMany({ userId }),
+      
+      // Delete messages where user is sender or receiver
+      Message.deleteMany({ 
+        $or: [
+          { senderId: userId },
+          { receiverId: userId }
+        ]
+      }),
+      
+      // Delete user's notifications
+      Notification.deleteMany({ userId }),
+      
+      // Delete user's shared cards
+      User.model('SharedCard').deleteMany({ 
+        $or: [
+          { senderId: userId },
+          { receiverId: userId }
+        ]
+      }).catch(() => {}), // Ignore if model doesn't exist
+      
+      // Delete user's group memberships
+      Group.updateMany(
+        { members: userId },
+        { $pull: { members: userId } }
+      ),
+      
+      // Delete groups created by user (where they are the only member or admin)
+      Group.deleteMany({ createdBy: userId }),
+      
+      // Delete user's chats
+      Chat.deleteMany({
+        participants: userId
+      }),
+    ]);
+
+    // Finally, delete the user
+    await User.findByIdAndDelete(userId);
+
+    res.json({ 
+      success: true, 
+      message: 'User and all related data deleted successfully',
+      deletedUser: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone
+      }
+    });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
 export default router;
