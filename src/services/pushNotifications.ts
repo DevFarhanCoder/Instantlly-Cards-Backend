@@ -151,6 +151,48 @@ export async function sendCardSharingNotification(
   );
 }
 
+export async function sendGroupInviteNotification(
+  pushToken: string,
+  inviterName: string,
+  groupName: string,
+  groupId: string,
+  inviterId: string
+): Promise<boolean> {
+  return await sendPushNotification(
+    pushToken,
+    `Added to ${groupName}`,
+    `${inviterName} has added you to ${groupName}`,
+    {
+      type: 'group_invite',
+      groupId,
+      groupName,
+      inviterId,
+      inviterName,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
+export async function sendContactJoinedNotification(
+  pushToken: string,
+  contactName: string,
+  contactPhone: string,
+  contactId: string
+): Promise<boolean> {
+  return await sendPushNotification(
+    pushToken,
+    `${contactName} joined InstantllyCards`,
+    `${contactName} from your contacts is now on InstantllyCards`,
+    {
+      type: 'contact_joined',
+      contactId,
+      contactName,
+      contactPhone,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
 export async function sendBulkPushNotifications(
   notifications: Array<{
     pushToken: string;
