@@ -86,14 +86,13 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     if (search) {
       searchQuery.$or = [
         { name: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { phone: { $regex: search, $options: 'i' } }
       ];
     }
 
     const [users, total] = await Promise.all([
       User.find(searchQuery)
-        .select('name phone email profilePicture about createdAt')
+        .select('name phone profilePicture about createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -139,18 +138,17 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
 router.get("/users/export", adminAuth, async (req: Request, res: Response) => {
   try {
     const users = await User.find()
-      .select('name phone email about createdAt')
+      .select('name phone about createdAt')
       .sort({ createdAt: -1 });
 
     // Create CSV content
-    const headers = ['Name', 'Phone', 'Email', 'About', 'Created At'];
+    const headers = ['Name', 'Phone', 'About', 'Created At'];
     const csvRows = [headers.join(',')];
 
     users.forEach((user: any) => {
       const row = [
         `"${user.name || ''}"`,
         `"${user.phone || ''}"`,
-        `"${user.email || ''}"`,
         `"${user.about || ''}"`,
         `"${user.createdAt?.toISOString() || ''}"`
       ];
@@ -264,6 +262,48 @@ router.get("/activity/recent", adminAuth, async (req: Request, res: Response) =>
   } catch (error) {
     console.error('Error fetching recent activity:', error);
     res.status(500).json({ error: 'Failed to fetch recent activity' });
+  }
+});
+
+// Export specific user's contacts
+router.get("/users/:userId/contacts/export", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    // Get user info
+    const user = await User.findById(userId).select('name phone');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get all contacts for this user
+    const contacts = await Contact.find({ userId })
+      .sort({ name: 1 });
+
+    // Create CSV content
+    const headers = ['Contact Name', 'Phone Number', 'Email', 'Added On'];
+    const csvRows = [headers.join(',')];
+
+    contacts.forEach((contact: any) => {
+      const row = [
+        `"${contact.name || ''}"`,
+        `"${contact.phone || ''}"`,
+        `"${contact.email || ''}"`,
+        `"${contact.createdAt?.toISOString() || ''}"`
+      ];
+      csvRows.push(row.join(','));
+    });
+
+    const csvContent = csvRows.join('\n');
+
+    // Set headers for CSV download
+    const fileName = `${user.name || user.phone || 'user'}-contacts-${Date.now()}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(csvContent);
+  } catch (error) {
+    console.error('Error exporting user contacts:', error);
+    res.status(500).json({ error: 'Failed to export user contacts' });
   }
 });
 
