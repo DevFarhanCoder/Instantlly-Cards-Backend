@@ -287,7 +287,7 @@ router.get("/users/:userId/contacts/export", adminAuth, async (req: Request, res
     contacts.forEach((contact: any) => {
       const row = [
         `"${contact.name || ''}"`,
-        `"${contact.phone || ''}"`,
+        `"${contact.phoneNumber || ''}"`,
         `"${contact.email || ''}"`,
         `"${contact.createdAt?.toISOString() || ''}"`
       ];
