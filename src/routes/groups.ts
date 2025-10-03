@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import Group from '../models/Group';
 import User from '../models/User';
 import { requireAuth, AuthReq } from '../middleware/auth';
-import { sendMessageNotification } from '../services/pushNotifications';
+import { sendMessageNotification, sendGroupInviteNotification } from '../services/pushNotifications';
 
 const router = Router();
 
@@ -141,16 +141,12 @@ router.post('/', requireAuth, async (req: AuthReq, res: Response) => {
             try {
               const member = await User.findById(new Types.ObjectId(memberId));
               if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
-                await sendMessageNotification(
+                await sendGroupInviteNotification(
                   member.pushToken,
-                  `New Group: ${group.name}`,
-                  `${adminName} added you to a new group`,
-                  JSON.stringify({ 
-                    type: 'group_invite',
-                    groupId: group._id,
-                    groupName: group.name,
-                    adminId: adminId
-                  })
+                  adminName,
+                  group.name,
+                  (group._id as any).toString(),
+                  adminId
                 );
                 console.log(`📱 Group invite notification sent to ${member.name}`);
               } else if (member?.pushToken === 'expo-go-local-mode') {

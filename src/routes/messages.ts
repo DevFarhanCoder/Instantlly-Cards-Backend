@@ -174,6 +174,42 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
       console.warn('⚠️ Socket.IO not available for real-time group message broadcasting');
     }
 
+    // Send push notifications to OFFLINE group members
+    try {
+      // Get all group members except sender
+      const otherMembers = group.members.filter((id: any) => id.toString() !== senderId);
+      
+      // Find users with push tokens (excluding expo-go-local-mode)
+      const membersWithTokens = await User.find({
+        _id: { $in: otherMembers },
+        pushToken: { $exists: true, $nin: [null, 'expo-go-local-mode'] }
+      }).select('_id pushToken name');
+
+      if (membersWithTokens.length > 0) {
+        console.log(`📱 Sending push notifications to ${membersWithTokens.length} group members`);
+        
+        for (const member of membersWithTokens) {
+          try {
+            await sendGroupMessageNotification(
+              member.pushToken!,
+              group.name,
+              sender.name,
+              text,
+              groupId,
+              senderId
+            );
+            console.log(`📱 Push notification sent to ${member.name} for group message`);
+          } catch (error) {
+            console.error(`Failed to send push notification to ${member.name}:`, error);
+          }
+        }
+      } else {
+        console.log(`📱 No group members with valid push tokens`);
+      }
+    } catch (error) {
+      console.error('Failed to send group push notifications:', error);
+    }
+
     console.log(`📱 Group message from ${sender.name} to group ${groupId}: ${text}`);
 
     res.status(200).json({

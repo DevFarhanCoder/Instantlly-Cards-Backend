@@ -5,7 +5,9 @@ import multer from "multer";
 import path from "path";
 import mongoose from "mongoose";
 import User from "../models/User";
+import Contact from "../models/Contact";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { sendContactJoinedNotification } from "../services/pushNotifications";
 
 const router = Router();
 
@@ -121,6 +123,51 @@ router.post("/signup", async (req, res) => {
     const savedUser = await user.save();
 
     console.log('✅ User created successfully with ID:', savedUser._id);
+
+    // Notify all contacts who have this user's phone number in their contact list
+    try {
+      const contactsWithThisNumber = await Contact.find({
+        phoneNumber: cleanPhone,
+        isAppUser: false // They saved this contact before user joined
+      }).populate('userId', 'name pushToken');
+
+      if (contactsWithThisNumber.length > 0) {
+        console.log(`📱 Found ${contactsWithThisNumber.length} users who have ${cleanPhone} in their contacts`);
+        
+        // Update all these contacts to mark user as app user
+        await Contact.updateMany(
+          { phoneNumber: cleanPhone },
+          { 
+            $set: { 
+              isAppUser: true, 
+              appUserId: savedUser._id,
+              lastSynced: new Date()
+            }
+          }
+        );
+
+        // Send notifications
+        for (const contact of contactsWithThisNumber) {
+          const contactOwner = contact.userId as any;
+          if (contactOwner && contactOwner.pushToken && contactOwner.pushToken !== 'expo-go-local-mode') {
+            try {
+              await sendContactJoinedNotification(
+                contactOwner.pushToken,
+                cleanName,
+                cleanPhone,
+                savedUser._id.toString()
+              );
+              console.log(`📱 Sent "contact joined" notification to ${contactOwner.name}`);
+            } catch (error) {
+              console.error(`Failed to send notification to ${contactOwner.name}:`, error);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error sending contact joined notifications:', error);
+      // Don't fail signup if notifications fail
+    }
 
     // Generate JWT token
     const token = jwt.sign(
