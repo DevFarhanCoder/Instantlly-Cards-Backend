@@ -19,12 +19,22 @@ export async function sendPushNotification(
   body: string,
   data?: any
 ): Promise<boolean> {
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('📤 [PUSH] Sending push notification');
+  console.log('  Token:', pushToken.substring(0, 20) + '...');
+  console.log('  Title:', title);
+  console.log('  Body:', body);
+  console.log('  Data:', JSON.stringify(data, null, 2));
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
   try {
     // Check if the push token is valid
     if (!Expo.isExpoPushToken(pushToken)) {
-      console.error(`Push token ${pushToken} is not a valid Expo push token`);
+      console.error(`❌ [PUSH] Invalid Expo push token: ${pushToken}`);
       return false;
     }
+
+    console.log('✅ [PUSH] Push token is valid');
 
     // Create the message
     const message: ExpoPushMessage = {
@@ -34,25 +44,37 @@ export async function sendPushNotification(
       body,
       data: data || {},
       badge: 1,
+      priority: 'high',
+      channelId: 'default',
     };
 
+    console.log('📦 [PUSH] Message payload:', JSON.stringify(message, null, 2));
+
     // Send the notification
+    console.log('🚀 [PUSH] Calling Expo push notification API...');
     const tickets: ExpoPushTicket[] = await expo.sendPushNotificationsAsync([message]);
     
+    console.log('📬 [PUSH] Received response from Expo:', JSON.stringify(tickets, null, 2));
+
     // Check if the notification was sent successfully
     const ticket = tickets[0];
     if (ticket.status === 'error') {
-      console.error(`Error sending push notification: ${ticket.message}`);
+      console.error(`❌ [PUSH] Error sending push notification: ${ticket.message}`);
       if (ticket.details?.error) {
-        console.error('Error details:', ticket.details.error);
+        console.error('❌ [PUSH] Error details:', ticket.details.error);
       }
       return false;
     }
 
-    console.log(`✅ Push notification sent successfully to ${pushToken}`);
+    console.log(`✅ [PUSH] Push notification sent successfully!`);
+    console.log(`✅ [PUSH] Ticket ID: ${ticket.id}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     return true;
-  } catch (error) {
-    console.error('Error sending push notification:', error);
+  } catch (error: any) {
+    console.error('❌ [PUSH] Exception while sending push notification:');
+    console.error('❌ [PUSH] Error message:', error.message);
+    console.error('❌ [PUSH] Error stack:', error.stack);
+    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     return false;
   }
 }
