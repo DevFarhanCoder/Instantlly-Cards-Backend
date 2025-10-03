@@ -2,7 +2,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import express from "express";
+import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
@@ -17,6 +17,7 @@ import notificationsRouter from "./routes/notifications";
 import messagesRouter, { setSocketIO } from "./routes/messages";
 import groupsRouter from "./routes/groups";
 import chatsRouter from "./routes/chats";
+import adminRouter from "./routes/admin";
 import { SocketService } from "./services/socketService";
 
 const app = express();
@@ -50,7 +51,7 @@ if (!fs.existsSync(uploadsDir)) {
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // single health route
-app.get("/api/health", async (_req, res) => {
+app.get("/api/health", async (_req: Request, res: Response) => {
   try {
     // Check database connection
     const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
@@ -86,7 +87,7 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // Debug endpoint to check environment variables
-app.get("/api/debug", (_req, res) => {
+app.get("/api/debug", (_req: Request, res: Response) => {
   res.status(200).json({ 
     hasJwtSecret: !!process.env.JWT_SECRET,
     jwtSecretLength: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
@@ -113,7 +114,8 @@ async function startServer() {
     app.use("/api/notifications", notificationsRouter);    
     app.use("/api/messages", messagesRouter);    
     app.use("/api/groups", groupsRouter);    
-    app.use("/api/chats", chatsRouter);    
+    app.use("/api/chats", chatsRouter);
+    app.use("/api/admin", adminRouter);    
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);
