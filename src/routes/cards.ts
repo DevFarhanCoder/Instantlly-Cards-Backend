@@ -19,7 +19,7 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
-// CONTACTS FEED - Get cards only from my contacts (privacy-focused)
+// CONTACTS FEED - Get cards from my contacts AND my own cards
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
@@ -33,24 +33,34 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
-    console.log(`📋 User ${userId} has ${contactUserIds.length} contacts on the app`);
+    // Add current user's ID to see their own cards too
+    const allUserIds = [userId, ...contactUserIds];
     
-    // Get cards only from these contact users
-    const contactCards = await Card.find({
-      userId: { $in: contactUserIds }
+    console.log(`📋 User ${userId} has ${contactUserIds.length} contacts on the app`);
+    console.log(`👤 Including user's own cards in feed`);
+    
+    // Get cards from contacts AND own cards
+    const allCards = await Card.find({
+      userId: { $in: allUserIds }
     })
     .sort({ createdAt: -1 })
     .limit(100) // Increased limit for contacts feed
     .lean();
     
-    console.log(`📇 Found ${contactCards.length} cards from contacts`);
+    // Separate own cards and contact cards for metadata
+    const ownCards = allCards.filter((card: any) => card.userId.toString() === userId);
+    const contactCards = allCards.filter((card: any) => card.userId.toString() !== userId);
+    
+    console.log(`📇 Found ${ownCards.length} own cards and ${contactCards.length} cards from contacts`);
     
     res.json({ 
       success: true,
-      data: contactCards,
+      data: allCards,
       meta: {
         totalContacts: contactUserIds.length,
-        cardsCount: contactCards.length
+        totalCards: allCards.length,
+        ownCards: ownCards.length,
+        contactCards: contactCards.length
       }
     });
   } catch (err) {
