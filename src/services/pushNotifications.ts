@@ -17,13 +17,15 @@ export async function sendPushNotification(
   pushToken: string,
   title: string,
   body: string,
-  data?: any
+  data?: any,
+  channelId?: string // WhatsApp-style: different channels for different notification types
 ): Promise<boolean> {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('📤 [PUSH] Sending push notification');
   console.log('  Token:', pushToken.substring(0, 20) + '...');
   console.log('  Title:', title);
   console.log('  Body:', body);
+  console.log('  Channel:', channelId || 'default');
   console.log('  Data:', JSON.stringify(data, null, 2));
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
@@ -36,7 +38,7 @@ export async function sendPushNotification(
 
     console.log('✅ [PUSH] Push token is valid');
 
-    // Create the message
+    // Create the message with WhatsApp-style configuration
     const message: ExpoPushMessage = {
       to: pushToken,
       sound: 'default',
@@ -45,7 +47,7 @@ export async function sendPushNotification(
       data: data || {},
       badge: 1,
       priority: 'high',
-      channelId: 'default',
+      channelId: channelId || 'default', // Use specified channel
     };
 
     console.log('📦 [PUSH] Message payload:', JSON.stringify(message, null, 2));
@@ -111,43 +113,43 @@ export async function sendGroupMessageNotification(
   pushToken: string,
   groupName: string,
   senderName: string,
-  messageText: string,
-  groupId: string,
-  senderId: string
+  messageContent: string,
+  groupId: string
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    groupName,
-    `${senderName}: ${messageText}`,
+    groupName, // Title: Group name (like WhatsApp)
+    `${senderName}: ${messageContent}`, // Body: Sender name + message
     {
       type: 'group_message',
       groupId,
-      groupName,
-      senderId,
       senderName,
-      messageText,
+      groupName,
       timestamp: new Date().toISOString()
-    }
+    },
+    'groups' // Use groups channel
   );
 }
 
 export async function sendIndividualMessageNotification(
   pushToken: string,
   senderName: string,
-  messageText: string,
-  senderId: string
+  messageContent: string,
+  senderId: string,
+  chatId?: string
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    `New message from ${senderName}`,
-    messageText,
+    senderName, // Title: Just sender name (like WhatsApp)
+    messageContent, // Body: Just the message
     {
-      type: 'individual_message',
+      type: 'new_message',
       senderId,
+      chatId,
       senderName,
-      messageText,
       timestamp: new Date().toISOString()
-    }
+    },
+    'messages' // Use messages channel for high priority
   );
 }
 
@@ -155,21 +157,22 @@ export async function sendCardSharingNotification(
   pushToken: string,
   senderName: string,
   cardTitle: string,
-  senderId: string,
-  cardId: string
+  cardId: string,
+  senderId: string
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    `${senderName} sent you a Card`,
-    `Check out ${cardTitle}`,
+    `${senderName}`, // Just sender name
+    `Sent you a card: ${cardTitle}`, // Action description
     {
       type: 'card_shared',
+      cardId,
       senderId,
       senderName,
       cardTitle,
-      cardId,
       timestamp: new Date().toISOString()
-    }
+    },
+    'cards' // Use cards channel
   );
 }
 
@@ -203,15 +206,16 @@ export async function sendContactJoinedNotification(
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    `${contactName} joined InstantllyCards`,
-    `${contactName} from your contacts is now on InstantllyCards`,
+    `InstantllyCards`, // App name as title
+    `${contactName} from your contacts joined`, // Clean message
     {
       type: 'contact_joined',
       contactId,
       contactName,
       contactPhone,
       timestamp: new Date().toISOString()
-    }
+    },
+    'contacts' // Use contacts channel
   );
 }
 
@@ -224,8 +228,8 @@ export async function sendCardCreationNotification(
 ): Promise<boolean> {
   return await sendPushNotification(
     pushToken,
-    `${creatorName} created a new card`,
-    `${creatorName} created: ${cardTitle}`,
+    `${creatorName}`, // Creator name as title
+    `Created a new card: ${cardTitle}`, // Action description
     {
       type: 'card_created',
       cardId,
@@ -233,7 +237,8 @@ export async function sendCardCreationNotification(
       creatorName,
       cardTitle,
       timestamp: new Date().toISOString()
-    }
+    },
+    'cards' // Use cards channel
   );
 }
 
