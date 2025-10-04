@@ -4,6 +4,7 @@ import SharedCard from "../models/SharedCard";
 import GroupSharedCard from "../models/GroupSharedCard";
 import User from "../models/User";
 import Group from "../models/Group";
+import Contact from "../models/Contact";
 import { AuthReq, requireAuth } from "../middleware/auth";
 import { sendCardSharingNotification } from "../services/pushNotifications";
 
@@ -23,17 +24,14 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     
-    // Import Contact model at the top if not already imported
-    const Contact = require("../models/Contact").default;
-    
     // Get all contacts who are app users
     const myContacts = await Contact.find({ 
       userId,
       isAppUser: true 
     }).select('appUserId').lean();
     
-    // Extract contact user IDs
-    const contactUserIds = myContacts.map(contact => contact.appUserId).filter(Boolean);
+    // Extract contact user IDs with proper typing
+    const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
     console.log(`📋 User ${userId} has ${contactUserIds.length} contacts on the app`);
     
