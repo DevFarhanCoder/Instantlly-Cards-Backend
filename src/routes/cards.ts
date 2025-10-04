@@ -18,6 +18,53 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
+// CONTACTS FEED - Get cards only from my contacts (privacy-focused)
+r.get("/feed/contacts", async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId!;
+    
+    // Import Contact model at the top if not already imported
+    const Contact = require("../models/Contact").default;
+    
+    // Get all contacts who are app users
+    const myContacts = await Contact.find({ 
+      userId,
+      isAppUser: true 
+    }).select('appUserId').lean();
+    
+    // Extract contact user IDs
+    const contactUserIds = myContacts.map(contact => contact.appUserId).filter(Boolean);
+    
+    console.log(`📋 User ${userId} has ${contactUserIds.length} contacts on the app`);
+    
+    // Get cards only from these contact users
+    const contactCards = await Card.find({
+      userId: { $in: contactUserIds }
+    })
+    .sort({ createdAt: -1 })
+    .limit(100) // Increased limit for contacts feed
+    .lean();
+    
+    console.log(`📇 Found ${contactCards.length} cards from contacts`);
+    
+    res.json({ 
+      success: true,
+      data: contactCards,
+      meta: {
+        totalContacts: contactUserIds.length,
+        cardsCount: contactCards.length
+      }
+    });
+  } catch (err) {
+    console.error("CONTACTS FEED ERROR", err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch contacts feed",
+      data: [] 
+    });
+  }
+});
+
 // CREATE (expects flat body)
 r.post("/", async (req: AuthReq, res) => {
   try {
