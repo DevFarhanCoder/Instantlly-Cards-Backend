@@ -6,7 +6,7 @@ import User from "../models/User";
 import Group from "../models/Group";
 import Contact from "../models/Contact";
 import { AuthReq, requireAuth } from "../middleware/auth";
-import { sendCardSharingNotification } from "../services/pushNotifications";
+import { sendCardSharingNotification, sendCardCreationNotification } from "../services/pushNotifications";
 
 const r = Router();
 
@@ -76,7 +76,43 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
 // CREATE (expects flat body)
 r.post("/", async (req: AuthReq, res) => {
   try {
-    const doc = await Card.create({ ...req.body, userId: req.userId! });
+    const userId = req.userId!;
+    const doc = await Card.create({ ...req.body, userId });
+    
+    // Send notifications to contacts who have this user in their contacts
+    try {
+      // Get user details
+      const creator: any = await User.findById(userId).select('name phoneNumber').lean();
+      
+      if (creator && creator.name) {
+        // Find all contacts who have this user as a contact AND are app users
+        const myContactsWhoAreAppUsers: any[] = await Contact.find({ 
+          appUserId: userId,
+          isAppUser: true
+        }).populate('userId', 'pushToken name').lean();
+        
+        console.log(`📢 Notifying ${myContactsWhoAreAppUsers.length} contacts about new card creation`);
+        
+        // Send notification to each contact
+        for (const contact of myContactsWhoAreAppUsers) {
+          const contactUser = contact.userId;
+          
+          if (contactUser?.pushToken) {
+            await sendCardCreationNotification(
+              contactUser.pushToken,
+              creator.name || 'A contact',
+              req.body.name || 'a new card',
+              doc._id.toString(),
+              userId
+            );
+          }
+        }
+      }
+    } catch (notifError) {
+      console.error('Error sending card creation notifications:', notifError);
+      // Don't fail the card creation if notifications fail
+    }
+    
     res.status(201).json({ data: doc });
   } catch (err: any) {
     console.error("CREATE CARD ERROR", err);

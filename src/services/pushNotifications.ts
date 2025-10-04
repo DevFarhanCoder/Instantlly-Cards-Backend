@@ -215,6 +215,28 @@ export async function sendContactJoinedNotification(
   );
 }
 
+export async function sendCardCreationNotification(
+  pushToken: string,
+  creatorName: string,
+  cardTitle: string,
+  cardId: string,
+  creatorId: string
+): Promise<boolean> {
+  return await sendPushNotification(
+    pushToken,
+    `${creatorName} created a new card`,
+    `${creatorName} created: ${cardTitle}`,
+    {
+      type: 'card_created',
+      cardId,
+      creatorId,
+      creatorName,
+      cardTitle,
+      timestamp: new Date().toISOString()
+    }
+  );
+}
+
 export async function sendBulkPushNotifications(
   notifications: Array<{
     pushToken: string;
