@@ -170,28 +170,72 @@ router.post("/register-token", requireAuth, async (req: AuthReq, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
-    const { pushToken, platform } = req.body;
+    const { pushToken, platform, deviceInfo } = req.body;
+    
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📱 [TOKEN-REGISTER] New push token registration request');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('User ID:', userId);
+    console.log('Platform:', platform || 'not specified');
+    console.log('Push Token:', pushToken ? pushToken.substring(0, 30) + '...' : 'MISSING');
+    if (deviceInfo) {
+      console.log('Device Info:', JSON.stringify(deviceInfo, null, 2));
+    }
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     if (!pushToken) {
+      console.error('❌ [TOKEN-REGISTER] No push token provided!');
       return res.status(400).json({ error: "Push token is required" });
     }
 
-    // Update user with push token (you might want to create a separate model for this)
-    const User = mongoose.model('User');
-    await User.findByIdAndUpdate(userId, {
-      pushToken,
-      platform: platform || 'unknown',
-      pushTokenUpdatedAt: new Date()
-    });
+    // Validate token format
+    if (pushToken === 'expo-go-local-mode') {
+      console.error('⚠️  [TOKEN-REGISTER] Received expo-go-local-mode token - rejecting!');
+      return res.status(400).json({ 
+        error: "expo-go-local-mode tokens are not valid for production",
+        message: "Please use a production APK build"
+      });
+    }
 
-    console.log(`📱 Registered push token for user ${userId}: ${pushToken}`);
+    if (!pushToken.startsWith('ExponentPushToken[')) {
+      console.error('⚠️  [TOKEN-REGISTER] Invalid token format:', pushToken.substring(0, 50));
+      return res.status(400).json({ 
+        error: "Invalid push token format",
+        message: "Token must start with 'ExponentPushToken['"
+      });
+    }
+
+    // Update user with push token
+    const User = mongoose.model('User');
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        pushToken,
+        platform: platform || 'unknown',
+        pushTokenUpdatedAt: new Date(),
+        ...(deviceInfo && { deviceInfo })
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      console.error('❌ [TOKEN-REGISTER] User not found:', userId);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    console.log('✅ [TOKEN-REGISTER] Push token registered successfully!');
+    console.log('✅ [TOKEN-REGISTER] User:', updatedUser.name || updatedUser.phone);
+    console.log('✅ [TOKEN-REGISTER] Token:', pushToken.substring(0, 20) + '...');
+    console.log('✅ [TOKEN-REGISTER] Platform:', platform || 'unknown');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     res.json({
       success: true,
       message: "Push token registered successfully"
     });
   } catch (error) {
-    console.error("Error registering push token:", error);
+    console.error("❌ [TOKEN-REGISTER] Error registering push token:", error);
+    console.error("❌ [TOKEN-REGISTER] Error stack:", error instanceof Error ? error.stack : 'No stack trace');
     res.status(500).json({ error: "Failed to register push token" });
   }
 });
