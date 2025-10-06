@@ -209,8 +209,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
               group.name,
               sender.name,
               text,
-              groupId,
-              senderId
+              groupId
             );
             console.log(`📱 Push notification sent to ${member.name} for group message`);
           } catch (error) {
