@@ -58,38 +58,38 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
     }
 
     console.log(`📱 Sending message from ${sender.name} to ${receiver.name}: ${text}`);
+    console.log(`📱 [DEBUG] Receiver push token:`, receiver.pushToken ? receiver.pushToken.substring(0, 20) + '...' : 'NONE');
+    console.log(`📱 [DEBUG] Sender ID:`, senderId);
+    console.log(`📱 [DEBUG] Receiver ID:`, receiverId);
 
-    // Check if receiver is online (connected via Socket.IO)
-    let isReceiverOnline = false;
-    if (socketIO) {
-      const receiverSockets = Array.from(socketIO.sockets.sockets.values())
-        .filter((socket: any) => socket.userId === receiverId);
-      
-      if (receiverSockets.length > 0) {
-        isReceiverOnline = true;
-        console.log(`✅ Receiver ${receiver.name} is ONLINE - message delivered via Socket.IO`);
-      }
-    }
-
-    // Send push notification ONLY if receiver is OFFLINE
-    if (!isReceiverOnline && receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
+    // ALWAYS send push notification (don't check online status)
+    // Let the device decide whether to show it
+    if (receiver.pushToken && receiver.pushToken !== 'expo-go-local-mode') {
       try {
+        console.log(`📤 [PUSH] Attempting to send push notification...`);
+        console.log(`📤 [PUSH] To:`, receiver.name);
+        console.log(`📤 [PUSH] Token:`, receiver.pushToken.substring(0, 30) + '...');
+        console.log(`📤 [PUSH] Title:`, sender.name);
+        console.log(`📤 [PUSH] Body:`, text);
+        
         await sendIndividualMessageNotification(
           receiver.pushToken,
           sender.name,
           text,
           senderId
         );
-        console.log(`📱 Push notification sent to ${receiver.name} (OFFLINE)`);
-      } catch (error) {
-        console.error('Failed to send push notification:', error);
+        
+        console.log(`✅ [PUSH] Push notification sent successfully to ${receiver.name}`);
+      } catch (error: any) {
+        console.error(`❌ [PUSH] Failed to send push notification:`, error);
+        console.error(`❌ [PUSH] Error message:`, error.message);
+        console.error(`❌ [PUSH] Error stack:`, error.stack);
       }
-    } else if (isReceiverOnline) {
-      console.log(`📱 Receiver ${receiver.name} is ONLINE - skipping push notification`);
     } else if (receiver.pushToken === 'expo-go-local-mode') {
-      console.log(`📱 Receiver ${receiver.name} is using Expo Go - notification will be handled locally`);
+      console.log(`⚠️ [PUSH] Receiver ${receiver.name} is using Expo Go - local notification mode`);
     } else {
-      console.log(`📱 No push token for ${receiver.name}, skipping push notification`);
+      console.log(`⚠️ [PUSH] No push token for ${receiver.name} - cannot send notification`);
+      console.log(`⚠️ [PUSH] User needs to log in to register push token`);
     }
 
     res.status(200).json({
@@ -188,10 +188,13 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
       console.warn('⚠️ Socket.IO not available for real-time group message broadcasting');
     }
 
-    // Send push notifications to OFFLINE group members
+    // Send push notifications to ALL group members (always send, let device decide)
     try {
+      console.log(`📤 [GROUP-PUSH] Starting group notification process...`);
+      
       // Get all group members except sender
       const otherMembers = group.members.filter((id: any) => id.toString() !== senderId);
+      console.log(`📤 [GROUP-PUSH] Found ${otherMembers.length} members (excluding sender)`);
       
       // Find users with push tokens (excluding expo-go-local-mode)
       const membersWithTokens = await User.find({
@@ -199,11 +202,17 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
         pushToken: { $exists: true, $nin: [null, 'expo-go-local-mode'] }
       }).select('_id pushToken name');
 
+      console.log(`📤 [GROUP-PUSH] ${membersWithTokens.length} members have valid push tokens`);
+
       if (membersWithTokens.length > 0) {
-        console.log(`📱 Sending push notifications to ${membersWithTokens.length} group members`);
-        
         for (const member of membersWithTokens) {
           try {
+            console.log(`📤 [GROUP-PUSH] Sending to ${member.name}...`);
+            console.log(`📤 [GROUP-PUSH] Token: ${member.pushToken!.substring(0, 30)}...`);
+            console.log(`📤 [GROUP-PUSH] Group: ${group.name}`);
+            console.log(`📤 [GROUP-PUSH] Sender: ${sender.name}`);
+            console.log(`📤 [GROUP-PUSH] Message: ${text}`);
+            
             await sendGroupMessageNotification(
               member.pushToken!,
               group.name,
@@ -211,16 +220,19 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
               text,
               groupId
             );
-            console.log(`📱 Push notification sent to ${member.name} for group message`);
-          } catch (error) {
-            console.error(`Failed to send push notification to ${member.name}:`, error);
+            
+            console.log(`✅ [GROUP-PUSH] Notification sent successfully to ${member.name}`);
+          } catch (error: any) {
+            console.error(`❌ [GROUP-PUSH] Failed to send to ${member.name}:`, error);
+            console.error(`❌ [GROUP-PUSH] Error message:`, error.message);
           }
         }
       } else {
-        console.log(`📱 No group members with valid push tokens`);
+        console.log(`⚠️ [GROUP-PUSH] No group members with valid push tokens`);
       }
-    } catch (error) {
-      console.error('Failed to send group push notifications:', error);
+    } catch (error: any) {
+      console.error(`❌ [GROUP-PUSH] Group notification process failed:`, error);
+      console.error(`❌ [GROUP-PUSH] Error message:`, error.message);
     }
 
     console.log(`📱 Group message from ${sender.name} to group ${groupId}: ${text}`);
