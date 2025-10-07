@@ -240,4 +240,29 @@ router.post("/register-token", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// DIAGNOSTIC ENDPOINT: Ping when attempting registration
+router.post("/ping-registration-attempt", async (req, res) => {
+  const { phone, timestamp, hasModule, hasFunction } = req.body;
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('🔔 [DIAGNOSTIC] Mobile app attempting to register push token');
+  console.log('📱 Phone:', phone);
+  console.log('⏰ Timestamp:', timestamp);
+  console.log('📦 Has notification module:', hasModule);
+  console.log('🔧 Has registerForPushNotifications function:', hasFunction);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  res.json({ received: true });
+});
+
+// DIAGNOSTIC ENDPOINT: Report registration errors
+router.post("/registration-error", async (req, res) => {
+  const { phone, error, stack } = req.body;
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('❌ [DIAGNOSTIC] Push token registration ERROR reported from mobile');
+  console.log('📱 Phone:', phone);
+  console.log('🚨 Error:', error);
+  console.log('📋 Stack:', stack);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  res.json({ received: true });
+});
+
 export default router;
