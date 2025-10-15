@@ -1,0 +1,6 @@
+-name message_gateway@127.0.0.1
+-setcookie message_gateway_cookie
++K true
++A 128
++P 2000000
+-env ERL_MAX_PORTS 65536

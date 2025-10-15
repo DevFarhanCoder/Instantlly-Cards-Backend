@@ -1,0 +1,25 @@
+# Compiled files
+ebin/*.beam
+*.beam
+
+# Erlang crash dumps
+erl_crash.dump
+
+# Rebar3
+_build/
+.rebar3/
+rebar.lock
+
+# Development
+.erlang.mk/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log

@@ -1,0 +1,25 @@
+%% Minimal rebar.config without external dependencies for quick testing
+{erl_opts, [debug_info]}.
+
+{deps, []}.
+
+{relx, [
+    {release, {message_gateway, "1.0.0"},
+     [message_gateway, sasl]},
+    {mode, dev},
+    {sys_config, "./config/sys.config"},
+    {vm_args, "./config/vm.args"},
+    {dev_mode, true},
+    {include_erts, false},
+    {extended_start_script, true}
+]}.
+
+{profiles, [
+    {prod, [
+        {relx, [
+            {mode, prod},
+            {dev_mode, false},
+            {include_erts, true}
+        ]}
+    ]}
+]}.
