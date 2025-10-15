@@ -17,16 +17,28 @@ interface Message {
 
 class ErlangGatewayClient extends EventEmitter {
   private ws: WebSocket | null = null;
-  private gatewayUrl: string;
+  private gatewayUrl: string | null;
   private reconnectInterval: number = 5000;
   private isConnected: boolean = false;
 
-  constructor(gatewayUrl: string = 'ws://localhost:8080/ws') {
+  constructor(gatewayUrl?: string) {
     super();
-    this.gatewayUrl = gatewayUrl;
+    // Prefer explicit constructor arg, then env var, otherwise disable gateway
+    const envUrl = process.env.ERLANG_GATEWAY_URL;
+    this.gatewayUrl = gatewayUrl || envUrl || null;
+
+    // Prevent unhandled 'error' events bubbling up
+    this.on('error', (err) => {
+      console.error('ErlangGatewayClient emitted error:', err?.message || err);
+    });
   }
 
   connect(): void {
+    if (!this.gatewayUrl) {
+      console.log('⚠️ Erlang Gateway URL not configured - skipping connection');
+      return;
+    }
+
     console.log('🔌 Connecting to Erlang Gateway:', this.gatewayUrl);
 
     this.ws = new WebSocket(this.gatewayUrl);

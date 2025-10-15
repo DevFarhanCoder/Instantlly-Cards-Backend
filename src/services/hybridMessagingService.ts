@@ -9,16 +9,25 @@ import ErlangGatewayClient from './erlangGatewayClient';
 
 class HybridMessagingService {
   private io: SocketIOServer;
-  private erlangGateway: ErlangGatewayClient;
+  private erlangGateway: ErlangGatewayClient | null = null;
   private useErlang: boolean = false; // Feature flag
 
   constructor(io: SocketIOServer) {
     this.io = io;
-    this.erlangGateway = new ErlangGatewayClient('ws://localhost:8080/ws');
-    this.initializeErlangGateway();
+    // Only initialize Erlang gateway if configured via env
+    const gatewayUrl = process.env.ERLANG_GATEWAY_URL || null;
+    if (gatewayUrl) {
+      this.erlangGateway = new ErlangGatewayClient(gatewayUrl);
+      this.initializeErlangGateway();
+    } else {
+      console.log('⚠️ ERLANG_GATEWAY_URL not set - running in Socket.IO fallback mode');
+      this.erlangGateway = null;
+    }
   }
 
   private initializeErlangGateway(): void {
+    if (!this.erlangGateway) return;
+
     // Try to connect to Erlang gateway
     this.erlangGateway.on('connected', () => {
       console.log('✅ Erlang Gateway connected - Enhanced mode enabled');
@@ -36,11 +45,16 @@ class HybridMessagingService {
     });
 
     // Connect to Erlang gateway
-    this.erlangGateway.connect();
+    try {
+      this.erlangGateway.connect();
+    } catch (err) {
+      console.error('❌ Failed to start Erlang gateway client:', err);
+      this.useErlang = false;
+    }
   }
 
   sendMessage(data: any): void {
-    if (this.useErlang) {
+    if (this.useErlang && this.erlangGateway) {
       // Use Erlang gateway (high performance)
       console.log('📨 Sending via Erlang Gateway');
       this.erlangGateway.sendMessage(data);
