@@ -234,14 +234,33 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
-// Get all stored contacts for the user
+// Get all stored contacts for the user (with pagination for large contact lists)
 router.get("/all", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
     
-    const contacts = await Contact.find({ userId })
+    // Pagination parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 1000; // Default 1000 contacts per page
+    const skip = (page - 1) * limit;
+    
+    // Search query parameter
+    const searchQuery = req.query.search as string;
+    
+    // Build query
+    const query: any = { userId };
+    if (searchQuery) {
+      query.name = { $regex: searchQuery, $options: 'i' }; // Case-insensitive search
+    }
+    
+    // Get total count for pagination
+    const totalContacts = await Contact.countDocuments(query);
+    
+    const contacts = await Contact.find(query)
       .populate({ path: 'appUserId', select: 'name profilePicture about', model: User })
       .sort({ isAppUser: -1, name: 1 }) // App users first, then alphabetical
+      .skip(skip)
+      .limit(limit)
       .lean();
 
     const formattedContacts = contacts.map(contact => ({
@@ -261,7 +280,17 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
       lastSynced: contact.lastSynced
     }));
 
-    res.json({ success: true, data: formattedContacts });
+    res.json({ 
+      success: true, 
+      data: formattedContacts,
+      pagination: {
+        page,
+        limit,
+        total: totalContacts,
+        totalPages: Math.ceil(totalContacts / limit),
+        hasMore: skip + contacts.length < totalContacts
+      }
+    });
   } catch (error) {
     console.error("Error fetching all contacts:", error);
     res.status(500).json({ error: "Failed to fetch contacts" });

@@ -125,6 +125,19 @@ async function startServer() {
     setSocketIO(io);
     console.log("🔗 Socket.IO instance injected into messages router");
 
+    // Initialize Erlang Gateway Integration (optional - will fallback if not available)
+    let hybridMessaging: any = null;
+    try {
+      const HybridMessagingService = require("./services/hybridMessagingService").default;
+      hybridMessaging = new HybridMessagingService(io);
+      console.log("🚀 Erlang Gateway integration initialized");
+      
+      // Export for use in routes
+      (global as any).hybridMessaging = hybridMessaging;
+    } catch (error) {
+      console.log("⚠️  Erlang Gateway not available - using Socket.IO only");
+    }
+
     // Start the server
     const port = process.env.PORT || 3001;
     server.listen(port, () => {
