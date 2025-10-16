@@ -37,4 +37,9 @@ const schema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Add indexes for faster querying
+schema.index({ userId: 1, createdAt: -1 }); // Composite index for user's cards sorted by date
+schema.index({ createdAt: -1 }); // Index for sorting by creation date
+schema.index({ companyName: 'text', name: 'text' }); // Text search index
+
 export default mongoose.model("Card", schema);

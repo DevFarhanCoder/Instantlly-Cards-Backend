@@ -19,16 +19,22 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
-// CONTACTS FEED - Get cards from my contacts AND my own cards
+// CONTACTS FEED - Get cards from my contacts AND my own cards (OPTIMIZED)
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
+    const startTime = Date.now();
     
-    // Get all contacts who are app users
+    console.log(`📱 [${userId}] Fetching contacts feed...`);
+    
+    // Get all contacts who are app users (optimized query with select)
     const myContacts = await Contact.find({ 
       userId,
       isAppUser: true 
-    }).select('appUserId').lean();
+    })
+    .select('appUserId')
+    .lean()
+    .exec();
     
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
@@ -36,22 +42,24 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Add current user's ID to see their own cards too
     const allUserIds = [userId, ...contactUserIds];
     
-    console.log(`📋 User ${userId} has ${contactUserIds.length} contacts on the app`);
-    console.log(`👤 Including user's own cards in feed`);
+    console.log(`� [${userId}] Found ${contactUserIds.length} contacts on app`);
     
-    // Get cards from contacts AND own cards
+    // Get cards from contacts AND own cards (optimized with lean and select)
     const allCards = await Card.find({
       userId: { $in: allUserIds }
     })
+    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress createdAt updatedAt')
     .sort({ createdAt: -1 })
-    .limit(100) // Increased limit for contacts feed
-    .lean();
+    .limit(100)
+    .lean()
+    .exec();
     
     // Separate own cards and contact cards for metadata
     const ownCards = allCards.filter((card: any) => card.userId.toString() === userId);
     const contactCards = allCards.filter((card: any) => card.userId.toString() !== userId);
     
-    console.log(`📇 Found ${ownCards.length} own cards and ${contactCards.length} cards from contacts`);
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${ownCards.length} own + ${contactCards.length} from contacts = ${allCards.length} total`);
     
     res.json({ 
       success: true,
@@ -60,11 +68,12 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
         totalContacts: contactUserIds.length,
         totalCards: allCards.length,
         ownCards: ownCards.length,
-        contactCards: contactCards.length
+        contactCards: contactCards.length,
+        loadTimeMs: elapsed
       }
     });
   } catch (err) {
-    console.error("CONTACTS FEED ERROR", err);
+    console.error("❌ CONTACTS FEED ERROR", err);
     res.status(500).json({ 
       success: false,
       message: "Failed to fetch contacts feed",
@@ -510,65 +519,78 @@ r.get("/group/:groupId/shared", async (req: AuthReq, res) => {
   }
 });
 
-// GET GROUP CARDS SUMMARY - Cards sent and received counts for a group
+// GET GROUP CARDS SUMMARY - Cards sent and received counts for a group (OPTIMIZED)
 r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
   try {
     const groupId = req.params.groupId;
     const currentUserId = req.userId!;
+    const startTime = Date.now();
     
-    // Verify group exists and user is a member
-    const group = await Group.findById(groupId);
+    console.log(`📊 [${currentUserId}] Fetching group cards summary for group: ${groupId}`);
+    
+    // Verify group exists and user is a member (lean query)
+    const group = await Group.findById(groupId).select('members').lean().exec();
     if (!group) {
-      return res.status(404).json({ message: "Group not found" });
+      return res.status(404).json({ success: false, message: "Group not found" });
     }
 
     // Check if user is a member of the group
-    const isMember = group.members.some(memberId => memberId.toString() === currentUserId);
+    const isMember = group.members.some((memberId: any) => memberId.toString() === currentUserId);
     if (!isMember) {
-      return res.status(403).json({ message: "You are not a member of this group" });
+      return res.status(403).json({ success: false, message: "You are not a member of this group" });
     }
     
-    // Get cards sent by current user to this group
-    const sentCards = await GroupSharedCard.find({ 
-      groupId, 
-      senderId: currentUserId 
-    })
-    .populate('cardId', 'companyName name companyPhoto')
-    .sort({ sentAt: -1 })
-    .lean();
-
-    // Get cards received by current user in this group (sent by others)
-    const receivedCards = await GroupSharedCard.find({ 
-      groupId, 
-      senderId: { $ne: currentUserId } 
-    })
-    .populate('cardId', 'companyName name companyPhoto')
-    .populate('senderId', 'name profilePicture')
-    .sort({ sentAt: -1 })
-    .lean();
+    // Get cards sent and received in parallel for better performance
+    const [sentCards, receivedCards] = await Promise.all([
+      // Cards sent by current user to this group
+      GroupSharedCard.find({ 
+        groupId, 
+        senderId: currentUserId 
+      })
+      .populate('cardId', 'companyName name companyPhoto')
+      .sort({ sentAt: -1 })
+      .lean()
+      .exec(),
+      
+      // Cards received by current user in this group (sent by others)
+      GroupSharedCard.find({ 
+        groupId, 
+        senderId: { $ne: currentUserId } 
+      })
+      .populate('cardId', 'companyName name companyPhoto')
+      .populate('senderId', 'name profilePicture')
+      .sort({ sentAt: -1 })
+      .lean()
+      .exec()
+    ]);
 
     // Format sent cards
     const formattedSentCards = sentCards.map((share: any) => ({
       _id: share._id,
-      cardId: share.cardId._id,
+      cardId: share.cardId?._id || share.cardId,
       cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
+      cardPhoto: share.cardId?.companyPhoto,
       sentAt: share.sentAt,
-      message: share.message
+      message: share.message,
+      isFromMe: true
     }));
 
     // Format received cards
     const formattedReceivedCards = receivedCards.map((share: any) => ({
       _id: share._id,
-      cardId: share.cardId._id,
-      senderId: share.senderId._id,
+      cardId: share.cardId?._id || share.cardId,
+      senderId: share.senderId?._id || share.senderId,
       senderName: share.senderName,
-      senderProfilePicture: share.senderId.profilePicture,
+      senderProfilePicture: share.senderId?.profilePicture,
       cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
+      cardPhoto: share.cardId?.companyPhoto,
       sentAt: share.sentAt,
-      message: share.message
+      message: share.message,
+      isFromMe: false
     }));
+
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${currentUserId}] Group cards loaded in ${elapsed}ms - ${formattedSentCards.length} sent, ${formattedReceivedCards.length} received`);
 
     res.json({
       success: true,
@@ -581,11 +603,14 @@ r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
           count: formattedReceivedCards.length,
           cards: formattedReceivedCards
         }
+      },
+      meta: {
+        loadTimeMs: elapsed
       }
     });
   } catch (err) {
-    console.error("GET GROUP CARDS SUMMARY ERROR", err);
-    res.status(500).json({ message: "Failed to fetch group cards summary" });
+    console.error("❌ GET GROUP CARDS SUMMARY ERROR", err);
+    res.status(500).json({ success: false, message: "Failed to fetch group cards summary" });
   }
 });
 

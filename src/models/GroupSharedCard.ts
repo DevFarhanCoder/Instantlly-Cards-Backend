@@ -60,6 +60,7 @@ const groupSharedCardSchema = new mongoose.Schema({
 // Indexes for efficient queries
 groupSharedCardSchema.index({ senderId: 1, sentAt: -1 }); // For sent cards query
 groupSharedCardSchema.index({ groupId: 1, sentAt: -1 }); // For group cards query
+groupSharedCardSchema.index({ groupId: 1, senderId: 1, sentAt: -1 }); // Composite index for group + sender queries
 groupSharedCardSchema.index({ cardId: 1 }); // For card lookup
 
 const GroupSharedCard = mongoose.model('GroupSharedCard', groupSharedCardSchema);
