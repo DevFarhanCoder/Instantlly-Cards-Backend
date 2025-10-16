@@ -454,7 +454,7 @@ router.post("/check-phone", async (req, res) => {
   }
 });
 
-// GET /api/users/search-by-phone/:phone - Search user by phone number
+// GET /api/users/search-by-phone/:phone - Search user by phone number for carousel messaging
 router.get("/users/search-by-phone/:phone", async (req, res) => {
   try {
     const { phone } = req.params;
