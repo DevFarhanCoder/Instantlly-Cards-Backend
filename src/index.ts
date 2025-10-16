@@ -108,7 +108,8 @@ async function startServer() {
     console.log("✅ MongoDB connected successfully!");
 
     // Add routes after DB connection
-    app.use("/api/auth", authRouter);            
+    app.use("/api/auth", authRouter);
+    app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint            
     app.use("/api/cards", cardsRouter);          
     app.use("/api/contacts", contactsRouter);    
     app.use("/api/notifications", notificationsRouter);    
