@@ -595,4 +595,81 @@ router.get("/users/:userIdOrPhone", async (req, res) => {
   }
 });
 
+// GET /api/users/version-check - Check if app version is supported
+router.get("/version-check", async (req, res) => {
+  try {
+    const { version, platform } = req.query;
+    
+    console.log(`📱 Version check request - Version: ${version}, Platform: ${platform}`);
+    
+    // Minimum supported versions for force update
+    const MIN_SUPPORTED_VERSIONS = {
+      android: "1.0.16",  // Current version - will be updated when you want to force update
+      ios: "1.0.16"
+    };
+
+    const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
+    const APP_STORE_URL = "https://apps.apple.com/app/YOUR_APP_ID"; // Update with your iOS app ID
+
+    if (!version || !platform) {
+      return res.status(400).json({
+        success: false,
+        message: "Version and platform are required"
+      });
+    }
+
+    const requestedVersion = version as string;
+    const requestedPlatform = platform as string;
+    const minVersion = MIN_SUPPORTED_VERSIONS[requestedPlatform as keyof typeof MIN_SUPPORTED_VERSIONS];
+
+    if (!minVersion) {
+      return res.json({
+        success: true,
+        updateRequired: false,
+        message: "Platform not configured"
+      });
+    }
+
+    // Compare versions (simple string comparison works for semantic versioning)
+    const isUpdateRequired = compareVersions(requestedVersion, minVersion) < 0;
+
+    console.log(`🔍 Version comparison: ${requestedVersion} vs ${minVersion} - Update required: ${isUpdateRequired}`);
+
+    res.json({
+      success: true,
+      updateRequired: isUpdateRequired,
+      currentVersion: requestedVersion,
+      minimumVersion: minVersion,
+      latestVersion: minVersion, // In production, this could be different from minimum
+      updateUrl: requestedPlatform === 'android' ? PLAY_STORE_URL : APP_STORE_URL,
+      message: isUpdateRequired 
+        ? "Please update to the latest version to continue using the app"
+        : "You are using the latest version"
+    });
+  } catch (error) {
+    console.error("VERSION CHECK ERROR", error);
+    res.status(500).json({
+      success: false,
+      updateRequired: false, // Don't block users on error
+      message: "Error checking version"
+    });
+  }
+});
+
+// Helper function to compare semantic versions (e.g., "1.0.16" vs "1.0.15")
+function compareVersions(version1: string, version2: string): number {
+  const v1Parts = version1.split('.').map(Number);
+  const v2Parts = version2.split('.').map(Number);
+  
+  for (let i = 0; i < Math.max(v1Parts.length, v2Parts.length); i++) {
+    const v1Part = v1Parts[i] || 0;
+    const v2Part = v2Parts[i] || 0;
+    
+    if (v1Part > v2Part) return 1;
+    if (v1Part < v2Part) return -1;
+  }
+  
+  return 0; // Versions are equal
+}
+
 export default router;
