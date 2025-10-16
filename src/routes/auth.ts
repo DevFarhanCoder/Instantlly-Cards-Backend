@@ -519,4 +519,80 @@ router.get("/users/search-by-phone/:phone", async (req, res) => {
   }
 });
 
+// GET /api/users/:userIdOrPhone - Fetch user by MongoDB ID or phone number
+router.get("/users/:userIdOrPhone", async (req, res) => {
+  try {
+    const { userIdOrPhone } = req.params;
+    
+    if (!userIdOrPhone) {
+      return res.status(400).json({ 
+        success: false,
+        message: "User ID or phone number is required" 
+      });
+    }
+
+    console.log(`🔍 Fetching user with ID or phone: ${userIdOrPhone}`);
+
+    let user;
+
+    // Check if it's a valid MongoDB ObjectId (24 hex characters)
+    const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(userIdOrPhone);
+
+    if (isValidObjectId) {
+      // Fetch by MongoDB _id
+      user = await User.findById(userIdOrPhone).select('_id name phone profilePicture about');
+      console.log(`📇 Searched by ObjectId: ${userIdOrPhone}`, user ? '✅ Found' : '❌ Not found');
+    } else {
+      // Assume it's a phone number - normalize and search
+      const normalizedPhone = userIdOrPhone.replace(/[\s\-\(\)]/g, '');
+      
+      const phonePatterns = [
+        normalizedPhone,
+        `+91${normalizedPhone}`,
+        normalizedPhone.replace(/^\+91/, ''),
+        normalizedPhone.replace(/^91/, ''),
+      ];
+
+      console.log(`📱 Searched by phone patterns:`, phonePatterns);
+
+      user = await User.findOne({
+        phone: { $in: phonePatterns }
+      }).select('_id name phone profilePicture about');
+      
+      console.log(`📞 Searched by phone: ${userIdOrPhone}`, user ? '✅ Found' : '❌ Not found');
+    }
+
+    if (!user) {
+      console.log(`❌ User not found with identifier: ${userIdOrPhone}`);
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    console.log(`✅ User fetched successfully:`, {
+      id: user._id,
+      name: user.name,
+      phone: user.phone
+    });
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone,
+        profilePicture: user.profilePicture,
+        about: user.about
+      }
+    });
+  } catch (error) {
+    console.error("FETCH USER ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error while fetching user" 
+    });
+  }
+});
+
 export default router;

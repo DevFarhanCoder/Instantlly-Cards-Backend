@@ -108,7 +108,7 @@ async function startServer() {
     console.log("✅ MongoDB connected successfully!");
 
     // Add routes after DB connection
-    // Last updated: 2025-10-16 14:30 UTC - Added /api/users endpoint for carousel messaging
+    // Last updated: 2025-10-16 15:10 UTC - Added GET /api/users/:id endpoint + search-by-phone
     app.use("/api/auth", authRouter);
     app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint
     console.log("✅ Mounted /api/users route for search-by-phone endpoint");
