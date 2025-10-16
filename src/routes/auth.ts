@@ -454,4 +454,69 @@ router.post("/check-phone", async (req, res) => {
   }
 });
 
+// GET /api/users/search-by-phone/:phone - Search user by phone number
+router.get("/users/search-by-phone/:phone", async (req, res) => {
+  try {
+    const { phone } = req.params;
+    
+    if (!phone) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Phone number is required" 
+      });
+    }
+
+    console.log(`🔍 Searching for user with phone: ${phone}`);
+
+    // Normalize phone number - remove spaces, dashes, parentheses
+    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    
+    // Try different phone number formats
+    const phonePatterns = [
+      normalizedPhone,                                    // As is: 9867477227
+      `+91${normalizedPhone}`,                           // With +91: +919867477227
+      normalizedPhone.replace(/^\+91/, ''),              // Remove +91 if present: 9867477227
+      normalizedPhone.replace(/^91/, ''),                // Remove 91 prefix: 9867477227
+    ];
+
+    console.log(`📱 Trying phone patterns:`, phonePatterns);
+
+    // Search for user with any of these phone number formats
+    const user = await User.findOne({
+      phone: { $in: phonePatterns }
+    }).select('_id name phone profilePicture about');
+
+    if (!user) {
+      console.log(`❌ User not found with phone: ${phone}`);
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found with this phone number" 
+      });
+    }
+
+    console.log(`✅ User found:`, {
+      id: user._id,
+      name: user.name,
+      phone: user.phone
+    });
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone,
+        profilePicture: user.profilePicture,
+        about: user.about
+      }
+    });
+  } catch (error) {
+    console.error("SEARCH USER BY PHONE ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error while searching for user" 
+    });
+  }
+});
+
 export default router;
