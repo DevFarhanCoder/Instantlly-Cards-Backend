@@ -46,7 +46,7 @@ router.post('/send-otp', async (req, res) => {
     otpStore.set(phone, { code, expiresAt, attempts: 0 });
 
     // Prepare SMS message
-    const message = `Your Instantlly verification code is ${code}. It will expire in 5 minutes.`;
+    const message = `Your InstantllyCards verification code is ${code}. It will expire in 5 minutes.`;
 
     try {
       // Send OTP via Fast2SMS
