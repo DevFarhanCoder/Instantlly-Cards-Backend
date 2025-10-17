@@ -2,6 +2,7 @@
 import express from 'express';
 import axios from 'axios';
 import crypto from 'crypto';
+import User from '../models/User';
 
 const router = express.Router();
 
@@ -22,6 +23,45 @@ const otpStore = new Map<string, OTPRecord>();
 function generateOTP(): string {
   return crypto.randomInt(100000, 999999).toString();
 }
+
+// POST /api/auth/check-phone - Check if phone number exists
+router.post('/check-phone', async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required'
+      });
+    }
+
+    console.log('🔍 Checking if phone exists:', phone);
+
+    // Check if user exists with this phone number
+    const existingUser = await User.findOne({ phone });
+
+    if (existingUser) {
+      return res.json({
+        success: true,
+        exists: true,
+        message: 'Phone number is already registered. Please login.'
+      });
+    }
+
+    return res.json({
+      success: true,
+      exists: false,
+      message: 'Phone number is available for registration'
+    });
+  } catch (error: any) {
+    console.error('💥 Check phone error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check phone number'
+    });
+  }
+});
 
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
