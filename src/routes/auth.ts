@@ -604,8 +604,14 @@ router.get("/version-check", async (req, res) => {
     
     // Minimum supported versions for force update
     const MIN_SUPPORTED_VERSIONS = {
-      android: "1.0.16",  // Current version - will be updated when you want to force update
-      ios: "1.0.16"
+      android: "1.0.15",  // Current version - when you release 1.0.16, change this to "1.0.16"
+      ios: "1.0.15"       // This will force users on 1.0.15 to update to 1.0.16
+    };
+
+    // Latest versions available in app stores
+    const LATEST_VERSIONS = {
+      android: "1.0.15",  // Update this when you publish 1.0.16 to Play Store
+      ios: "1.0.15"       // Update this when you publish 1.0.16 to App Store
     };
 
     const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
@@ -621,8 +627,9 @@ router.get("/version-check", async (req, res) => {
     const requestedVersion = version as string;
     const requestedPlatform = platform as string;
     const minVersion = MIN_SUPPORTED_VERSIONS[requestedPlatform as keyof typeof MIN_SUPPORTED_VERSIONS];
+    const latestVersion = LATEST_VERSIONS[requestedPlatform as keyof typeof LATEST_VERSIONS];
 
-    if (!minVersion) {
+    if (!minVersion || !latestVersion) {
       return res.json({
         success: true,
         updateRequired: false,
@@ -634,13 +641,14 @@ router.get("/version-check", async (req, res) => {
     const isUpdateRequired = compareVersions(requestedVersion, minVersion) < 0;
 
     console.log(`🔍 Version comparison: ${requestedVersion} vs ${minVersion} - Update required: ${isUpdateRequired}`);
+    console.log(`📱 Latest available version: ${latestVersion}`);
 
     res.json({
       success: true,
       updateRequired: isUpdateRequired,
       currentVersion: requestedVersion,
       minimumVersion: minVersion,
-      latestVersion: minVersion, // In production, this could be different from minimum
+      latestVersion: latestVersion,
       updateUrl: requestedPlatform === 'android' ? PLAY_STORE_URL : APP_STORE_URL,
       message: isUpdateRequired 
         ? "Please update to the latest version to continue using the app"

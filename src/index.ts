@@ -11,6 +11,7 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
+import otpRouter from "./routes/otp";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
@@ -108,10 +109,12 @@ async function startServer() {
     console.log("✅ MongoDB connected successfully!");
 
     // Add routes after DB connection
-    // Last updated: 2025-10-16 15:10 UTC - Added GET /api/users/:id endpoint + search-by-phone
+    // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
     app.use("/api/auth", authRouter);
+    app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp)
     app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint
     console.log("✅ Mounted /api/users route for search-by-phone endpoint");
+    console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp)");
     app.use("/api/cards", cardsRouter);          
     app.use("/api/contacts", contactsRouter);    
     app.use("/api/notifications", notificationsRouter);    
