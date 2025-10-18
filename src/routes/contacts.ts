@@ -469,4 +469,122 @@ router.get("/categorized", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// Smart sync endpoint - only sync new contacts not already in database
+router.post("/smart-sync", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { contacts } = req.body as { contacts: DeviceContact[] };
+    const userId = req.userId;
+    
+    if (!contacts || !Array.isArray(contacts)) {
+      return res.status(400).json({ error: "Invalid contacts data" });
+    }
+
+    // Normalize phone numbers for consistent matching
+    const normalizedContacts = contacts.map(contact => ({
+      name: contact.name,
+      phoneNumber: contact.phoneNumber.replace(/[\s\-\(\)]/g, '') // Remove formatting
+    }));
+
+    // Get existing contact phone numbers for this user
+    const existingContacts = await Contact.find({ userId }).select('phoneNumber').lean();
+    const existingPhoneNumbers = new Set(existingContacts.map(c => c.phoneNumber));
+
+    // Filter to only NEW contacts (not already in database)
+    const newContacts = normalizedContacts.filter(contact => 
+      !existingPhoneNumbers.has(contact.phoneNumber)
+    );
+
+    console.log(`Smart sync for user ${userId}: ${contacts.length} device contacts, ${existingContacts.length} stored, ${newContacts.length} new`);
+
+    if (newContacts.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: "No new contacts found",
+        stats: {
+          deviceContacts: contacts.length,
+          storedContacts: existingContacts.length,
+          newContacts: 0,
+          syncedContacts: 0
+        }
+      });
+    }
+
+    // For new contacts, check which ones are app users
+    const newPhoneNumbers = newContacts.map(contact => contact.phoneNumber);
+    
+    // Create phone number variations for matching
+    const allPhoneVariations: string[] = [];
+    newPhoneNumbers.forEach(phone => {
+      allPhoneVariations.push(phone); // Original: 9326664680
+      if (phone.startsWith('91') && phone.length === 12) {
+        allPhoneVariations.push(phone.substring(2)); // Remove country code: 9326664680
+      } else if (phone.length === 10) {
+        allPhoneVariations.push('91' + phone); // Add country code: 919326664680
+      }
+    });
+
+    // Find app users with these phone numbers
+    const appUsers = await User.find({
+      phone: { $in: allPhoneVariations },
+      _id: { $ne: userId }
+    }).select('name phone profilePicture about');
+
+    // Create phone to user mapping
+    const phoneToUserMap = new Map();
+    appUsers.forEach(user => {
+      if (user.phone) {
+        const normalizedUserPhone = user.phone.replace(/[\s\-\(\)\+]/g, '');
+        phoneToUserMap.set(user.phone, user);
+        
+        // Also map original contact phone format
+        newPhoneNumbers.forEach(contactPhone => {
+          const normalizedContactPhone = contactPhone.replace(/[\s\-\(\)\+]/g, '');
+          if (normalizedUserPhone === normalizedContactPhone || 
+              normalizedUserPhone === '91' + normalizedContactPhone ||
+              normalizedUserPhone === normalizedContactPhone.substring(2)) {
+            phoneToUserMap.set(contactPhone, user);
+          }
+        });
+      }
+    });
+
+    // Prepare new contacts for bulk insert
+    const contactsToSave = newContacts.map(contact => {
+      const appUser = phoneToUserMap.get(contact.phoneNumber);
+      return {
+        userId,
+        name: contact.name,
+        phoneNumber: contact.phoneNumber,
+        isAppUser: !!appUser,
+        appUserId: appUser ? appUser._id : undefined,
+        lastSynced: new Date(),
+        createdAt: new Date()
+      };
+    });
+
+    // Bulk insert new contacts
+    await Contact.insertMany(contactsToSave);
+
+    // Count app users in new contacts
+    const newAppUserContacts = newContacts.filter(contact => 
+      phoneToUserMap.has(contact.phoneNumber)
+    );
+
+    res.json({ 
+      success: true, 
+      message: `Smart sync completed: added ${newContacts.length} new contacts`,
+      stats: {
+        deviceContacts: contacts.length,
+        storedContacts: existingContacts.length,
+        newContacts: newContacts.length,
+        newAppUsers: newAppUserContacts.length,
+        syncedContacts: newContacts.length
+      }
+    });
+  } catch (error) {
+    console.error("Error in smart sync:", error);
+    res.status(500).json({ error: "Failed to smart sync contacts" });
+  }
+});
+
 export default router;
