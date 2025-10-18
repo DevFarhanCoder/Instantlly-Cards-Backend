@@ -9,6 +9,7 @@
   "dependencies": {
     "@types/multer": "^2.0.0",
     "@types/socket.io": "^3.0.1",
+    "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
@@ -20,6 +21,7 @@
     "mongoose": "^8.5.1",
     "multer": "^2.0.2",
     "socket.io": "^4.8.1",
+    "uuid": "^13.0.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {

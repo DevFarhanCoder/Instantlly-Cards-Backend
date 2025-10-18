@@ -7,8 +7,54 @@ import Group from "../models/Group";
 import Contact from "../models/Contact";
 import { AuthReq, requireAuth } from "../middleware/auth";
 import { sendCardSharingNotification, sendCardCreationNotification } from "../services/pushNotifications";
+import fs from "fs";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
 
 const r = Router();
+
+// Helper function to save Base64 image to file system
+const saveBase64Image = async (base64Data: string, userId: string): Promise<string> => {
+  try {
+    // Check if it's a data URI
+    if (!base64Data.startsWith('data:image/')) {
+      throw new Error('Invalid image data format');
+    }
+
+    // Extract mime type and base64 data
+    const matches = base64Data.match(/^data:image\/([^;]+);base64,(.+)$/);
+    if (!matches) {
+      throw new Error('Invalid Base64 image format');
+    }
+
+    const [, extension, base64] = matches;
+    const buffer = Buffer.from(base64, 'base64');
+
+    // Validate file size (limit to 5MB)
+    if (buffer.length > 5 * 1024 * 1024) {
+      throw new Error('Image size too large (max 5MB)');
+    }
+
+    // Generate unique filename
+    const filename = `${uuidv4()}.${extension}`;
+    const uploadDir = path.join(process.cwd(), 'uploads', 'cards');
+    const filepath = path.join(uploadDir, filename);
+
+    // Ensure upload directory exists
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    // Save file to disk
+    fs.writeFileSync(filepath, buffer);
+
+    // Return relative path for storing in database
+    return `/uploads/cards/${filename}`;
+  } catch (error) {
+    console.error('Error saving Base64 image:', error);
+    throw new Error('Failed to process image');
+  }
+};
 
 // Public feed (no auth) – latest 50 cards
 r.get("/feed/public", async (_req, res) => {
@@ -86,7 +132,23 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
 r.post("/", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
-    const doc = await Card.create({ ...req.body, userId });
+    let cardData = { ...req.body, userId };
+
+    // Handle Base64 image conversion if companyPhoto is provided
+    if (cardData.companyPhoto && cardData.companyPhoto.startsWith('data:image/')) {
+      console.log('🖼️ Processing Base64 image for card...');
+      try {
+        const imagePath = await saveBase64Image(cardData.companyPhoto, userId);
+        cardData.companyPhoto = imagePath;
+        console.log('✅ Image saved successfully:', imagePath);
+      } catch (imageError) {
+        console.error('❌ Failed to process image:', imageError);
+        // Continue without image rather than failing entire card creation
+        cardData.companyPhoto = '';
+      }
+    }
+
+    const doc = await Card.create(cardData);
     
     // Send notifications to contacts who have this user in their contacts
     try {
@@ -138,9 +200,44 @@ r.get("/", async (req: AuthReq, res) => {
 // UPDATE
 r.put("/:id", async (req: AuthReq, res) => {
   try {
+    const userId = req.userId!;
+    let updateData = { ...req.body };
+
+    // Handle Base64 image conversion if companyPhoto is provided
+    if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
+      console.log('🖼️ Processing Base64 image for card update...');
+      try {
+        // Get existing card to potentially delete old image
+        const existingCard = await Card.findOne({ _id: req.params.id, userId });
+        
+        const imagePath = await saveBase64Image(updateData.companyPhoto, userId);
+        updateData.companyPhoto = imagePath;
+        console.log('✅ Image updated successfully:', imagePath);
+
+        // Clean up old image file if it exists and is different
+        if (existingCard?.companyPhoto && 
+            existingCard.companyPhoto !== imagePath && 
+            existingCard.companyPhoto.startsWith('/uploads/')) {
+          try {
+            const oldPath = path.join(process.cwd(), existingCard.companyPhoto);
+            if (fs.existsSync(oldPath)) {
+              fs.unlinkSync(oldPath);
+              console.log('🗑️ Deleted old image:', existingCard.companyPhoto);
+            }
+          } catch (deleteError) {
+            console.error('Warning: Failed to delete old image:', deleteError);
+          }
+        }
+      } catch (imageError) {
+        console.error('❌ Failed to process image:', imageError);
+        // Continue without updating image rather than failing entire update
+        delete updateData.companyPhoto;
+      }
+    }
+
     const doc = await Card.findOneAndUpdate(
-      { _id: req.params.id, userId: req.userId! },
-      req.body,
+      { _id: req.params.id, userId },
+      updateData,
       { new: true }
     );
     if (!doc) return res.status(404).json({ message: "Not found" });

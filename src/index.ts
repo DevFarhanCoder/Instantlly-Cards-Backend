@@ -42,10 +42,15 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json({ limit: "10mb" })); // instead of default
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, '../uploads/profiles');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Create uploads directories if they don't exist
+const profilesDir = path.join(__dirname, '../uploads/profiles');
+const cardsDir = path.join(__dirname, '../uploads/cards');
+
+if (!fs.existsSync(profilesDir)) {
+  fs.mkdirSync(profilesDir, { recursive: true });
+}
+if (!fs.existsSync(cardsDir)) {
+  fs.mkdirSync(cardsDir, { recursive: true });
 }
 
 // Serve static files from uploads directory
