@@ -19,6 +19,7 @@ import messagesRouter, { setSocketIO } from "./routes/messages";
 import groupsRouter from "./routes/groups";
 import chatsRouter from "./routes/chats";
 import adminRouter from "./routes/admin";
+import groupSharingRouter from "./routes/groupSharing";
 import { SocketService } from "./services/socketService";
 
 const app = express();
@@ -126,7 +127,9 @@ async function startServer() {
     app.use("/api/messages", messagesRouter);    
     app.use("/api/groups", groupsRouter);    
     app.use("/api/chats", chatsRouter);
-    app.use("/api/admin", adminRouter);    
+    app.use("/api/admin", adminRouter);
+    app.use("/api/group-sharing", groupSharingRouter);
+    console.log("✅ Mounted /api/group-sharing routes (7 endpoints)");    
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);
