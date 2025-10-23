@@ -5,7 +5,7 @@
 
 const axios = require('axios');
 
-const BACKEND_URL = 'https://instantlly-cards-backend.onrender.com';
+const BACKEND_URL = 'https://instantlly-cards-backend-6ki0.onrender.com';
 
 async function checkBackendLogs() {
   console.log('\n🔍 CHECKING BACKEND LOGS FOR TOKEN REGISTRATION');
