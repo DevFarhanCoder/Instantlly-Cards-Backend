@@ -1,6 +1,7 @@
 import { Schema, model, Document } from 'mongoose';
 
 // Temporary message storage for notifications only - auto-deletes after 15 days
+// Optimized with proper TTL index for automatic cleanup
 export interface ITempMessage extends Document {
   senderId: Schema.Types.ObjectId;
   receiverId?: Schema.Types.ObjectId; // For individual messages
