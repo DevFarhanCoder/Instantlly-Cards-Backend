@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Erlang Message Gateway - Test Client</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 32px; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 30px;
+        }
+        .panel {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .panel h2 {
+            font-size: 20px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover { transform: translateY(-2px); }
+        button:active { transform: translateY(0); }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffeaa7;
+        }
+        .messages {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .message {
+            padding: 8px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            line-height: 1.6;
+        }
+        .message.sent {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .message.received {
+            background: #f1f8e9;
+            border-left: 4px solid #8bc34a;
+        }
+        .message.system {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+        }
+        .message.error {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 11px;
+            margin-top: 4px;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Erlang Message Gateway</h1>
+            <p>Real-time WebSocket Test Client</p>
+        </div>
+
+        <div class="content">
+            <!-- Connection Panel -->
+            <div class="panel">
+                <h2>🔌 Connection</h2>
+                <div id="connectionStatus" class="status disconnected">
+                    ❌ Disconnected
+                </div>
+                
+                <div class="form-group">
+                    <label>WebSocket URL:</label>
+                    <input type="text" id="wsUrl" value="ws://localhost:8080/ws">
+                </div>
+                
+                <div class="form-group">
+                    <label>Your User ID:</label>
+                    <input type="text" id="userId" value="user123" placeholder="e.g., user123">
+                </div>
+                
+                <div class="form-group">
+                    <label>Device ID:</label>
+                    <input type="text" id="deviceId" value="web-browser" placeholder="e.g., web-browser">
+                </div>
+                
+                <button id="connectBtn" onclick="connect()">Connect</button>
+                <button id="disconnectBtn" onclick="disconnect()" style="margin-top: 10px; background: #dc3545;" disabled>Disconnect</button>
+            </div>
+
+            <!-- Send Message Panel -->
+            <div class="panel">
+                <h2>📤 Send Message</h2>
+                
+                <div class="form-group">
+                    <label>Receiver User ID:</label>
+                    <input type="text" id="receiverId" value="user456" placeholder="e.g., user456">
+                </div>
+                
+                <div class="form-group">
+                    <label>Message Content:</label>
+                    <textarea id="messageContent" placeholder="Type your message here...">Hello from Erlang!</textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Message Type:</label>
+                    <input type="text" id="messageType" value="text" placeholder="text, image, video, etc.">
+                </div>
+                
+                <button id="sendBtn" onclick="sendMessage()" disabled>Send Message</button>
+            </div>
+
+            <!-- Message Log Panel -->
+            <div class="panel full-width">
+                <h2>📨 Message Log</h2>
+                <div id="messages" class="messages">
+                    <div class="message system">
+                        <div><strong>System:</strong> Ready to connect...</div>
+                        <div class="timestamp">${new Date().toLocaleTimeString()}</div>
+                    </div>
+                </div>
+                <button onclick="clearMessages()" style="margin-top: 10px; background: #6c757d;">Clear Log</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+
+        function updateStatus(status, message) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.className = 'status ' + status;
+            statusEl.innerHTML = message;
+        }
+
+        function addMessage(type, content, from = 'System') {
+            const messagesEl = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + type;
+            
+            const time = new Date().toLocaleTimeString();
+            messageDiv.innerHTML = `
+                <div><strong>${from}:</strong> ${content}</div>
+                <div class="timestamp">${time}</div>
+            `;
+            
+            messagesEl.appendChild(messageDiv);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function connect() {
+            const wsUrl = document.getElementById('wsUrl').value;
+            const userId = document.getElementById('userId').value;
+            const deviceId = document.getElementById('deviceId').value;
+
+            if (!userId || !deviceId) {
+                alert('Please enter User ID and Device ID');
+                return;
+            }
+
+            updateStatus('connecting', '⏳ Connecting...');
+            addMessage('system', `Connecting to ${wsUrl}...`);
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {
+                    addMessage('system', '✅ WebSocket connected! Authenticating...');
+                    
+                    // Send authentication
+                    const authMsg = {
+                        type: 'auth',
+                        userId: userId,
+                        deviceId: deviceId
+                    };
+                    ws.send(JSON.stringify(authMsg));
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    } catch (e) {
+                        addMessage('error', 'Failed to parse message: ' + event.data);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    addMessage('error', 'WebSocket error: ' + error.message);
+                    updateStatus('disconnected', '❌ Connection error');
+                };
+
+                ws.onclose = () => {
+                    addMessage('system', '❌ WebSocket disconnected');
+                    updateStatus('disconnected', '❌ Disconnected');
+                    isConnected = false;
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('sendBtn').disabled = true;
+                };
+            } catch (error) {
+                addMessage('error', 'Failed to connect: ' + error.message);
+                updateStatus('disconnected', '❌ Connection failed');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'auth_success':
+                    isConnected = true;
+                    updateStatus('connected', '✅ Connected & Authenticated');
+                    addMessage('system', `✅ Authenticated as ${data.userId}`);
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    break;
+
+                case 'new_message':
+                    addMessage('received', 
+                        `📩 ${data.content}<br>
+                        <small>From: ${data.senderId} | Type: ${data.messageType}</small>`,
+                        data.senderId
+                    );
+                    break;
+
+                case 'message_ack':
+                    addMessage('system', `✅ Message ${data.messageId} acknowledged (${data.status})`);
+                    break;
+
+                case 'typing':
+                    addMessage('system', `✍️ ${data.senderId} is ${data.isTyping ? 'typing' : 'stopped typing'}...`);
+                    break;
+
+                case 'presence_update':
+                    const statusIcon = data.status === 'online' ? '🟢' : '🔴';
+                    addMessage('system', `${statusIcon} ${data.userId} is now ${data.status}`);
+                    break;
+
+                case 'error':
+                    addMessage('error', data.message);
+                    break;
+
+                default:
+                    addMessage('received', JSON.stringify(data, null, 2));
+            }
+        }
+
+        function sendMessage() {
+            if (!isConnected || !ws) {
+                alert('Not connected!');
+                return;
+            }
+
+            const receiverId = document.getElementById('receiverId').value;
+            const content = document.getElementById('messageContent').value;
+            const messageType = document.getElementById('messageType').value;
+
+            if (!receiverId || !content) {
+                alert('Please enter receiver ID and message content');
+                return;
+            }
+
+            const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            
+            const message = {
+                type: 'send_message',
+                messageId: messageId,
+                receiverId: receiverId,
+                content: content,
+                messageType: messageType
+            };
+
+            ws.send(JSON.stringify(message));
+            addMessage('sent', `📤 ${content}<br><small>To: ${receiverId} | Type: ${messageType}</small>`, 'You');
+            
+            // Clear content after sending
+            document.getElementById('messageContent').value = '';
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+            addMessage('system', 'Message log cleared');
+        }
+
+        // Enable Enter key to send messages
+        document.getElementById('messageContent').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

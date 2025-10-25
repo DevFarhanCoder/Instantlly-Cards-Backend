@@ -1,0 +1,20 @@
+{application, message_gateway,
+ [{description, "Erlang/OTP Message Gateway for Instantlly"},
+  {vsn, "1.0.0"},
+  {registered, []},
+  {mod, {message_gateway_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    cowboy,
+    jsx,
+    epgsql,
+    eredis,
+    uuid
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.
