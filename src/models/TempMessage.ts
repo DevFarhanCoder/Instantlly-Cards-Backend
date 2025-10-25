@@ -56,8 +56,7 @@ const tempMessageSchema = new Schema<ITempMessage>({
   },
   expiresAt: {
     type: Date,
-    default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), // 15 days from now
-    index: { expireAfterSeconds: 0 } // MongoDB TTL index for automatic deletion
+    default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15 days from now
   }
 });
 
@@ -65,6 +64,9 @@ const tempMessageSchema = new Schema<ITempMessage>({
 tempMessageSchema.index({ receiverId: 1, isDelivered: 1, createdAt: -1 });
 tempMessageSchema.index({ groupId: 1, isDelivered: 1, createdAt: -1 });
 tempMessageSchema.index({ senderId: 1, createdAt: -1 });
+
+// TTL index for automatic deletion after expiration
+tempMessageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Validation: message must have either receiverId OR groupId, not both
 tempMessageSchema.pre('save', function(next) {
