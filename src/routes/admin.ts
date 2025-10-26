@@ -58,6 +58,12 @@ router.get("/stats", adminAuth, async (req: Request, res: Response) => {
       ]
     });
 
+    // Google Play Console stats (update these values manually or via API integration)
+    // You can update these from your Google Play Console dashboard
+    const totalDownloads = 118; // Update from Google Play Console
+    const downloadsTrend = "+742.9% vs previous 30 days"; // Update from Google Play Console
+    const installedAudience = 87; // Currently installed apps
+
     res.json({
       totalUsers,
       totalCards,
@@ -66,7 +72,10 @@ router.get("/stats", adminAuth, async (req: Request, res: Response) => {
       totalContacts,
       totalNotifications,
       newUsersThisWeek,
-      activeUsers
+      activeUsers,
+      totalDownloads,
+      downloadsTrend,
+      installedAudience
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
