@@ -390,9 +390,11 @@ r.post("/:id/share", async (req: AuthReq, res) => {
 });
 
 // GET SENT CARDS
-r.get("/sent", async (req: AuthReq, res) => {
+r.get("/sent", requireAuth, async (req: AuthReq, res) => {
   try {
     const senderId = req.userId!;
+    
+    console.log(`📤 Fetching sent cards for user: ${senderId}`);
     
     // Find all cards shared by this user, populate with card and recipient details
     const sentCards = await SharedCard.find({ senderId })
@@ -401,35 +403,47 @@ r.get("/sent", async (req: AuthReq, res) => {
       .sort({ sentAt: -1 })
       .lean();
 
-    // Format the response
-    const formattedCards = sentCards.map((share: any) => ({
-      _id: share._id,
-      cardId: share.cardId._id,
-      recipientId: share.recipientId._id,
-      recipientName: share.recipientName,
-      recipientProfilePicture: share.recipientId.profilePicture,
-      cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
-      sentAt: share.sentAt,
-      status: share.status,
-      message: share.message,
-      viewedAt: share.viewedAt
-    }));
+    console.log(`✅ Found ${sentCards.length} sent cards for user: ${senderId}`);
+
+    // Format the response - filter out cards with null/deleted references
+    const formattedCards = sentCards
+      .filter((share: any) => share.cardId && share.recipientId) // Filter out null references
+      .map((share: any) => ({
+        _id: share._id,
+        cardId: share.cardId._id,
+        recipientId: share.recipientId._id,
+        recipientName: share.recipientName || share.recipientId.name || 'Unknown',
+        recipientProfilePicture: share.recipientId.profilePicture || null,
+        cardTitle: share.cardTitle || share.cardId.companyName || share.cardId.name || 'Untitled Card',
+        cardPhoto: share.cardId.companyPhoto || null,
+        sentAt: share.sentAt,
+        status: share.status || 'sent',
+        message: share.message || '',
+        viewedAt: share.viewedAt || null
+      }));
+
+    console.log(`📊 Returning ${formattedCards.length} formatted sent cards`);
 
     res.json({
       success: true,
       data: formattedCards
     });
   } catch (err) {
-    console.error("GET SENT CARDS ERROR", err);
-    res.status(500).json({ message: "Failed to fetch sent cards" });
+    console.error("❌ GET SENT CARDS ERROR:", err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch sent cards",
+      error: err instanceof Error ? err.message : 'Unknown error'
+    });
   }
 });
 
 // GET RECEIVED CARDS - Cards that have been shared with the current user
-r.get("/received", async (req: AuthReq, res) => {
+r.get("/received", requireAuth, async (req: AuthReq, res) => {
   try {
     const recipientId = req.userId!;
+    
+    console.log(`📥 Fetching received cards for user: ${recipientId}`);
     
     // Find all cards shared with this user, populate with card and sender details
     const receivedCards = await SharedCard.find({ recipientId })
@@ -438,30 +452,40 @@ r.get("/received", async (req: AuthReq, res) => {
       .sort({ sentAt: -1 })
       .lean();
 
-    // Format the response
-    const formattedCards = receivedCards.map((share: any) => ({
-      _id: share._id,
-      cardId: share.cardId._id,
-      senderId: share.senderId._id,
-      senderName: share.senderName,
-      senderProfilePicture: share.senderId.profilePicture,
-      cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
-      receivedAt: share.sentAt, // Use sentAt as receivedAt
-      sentAt: share.sentAt,
-      isViewed: share.status === 'viewed',
-      status: share.status,
-      message: share.message,
-      viewedAt: share.viewedAt
-    }));
+    console.log(`✅ Found ${receivedCards.length} received cards for user: ${recipientId}`);
+
+    // Format the response - filter out cards with null/deleted references
+    const formattedCards = receivedCards
+      .filter((share: any) => share.cardId && share.senderId) // Filter out null references
+      .map((share: any) => ({
+        _id: share._id,
+        cardId: share.cardId._id,
+        senderId: share.senderId._id,
+        senderName: share.senderName || share.senderId.name || 'Unknown',
+        senderProfilePicture: share.senderId.profilePicture || null,
+        cardTitle: share.cardTitle || share.cardId.companyName || share.cardId.name || 'Untitled Card',
+        cardPhoto: share.cardId.companyPhoto || null,
+        receivedAt: share.sentAt, // Use sentAt as receivedAt
+        sentAt: share.sentAt,
+        isViewed: share.status === 'viewed',
+        status: share.status || 'sent',
+        message: share.message || '',
+        viewedAt: share.viewedAt || null
+      }));
+
+    console.log(`📊 Returning ${formattedCards.length} formatted received cards`);
 
     res.json({
       success: true,
       data: formattedCards
     });
   } catch (err) {
-    console.error("GET RECEIVED CARDS ERROR", err);
-    res.status(500).json({ message: "Failed to fetch received cards" });
+    console.error("❌ GET RECEIVED CARDS ERROR:", err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch received cards",
+      error: err instanceof Error ? err.message : 'Unknown error'
+    });
   }
 });
 
