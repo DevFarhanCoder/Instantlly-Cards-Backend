@@ -60,9 +60,9 @@ router.get("/stats", adminAuth, async (req: Request, res: Response) => {
 
     // Google Play Console stats (update these values manually or via API integration)
     // You can update these from your Google Play Console dashboard
-    const totalDownloads = 118; // Update from Google Play Console
-    const downloadsTrend = "+742.9% vs previous 30 days"; // Update from Google Play Console
-    const installedAudience = 87; // Currently installed apps
+    const totalDownloads = 123; // User acquisition from Google Play Console
+    const downloadsTrend = "+623.5% vs previous 30 days"; // Update from Google Play Console
+    const installedAudience = 89; // Currently installed apps
 
     res.json({
       totalUsers,
