@@ -9,7 +9,7 @@ import fs from "fs";
 import mongoose from "mongoose";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { connectDB } from "./db";
+import { connectDB, getDBInfo } from "./db";
 import authRouter from "./routes/auth";
 import otpRouter from "./routes/otp";
 import cardsRouter from "./routes/cards";
@@ -82,10 +82,11 @@ if (!fs.existsSync(cardsDir)) {
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// single health route
+// Enhanced health route with DocumentDB support
 app.get("/api/health", async (_req: Request, res: Response) => {
   try {
-    // Check database connection
+    // Get enhanced database information
+    const dbInfo = getDBInfo();
     const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
     let dbPing = "failed";
     
@@ -100,13 +101,15 @@ app.get("/api/health", async (_req: Request, res: Response) => {
     
     res.status(200).json({ 
       ok: true, 
-      database: "mongodb", 
+      database: dbInfo.type, // "AWS DocumentDB" or "MongoDB Atlas"
       dbStatus: dbStatus,
       dbPing: dbPing,
+      dbHost: dbInfo.host,
       ts: Date.now(), 
-      version: "1.5", // Simple signup - only name, phone, password
+      version: "1.6", // Enhanced with DocumentDB support
       hasJwtSecret: !!process.env.JWT_SECRET,
-      hasMongoUri: !!process.env.MONGODB_URI
+      hasMongoUri: !!process.env.MONGODB_URI,
+      hasDocumentDbUri: !!process.env.DOCUMENTDB_URI
     });
   } catch (error) {
     console.error("Health check failed:", error);
@@ -118,15 +121,20 @@ app.get("/api/health", async (_req: Request, res: Response) => {
   }
 });
 
-// Debug endpoint to check environment variables
+// Enhanced debug endpoint with DocumentDB support
 app.get("/api/debug", (_req: Request, res: Response) => {
+  const dbInfo = getDBInfo();
   res.status(200).json({ 
     hasJwtSecret: !!process.env.JWT_SECRET,
     jwtSecretLength: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
     hasMongoUri: !!process.env.MONGODB_URI,
+    hasDocumentDbUri: !!process.env.DOCUMENTDB_URI,
     hasExpoToken: !!process.env.EXPO_ACCESS_TOKEN,
     nodeEnv: process.env.NODE_ENV || 'not set',
-    port: process.env.PORT || 'not set'
+    port: process.env.PORT || 'not set',
+    currentDatabase: dbInfo.type,
+    dbStatus: dbInfo.status,
+    dbHost: dbInfo.host
   });
 });
 
@@ -135,9 +143,14 @@ const port = Number(process.env.PORT) || 8080;
 
 async function startServer() {
   try {
-    console.log("🔄 Connecting to MongoDB...");
+    console.log("🔄 Initializing database connection...");
     await connectDB();
-    console.log("✅ MongoDB connected successfully!");
+    
+    // Log the actual database being used
+    const dbInfo = getDBInfo();
+    console.log(`✅ Database connected successfully!`);
+    console.log(`📊 Database Type: ${dbInfo.type}`);
+    console.log(`🌐 Database Host: ${dbInfo.host}`);
 
     // Add routes after DB connection
     // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
