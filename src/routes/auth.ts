@@ -348,15 +348,47 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
-// PUT /api/auth/update-profile - Update user profile
+// PUT /api/auth/update-profile - Update user profile (including Base64 profile picture)
 router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { name, phone, about } = req.body;
+    const { name, phone, about, profilePicture } = req.body;
     const userId = req.userId;
+
+    console.log('📝 Update profile request:', {
+      userId,
+      hasName: !!name,
+      hasPhone: !!phone,
+      hasAbout: !!about,
+      hasProfilePicture: !!profilePicture,
+      profilePictureLength: profilePicture?.length,
+      profilePicturePrefix: profilePicture?.substring(0, 30)
+    });
 
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (about !== undefined) updateData.about = about;
+    
+    // Handle Base64 profile picture
+    if (profilePicture !== undefined) {
+      if (profilePicture.startsWith('data:image/')) {
+        // Store Base64 directly in MongoDB
+        console.log('🖼️ Storing profile picture as Base64 in MongoDB, length:', profilePicture.length);
+        updateData.profilePicture = profilePicture;
+      } else if (profilePicture === '' || profilePicture === null) {
+        // Allow clearing profile picture
+        console.log('🗑️ Clearing profile picture');
+        updateData.profilePicture = '';
+      } else {
+        // Keep existing URL format for backward compatibility
+        console.log('🔗 Storing profile picture URL');
+        updateData.profilePicture = profilePicture;
+      }
+    }
+    
+    console.log('💾 Update data:', {
+      ...updateData,
+      profilePicture: updateData.profilePicture ? `${updateData.profilePicture.substring(0, 30)}... (${updateData.profilePicture.length} chars)` : undefined
+    });
     
     // Handle phone number update with validation
     if (phone !== undefined) {
@@ -380,6 +412,28 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    console.log('✅ User updated:', {
+      _id: user._id,
+      name: user.name,
+      profilePictureLength: user.profilePicture?.length,
+      profilePicturePrefix: user.profilePicture?.substring(0, 30)
+    });
+
+    // If profile picture was updated, update all contacts who have this user
+    if (profilePicture !== undefined) {
+      try {
+        console.log('🔄 Updating profile picture in contacts collection...');
+        await Contact.updateMany(
+          { appUserId: userId },
+          { $set: { profilePicture: updateData.profilePicture } }
+        );
+        console.log('✅ Profile picture updated in contacts');
+      } catch (contactError) {
+        console.error('⚠️ Error updating contacts:', contactError);
+        // Continue anyway - user profile is updated
+      }
     }
 
     res.json({
