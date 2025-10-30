@@ -658,14 +658,14 @@ router.get("/version-check", async (req, res) => {
     
     // Minimum supported versions for force update
     const MIN_SUPPORTED_VERSIONS = {
-      android: "1.0.15",  // Current version - when you release 1.0.16, change this to "1.0.16"
-      ios: "1.0.15"       // This will force users on 1.0.15 to update to 1.0.16
+      android: "1.0.15",  // Minimum supported version - users below this will be forced to update
+      ios: "1.0.15"       // Keep this at 1.0.15 to allow older versions
     };
 
     // Latest versions available in app stores
     const LATEST_VERSIONS = {
-      android: "1.0.15",  // Update this when you publish 1.0.16 to Play Store
-      ios: "1.0.15"       // Update this when you publish 1.0.16 to App Store
+      android: "1.0.18",  // Current latest version in development
+      ios: "1.0.18"       // Current latest version in development
     };
 
     const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
