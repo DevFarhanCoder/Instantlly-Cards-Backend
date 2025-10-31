@@ -6,16 +6,16 @@ const schema = new mongoose.Schema(
 
     // Personal
     name: { type: String, required: true, trim: true },
-    designation: { type: String, default: "" },
+    gender: { type: String, default: "", enum: ["", "Male", "Female"] },
     personalCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     personalPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     email: { type: String, default: "" },
-    website: { type: String, default: "" },
     location: { type: String, default: "" },
     mapsLink: { type: String, default: "" },
 
     // Business
     companyName: { type: String, default: "" },
+    designation: { type: String, default: "" },
     companyCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     companyPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     companyEmail: { type: String, default: "" },
