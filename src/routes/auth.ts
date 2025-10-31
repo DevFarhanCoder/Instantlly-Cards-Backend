@@ -664,8 +664,8 @@ router.get("/version-check", async (req, res) => {
 
     // Latest versions available in app stores
     const LATEST_VERSIONS = {
-      android: "1.0.18",  // Current latest version in development
-      ios: "1.0.18"       // Current latest version in development
+      android: "1.0.20",  // Current latest version (update when publishing to Play Store)
+      ios: "1.0.20"       // Current latest version (update when publishing to App Store)
     };
 
     const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
