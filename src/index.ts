@@ -19,6 +19,7 @@ import messagesRouter, { setSocketIO } from "./routes/messages";
 import groupsRouter from "./routes/groups";
 import chatsRouter from "./routes/chats";
 import adminRouter from "./routes/admin";
+import adminAuthRouter from "./routes/adminAuth";
 import groupSharingRouter from "./routes/groupSharing";
 import adsRouter from "./routes/ads";
 import { SocketService } from "./services/socketService";
@@ -129,6 +130,8 @@ async function startServer() {
     app.use("/api/groups", groupsRouter);    
     app.use("/api/chats", chatsRouter);
     app.use("/api/admin", adminRouter);
+    app.use("/api/admin-auth", adminAuthRouter);
+    console.log("✅ Mounted /api/admin-auth routes (admin login/verification)");
     app.use("/api/group-sharing", groupSharingRouter);
     console.log("✅ Mounted /api/group-sharing routes (7 endpoints)");    
     app.use("/api/ads", adsRouter);
