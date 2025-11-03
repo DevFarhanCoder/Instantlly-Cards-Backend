@@ -44,7 +44,7 @@ const formatSession = (session: any) => ({
  */
 router.post("/create", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { code, adminId, adminName, adminPhone, adminPhoto, expirationMinutes = 10, allowParticipantSharing = true } = req.body;
+    const { code, adminId, adminName, adminPhone, adminPhoto, expirationMinutes = 10, allowParticipantSharing = false } = req.body;
 
     console.log("📝 Creating group session:", { code, adminId, adminName, adminPhone, allowParticipantSharing });
 

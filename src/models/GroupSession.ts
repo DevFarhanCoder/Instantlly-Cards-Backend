@@ -63,7 +63,7 @@ const GroupSessionSchema = new Schema<IGroupSession>({
   },
   allowParticipantSharing: { 
     type: Boolean, 
-    default: true // Default: everyone shares with everyone (current behavior)
+    default: false // Default: only admin shares (more controlled, admin must opt-in for open sharing)
   },
   createdAt: { type: Date, default: Date.now },
   expiresAt: { 
