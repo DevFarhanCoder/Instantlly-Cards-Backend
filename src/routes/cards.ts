@@ -355,20 +355,22 @@ r.get("/sent", async (req: AuthReq, res) => {
       .sort({ sentAt: -1 })
       .lean();
 
-    // Format the response
-    const formattedCards = sentCards.map((share: any) => ({
-      _id: share._id,
-      cardId: share.cardId._id,
-      recipientId: share.recipientId._id,
-      recipientName: share.recipientName,
-      recipientProfilePicture: share.recipientId.profilePicture,
-      cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
-      sentAt: share.sentAt,
-      status: share.status,
-      message: share.message,
-      viewedAt: share.viewedAt
-    }));
+    // Format the response - filter out cards with deleted recipients/cards
+    const formattedCards = sentCards
+      .filter((share: any) => share.recipientId && share.cardId) // Skip if recipient or card was deleted
+      .map((share: any) => ({
+        _id: share._id,
+        cardId: share.cardId._id,
+        recipientId: share.recipientId._id,
+        recipientName: share.recipientName,
+        recipientProfilePicture: share.recipientId.profilePicture,
+        cardTitle: share.cardTitle,
+        cardPhoto: share.cardId.companyPhoto,
+        sentAt: share.sentAt,
+        status: share.status,
+        message: share.message,
+        viewedAt: share.viewedAt
+      }));
 
     res.json({
       success: true,
@@ -392,22 +394,24 @@ r.get("/received", async (req: AuthReq, res) => {
       .sort({ sentAt: -1 })
       .lean();
 
-    // Format the response
-    const formattedCards = receivedCards.map((share: any) => ({
-      _id: share._id,
-      cardId: share.cardId._id,
-      senderId: share.senderId._id,
-      senderName: share.senderName,
-      senderProfilePicture: share.senderId.profilePicture,
-      cardTitle: share.cardTitle,
-      cardPhoto: share.cardId.companyPhoto,
-      receivedAt: share.sentAt, // Use sentAt as receivedAt
-      sentAt: share.sentAt,
-      isViewed: share.status === 'viewed',
-      status: share.status,
-      message: share.message,
-      viewedAt: share.viewedAt
-    }));
+    // Format the response - filter out cards with deleted senders/cards
+    const formattedCards = receivedCards
+      .filter((share: any) => share.senderId && share.cardId) // Skip if sender or card was deleted
+      .map((share: any) => ({
+        _id: share._id,
+        cardId: share.cardId._id,
+        senderId: share.senderId._id,
+        senderName: share.senderName,
+        senderProfilePicture: share.senderId.profilePicture,
+        cardTitle: share.cardTitle,
+        cardPhoto: share.cardId.companyPhoto,
+        receivedAt: share.sentAt, // Use sentAt as receivedAt
+        sentAt: share.sentAt,
+        isViewed: share.status === 'viewed',
+        status: share.status,
+        message: share.message,
+        viewedAt: share.viewedAt
+      }));
 
     res.json({
       success: true,
