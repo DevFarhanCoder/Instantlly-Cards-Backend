@@ -47,11 +47,11 @@ router.post("/create", requireAuth, async (req: Request, res: Response) => {
 
     console.log("📝 Creating group session:", { code, adminId, adminName, adminPhone });
 
-    // Validate required fields
-    if (!code || !adminId || !adminName || !adminPhone) {
+    // Validate required fields (phone is optional)
+    if (!code || !adminId || !adminName) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: code, adminId, adminName, adminPhone"
+        error: "Missing required fields: code, adminId, adminName"
       });
     }
 
@@ -120,11 +120,11 @@ router.post("/join", requireAuth, async (req: Request, res: Response) => {
 
     console.log("🔗 Joining group session:", { code, userId, userName, userPhone });
 
-    // Validate required fields
-    if (!code || !userId || !userName || !userPhone) {
+    // Validate required fields (phone is optional)
+    if (!code || !userId || !userName) {
       return res.status(400).json({
         success: false,
-        error: "Missing required fields: code, userId, userName, userPhone"
+        error: "Missing required fields: code, userId, userName"
       });
     }
 
