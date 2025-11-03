@@ -20,6 +20,7 @@ export interface IGroupSession extends Document {
   adminPhoto?: string;
   participants: IParticipant[];
   status: "waiting" | "connected" | "sharing" | "completed" | "expired";
+  allowParticipantSharing: boolean; // If false, only admin shares with all, and admin receives from all
   createdAt: Date;
   expiresAt: Date;
   isActive: boolean;
@@ -59,6 +60,10 @@ const GroupSessionSchema = new Schema<IGroupSession>({
     enum: ["waiting", "connected", "sharing", "completed", "expired"],
     default: "waiting",
     index: true
+  },
+  allowParticipantSharing: { 
+    type: Boolean, 
+    default: true // Default: everyone shares with everyone (current behavior)
   },
   createdAt: { type: Date, default: Date.now },
   expiresAt: { 

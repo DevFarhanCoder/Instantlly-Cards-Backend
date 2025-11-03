@@ -32,6 +32,7 @@ const formatSession = (session: any) => ({
   adminPhoto: session.adminPhoto,
   participants: session.participants.map(formatParticipant),
   status: session.status,
+  allowParticipantSharing: session.allowParticipantSharing, // Admin control for sharing permissions
   createdAt: session.createdAt,
   expiresAt: session.expiresAt,
   isActive: session.isActive
@@ -43,9 +44,9 @@ const formatSession = (session: any) => ({
  */
 router.post("/create", requireAuth, async (req: Request, res: Response) => {
   try {
-    const { code, adminId, adminName, adminPhone, adminPhoto, expirationMinutes = 10 } = req.body;
+    const { code, adminId, adminName, adminPhone, adminPhoto, expirationMinutes = 10, allowParticipantSharing = true } = req.body;
 
-    console.log("📝 Creating group session:", { code, adminId, adminName, adminPhone });
+    console.log("📝 Creating group session:", { code, adminId, adminName, adminPhone, allowParticipantSharing });
 
     // Validate required fields (phone is optional)
     if (!code || !adminId || !adminName) {
@@ -88,6 +89,7 @@ router.post("/create", requireAuth, async (req: Request, res: Response) => {
       adminPhoto,
       participants: [adminParticipant],
       status: "waiting",
+      allowParticipantSharing, // Admin controls if participants can share with each other
       expiresAt,
       isActive: true
     });
@@ -384,14 +386,37 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
         continue;
       }
 
-      // Share with all other participants
-      for (const toParticipant of session.participants) {
-        const toUserId = toParticipant.userId;
-
-        // Don't share with yourself
-        if (fromUserId.toString() === toUserId.toString()) {
-          continue;
+      // Determine who to share with based on admin permission
+      let recipientsToShareWith: typeof session.participants;
+      
+      if (session.allowParticipantSharing) {
+        // Mode 1: Everyone shares with everyone (current behavior)
+        recipientsToShareWith = session.participants.filter(
+          p => p.userId.toString() !== fromUserId.toString()
+        );
+        console.log(`📤 ${fromParticipant.userName} sharing with all participants (full exchange mode)`);
+      } else {
+        // Mode 2: Hub-spoke model (admin-controlled)
+        const isAdmin = fromUserId.toString() === session.adminId.toString();
+        
+        if (isAdmin) {
+          // Admin shares with all participants
+          recipientsToShareWith = session.participants.filter(
+            p => p.userId.toString() !== session.adminId.toString()
+          );
+          console.log(`📤 Admin ${fromParticipant.userName} sharing with all participants`);
+        } else {
+          // Non-admin participants only share with admin
+          recipientsToShareWith = session.participants.filter(
+            p => p.userId.toString() === session.adminId.toString()
+          );
+          console.log(`📤 ${fromParticipant.userName} sharing with admin only (restricted mode)`);
         }
+      }
+
+      // Share with determined recipients
+      for (const toParticipant of recipientsToShareWith) {
+        const toUserId = toParticipant.userId;
 
         // Share each card
         for (const cardId of cardsToShare) {
