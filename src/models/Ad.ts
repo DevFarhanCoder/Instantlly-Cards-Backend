@@ -71,6 +71,9 @@ AdSchema.index({ startDate: 1, endDate: 1 });
 // Index for sorting by priority and createdAt (prevents memory limit error)
 AdSchema.index({ priority: -1, createdAt: -1 });
 
+// Index for admin list sorted by createdAt
+AdSchema.index({ createdAt: -1 });
+
 // Compound index for active ads query with sort optimization
 AdSchema.index({ startDate: 1, endDate: 1, priority: -1, createdAt: -1 });
 

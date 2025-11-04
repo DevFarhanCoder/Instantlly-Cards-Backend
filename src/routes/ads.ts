@@ -129,7 +129,9 @@ router.get("/", async (req: AuthReq, res: Response) => {
   try {
     const ads = await Ad.find({})
       .sort({ createdAt: -1 })
-      .lean();
+      .limit(1000) // Limit to prevent memory issues
+      .lean()
+      .exec();
 
     res.json({
       success: true,
