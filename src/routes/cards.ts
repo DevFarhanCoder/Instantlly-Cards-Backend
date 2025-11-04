@@ -197,6 +197,36 @@ r.get("/", async (req: AuthReq, res) => {
   res.json({ data: items });
 });
 
+// GET SINGLE CARD BY ID (for viewing any card)
+r.get("/:id", async (req: AuthReq, res) => {
+  try {
+    const cardId = req.params.id;
+    
+    // Find the card and populate user details
+    const card = await Card.findById(cardId)
+      .populate('userId', 'name profilePicture')
+      .lean();
+    
+    if (!card) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Card not found" 
+      });
+    }
+
+    res.json({ 
+      success: true,
+      data: card 
+    });
+  } catch (err) {
+    console.error("GET CARD BY ID ERROR", err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch card" 
+    });
+  }
+});
+
 // UPDATE
 r.put("/:id", async (req: AuthReq, res) => {
   try {
