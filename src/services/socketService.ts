@@ -161,7 +161,7 @@ export class SocketService {
     });
   }
 
-  private handleUserJoin(socket: any) {
+  private async handleUserJoin(socket: any) {
     const user: SocketUser = {
       userId: socket.userId,
       socketId: socket.id,
@@ -188,6 +188,47 @@ export class SocketService {
     }));
 
     socket.emit('online_users', onlineUsersList);
+    
+    // Deliver pending messages that were sent while user was offline
+    try {
+      const pendingMessages = await Message.find({
+        receiver: socket.userId,
+        isDelivered: false,
+        isPendingDelivery: true
+      }).populate('sender', 'name profilePicture email').sort({ createdAt: 1 });
+      
+      console.log(`📬 Found ${pendingMessages.length} pending messages for user ${socket.user.name}`);
+      
+      for (const message of pendingMessages) {
+        // Send message to user
+        socket.emit('new_message', {
+          ...message.toObject(),
+          conversationId: message.conversationId
+        });
+        
+        // Mark as delivered
+        message.isDelivered = true;
+        message.deliveredAt = new Date();
+        message.isPendingDelivery = false;
+        await message.save();
+        
+        // Notify sender about delivery
+        const senderId = message.sender && typeof message.sender === 'object' ? message.sender._id : message.sender;
+        const senderSocket = this.onlineUsers.get(senderId?.toString() || '');
+        if (senderSocket) {
+          this.io.to(senderSocket.socketId).emit('message_delivered', {
+            messageId: message._id?.toString() || '',
+            localMessageId: message.localMessageId,
+            status: 'delivered',
+            deliveredAt: message.deliveredAt
+          });
+        }
+        
+        console.log(`✅ Delivered pending message ${message._id} to ${socket.user.name}`);
+      }
+    } catch (error) {
+      console.error('Error delivering pending messages:', error);
+    }
   }
 
   private async handlePrivateMessage(socket: any, data: MessageData) {
@@ -232,6 +273,14 @@ export class SocketService {
         message.deliveredAt = new Date();
         message.isPendingDelivery = false;
         await message.save();
+        
+        // Emit delivered status to sender
+        this.io.to(socket.id).emit('message_delivered', {
+          messageId: message._id?.toString(),
+          localMessageId: data.localMessageId,
+          status: 'delivered',
+          deliveredAt: message.deliveredAt
+        });
       }
 
       // Send confirmation to sender

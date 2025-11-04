@@ -550,6 +550,48 @@ router.post('/mark-delivered', requireAuth, async (req: AuthReq, res: Response) 
   }
 });
 
+// Mark messages as read
+router.post('/mark-read', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { messageIds } = req.body;
+    const currentUserId = req.userId;
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!messageIds || !Array.isArray(messageIds)) {
+      return res.status(400).json({ error: 'Message IDs array is required' });
+    }
+
+    // Mark messages as read in Message collection
+    const result = await mongoose.model('Message').updateMany(
+      {
+        _id: { $in: messageIds },
+        receiver: currentUserId,
+        isRead: false
+      },
+      {
+        $set: {
+          isRead: true,
+          readAt: new Date()
+        }
+      }
+    );
+
+    console.log(`👁️ Marked ${result.modifiedCount} messages as read for user ${currentUserId}`);
+
+    res.json({
+      success: true,
+      markedCount: result.modifiedCount,
+      message: 'Messages marked as read'
+    });
+  } catch (error) {
+    console.error('Mark read error:', error);
+    res.status(500).json({ error: 'Failed to mark messages as read' });
+  }
+});
+
 // Clean up expired messages manually (MongoDB TTL should handle this automatically)
 router.delete('/cleanup-expired', requireAuth, async (req: AuthReq, res: Response) => {
   try {
