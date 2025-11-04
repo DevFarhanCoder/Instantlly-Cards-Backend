@@ -453,12 +453,17 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
             }
 
             // Create CardShare record (for duplicate tracking)
-            await CardShare.create({
-              sessionId: session._id,
-              fromUserId,
-              toUserId,
-              cardId
-            });
+            try {
+              await CardShare.create({
+                sessionId: session._id,
+                fromUserId,
+                toUserId,
+                cardId
+              });
+              console.log(`📝 CardShare tracking record created for card ${cardId}`);
+            } catch (cardShareError: any) {
+              console.error(`❌ Failed to create CardShare record:`, cardShareError);
+            }
 
             // Create SharedCard record (actual card sharing)
             const sharedCard = await SharedCard.create({
@@ -472,6 +477,8 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
               senderName: fromParticipant.userName,
               recipientName: toParticipant.userName
             });
+            
+            console.log(`✅ SharedCard created with ID: ${sharedCard._id}`);
 
             console.log(`✅ Shared card ${cardId} from ${fromParticipant.userName} to ${toParticipant.userName}`);
 
