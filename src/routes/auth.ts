@@ -656,16 +656,11 @@ router.get("/version-check", async (req, res) => {
     
     console.log(`📱 Version check request - Version: ${version}, Platform: ${platform}`);
     
-    // Minimum supported versions for force update
-    const MIN_SUPPORTED_VERSIONS = {
-      android: "1.0.15",  // Minimum supported version - users below this will be forced to update
-      ios: "1.0.15"       // Keep this at 1.0.15 to allow older versions
-    };
-
-    // Latest versions available in app stores
+    // ⚠️ FORCE UPDATE POLICY: Everyone must have the LATEST version
+    // Simply update these versions when you publish to app stores
     const LATEST_VERSIONS = {
-      android: "1.0.20",  // Current latest version (update when publishing to Play Store)
-      ios: "1.0.20"       // Current latest version (update when publishing to App Store)
+      android: "1.0.24",  // ← Update this when publishing new version to Play Store
+      ios: "1.0.24"       // ← Update this when publishing new version to App Store
     };
 
     const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
@@ -680,10 +675,9 @@ router.get("/version-check", async (req, res) => {
 
     const requestedVersion = version as string;
     const requestedPlatform = platform as string;
-    const minVersion = MIN_SUPPORTED_VERSIONS[requestedPlatform as keyof typeof MIN_SUPPORTED_VERSIONS];
     const latestVersion = LATEST_VERSIONS[requestedPlatform as keyof typeof LATEST_VERSIONS];
 
-    if (!minVersion || !latestVersion) {
+    if (!latestVersion) {
       return res.json({
         success: true,
         updateRequired: false,
@@ -691,21 +685,22 @@ router.get("/version-check", async (req, res) => {
       });
     }
 
-    // Compare versions (simple string comparison works for semantic versioning)
-    const isUpdateRequired = compareVersions(requestedVersion, minVersion) < 0;
+    // Force update if user's version is NOT the latest version
+    // Even 1.0.23 will be forced to update to 1.0.24
+    const isUpdateRequired = compareVersions(requestedVersion, latestVersion) < 0;
 
-    console.log(`🔍 Version comparison: ${requestedVersion} vs ${minVersion} - Update required: ${isUpdateRequired}`);
-    console.log(`📱 Latest available version: ${latestVersion}`);
+    console.log(`🔍 Version comparison: ${requestedVersion} vs ${latestVersion} (latest)`);
+    console.log(`⚠️ Update required: ${isUpdateRequired} - Policy: Must have latest version`);
 
     res.json({
       success: true,
       updateRequired: isUpdateRequired,
       currentVersion: requestedVersion,
-      minimumVersion: minVersion,
+      minimumVersion: latestVersion, // No separate minimum - latest IS the minimum
       latestVersion: latestVersion,
       updateUrl: requestedPlatform === 'android' ? PLAY_STORE_URL : APP_STORE_URL,
       message: isUpdateRequired 
-        ? "Please update to the latest version to continue using the app"
+        ? `Please update to version ${latestVersion} to continue using the app`
         : "You are using the latest version"
     });
   } catch (error) {
