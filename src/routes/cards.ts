@@ -65,7 +65,7 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
-// CONTACTS FEED - Get cards from my contacts AND my own cards (OPTIMIZED)
+// CONTACTS FEED - Get cards from my contacts AND my own cards (OPTIMIZED WITH CACHING)
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
@@ -88,7 +88,7 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Add current user's ID to see their own cards too
     const allUserIds = [userId, ...contactUserIds];
     
-    console.log(`� [${userId}] Found ${contactUserIds.length} contacts on app`);
+    console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app`);
     
     // Get cards from contacts AND own cards (optimized with lean and select)
     const allCards = await Card.find({
@@ -106,6 +106,19 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${ownCards.length} own + ${contactCards.length} from contacts = ${allCards.length} total`);
+    
+    // Generate ETag based on card IDs and update times for browser caching
+    const etag = `"${allCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${userId}] Client has cached version - returning 304 Not Modified`);
+      return res.status(304).end();
+    }
+    
+    // Set cache headers
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
     
     res.json({ 
       success: true,
