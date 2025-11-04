@@ -76,6 +76,51 @@ router.post("/track-click/:id", async (req: Request, res: Response) => {
 
 router.use(requireAuth);
 
+// GET /api/ads/analytics/summary - Get analytics summary (admin)
+// MUST be before /:id route to avoid matching "analytics" as an id
+router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
+  try {
+    const totalAds = await Ad.countDocuments();
+    const now = new Date();
+    const activeAds = await Ad.countDocuments({
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    });
+    
+    const analytics = await Ad.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalImpressions: { $sum: "$impressions" },
+          totalClicks: { $sum: "$clicks" }
+        }
+      }
+    ]);
+
+    const summary = {
+      totalAds,
+      activeAds,
+      expiredAds: totalAds - activeAds,
+      totalImpressions: analytics[0]?.totalImpressions || 0,
+      totalClicks: analytics[0]?.totalClicks || 0,
+      clickThroughRate: analytics[0]?.totalImpressions > 0
+        ? ((analytics[0]?.totalClicks / analytics[0]?.totalImpressions) * 100).toFixed(2)
+        : 0
+    };
+
+    res.json({
+      success: true,
+      data: summary
+    });
+  } catch (error) {
+    console.error("GET ANALYTICS ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch analytics"
+    });
+  }
+});
+
 // GET /api/ads - Get all ads (admin)
 router.get("/", async (req: AuthReq, res: Response) => {
   try {
@@ -220,50 +265,6 @@ router.delete("/:id", async (req: AuthReq, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete ad"
-    });
-  }
-});
-
-// GET /api/ads/analytics/summary - Get analytics summary (admin)
-router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
-  try {
-    const totalAds = await Ad.countDocuments();
-    const now = new Date();
-    const activeAds = await Ad.countDocuments({
-      startDate: { $lte: now },
-      endDate: { $gte: now }
-    });
-    
-    const analytics = await Ad.aggregate([
-      {
-        $group: {
-          _id: null,
-          totalImpressions: { $sum: "$impressions" },
-          totalClicks: { $sum: "$clicks" }
-        }
-      }
-    ]);
-
-    const summary = {
-      totalAds,
-      activeAds,
-      expiredAds: totalAds - activeAds,
-      totalImpressions: analytics[0]?.totalImpressions || 0,
-      totalClicks: analytics[0]?.totalClicks || 0,
-      clickThroughRate: analytics[0]?.totalImpressions > 0
-        ? ((analytics[0]?.totalClicks / analytics[0]?.totalImpressions) * 100).toFixed(2)
-        : 0
-    };
-
-    res.json({
-      success: true,
-      data: summary
-    });
-  } catch (error) {
-    console.error("GET ANALYTICS ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch analytics"
     });
   }
 });
