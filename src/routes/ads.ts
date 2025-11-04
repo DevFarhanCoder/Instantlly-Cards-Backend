@@ -10,12 +10,15 @@ router.get("/active", async (req: Request, res: Response) => {
     const now = new Date();
 
     // Get ads that are currently active (within date range)
+    // Limit results and use indexes to avoid memory issues
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now }
     })
       .sort({ priority: -1, createdAt: -1 })
-      .lean();
+      .limit(100) // Limit to prevent memory issues
+      .lean()
+      .exec();
 
     res.json({
       success: true,
