@@ -135,9 +135,13 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
     const { contacts } = req.body as { contacts: DeviceContact[] };
     const userId = req.userId;
     
+    console.log(`📞 [${userId}] Syncing ${contacts?.length || 0} contacts`);
+    
     if (!contacts || !Array.isArray(contacts)) {
       return res.status(400).json({ error: "Invalid contacts data" });
     }
+
+    const startTime = Date.now();
 
     // Normalize phone numbers for consistent matching
     const normalizedContacts = contacts.map(contact => ({
@@ -160,11 +164,14 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       }
     });
     
-    // Find users in the app with these phone numbers (check all variations)
+    // Find users in the app with these phone numbers (check all variations) - OPTIMIZED
     const appUsers = await User.find({
       phone: { $in: allPhoneVariations },
       _id: { $ne: userId } // Exclude current user
-    }).select('name phone profilePicture about');
+    })
+    .select('name phone profilePicture about')
+    .lean()
+    .exec();
 
     // Create a map of phone numbers to users (normalize for comparison)
     const phoneToUserMap = new Map();
@@ -209,9 +216,9 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       };
     });
 
-    // Bulk upsert contacts
+    // Bulk upsert contacts - OPTIMIZED
     if (contactsToSave.length > 0) {
-      await Contact.bulkWrite(contactsToSave);
+      await Contact.bulkWrite(contactsToSave, { ordered: false });
     }
 
     // Return summary
@@ -219,25 +226,139 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       return phoneToUserMap.has(contact.phoneNumber);
     });
 
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Synced ${normalizedContacts.length} contacts in ${elapsed}ms - ${appUserContacts.length} app users found`);
+
     res.json({ 
       success: true, 
       message: `Synced ${normalizedContacts.length} contacts`,
       stats: {
         total: normalizedContacts.length,
         appUsers: appUserContacts.length,
-        nonAppUsers: normalizedContacts.length - appUserContacts.length
+        nonAppUsers: normalizedContacts.length - appUserContacts.length,
+        syncTimeMs: elapsed
       }
     });
   } catch (error) {
-    console.error("Error syncing all contacts:", error);
+    console.error("❌ Error syncing all contacts:", error);
     res.status(500).json({ error: "Failed to sync contacts" });
   }
 });
 
-// Get all stored contacts for the user (with pagination for large contact lists)
+// INCREMENTAL SYNC - Only check for new app users among existing contacts
+router.post("/sync-incremental", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    const startTime = Date.now();
+    
+    console.log(`🔄 [${userId}] Incremental contact sync started`);
+    
+    // Get all existing contacts for this user
+    const existingContacts = await Contact.find({ userId })
+      .select('phoneNumber isAppUser appUserId')
+      .lean()
+      .exec();
+    
+    if (existingContacts.length === 0) {
+      return res.json({
+        success: true,
+        message: "No contacts to update. Please do a full sync first.",
+        stats: { updated: 0, newAppUsers: 0 }
+      });
+    }
+    
+    // Extract phone numbers
+    const phoneNumbers = existingContacts.map(c => c.phoneNumber);
+    
+    // Create all possible phone number variations
+    const allPhoneVariations: string[] = [];
+    phoneNumbers.forEach(phone => {
+      allPhoneVariations.push(phone);
+      if (phone.startsWith('91') && phone.length === 12) {
+        allPhoneVariations.push('+' + phone);
+      } else if (!phone.startsWith('91') && phone.length === 10) {
+        allPhoneVariations.push('91' + phone);
+        allPhoneVariations.push('+91' + phone);
+      }
+    });
+    
+    // Find app users with these phone numbers
+    const appUsers = await User.find({
+      phone: { $in: allPhoneVariations },
+      _id: { $ne: userId }
+    })
+    .select('name phone profilePicture about')
+    .lean()
+    .exec();
+    
+    // Create phone to user map
+    const phoneToUserMap = new Map();
+    appUsers.forEach(user => {
+      if (user.phone) {
+        const normalizedUserPhone = user.phone.replace(/[\s\-\(\)\+]/g, '');
+        phoneNumbers.forEach(contactPhone => {
+          const normalizedContactPhone = contactPhone.replace(/[\s\-\(\)\+]/g, '');
+          if (normalizedUserPhone === normalizedContactPhone || 
+              normalizedUserPhone === '91' + normalizedContactPhone ||
+              normalizedUserPhone === normalizedContactPhone.substring(2)) {
+            phoneToUserMap.set(contactPhone, user);
+          }
+        });
+      }
+    });
+    
+    // Update contacts that became app users
+    const updateOperations = existingContacts
+      .filter(contact => {
+        const appUser = phoneToUserMap.get(contact.phoneNumber);
+        return appUser && !contact.isAppUser; // Only update if newly became app user
+      })
+      .map(contact => {
+        const appUser = phoneToUserMap.get(contact.phoneNumber);
+        return {
+          updateOne: {
+            filter: { userId, phoneNumber: contact.phoneNumber },
+            update: {
+              $set: {
+                isAppUser: true,
+                appUserId: appUser._id,
+                lastSynced: new Date()
+              }
+            }
+          }
+        };
+      });
+    
+    let newAppUsersCount = 0;
+    if (updateOperations.length > 0) {
+      await Contact.bulkWrite(updateOperations, { ordered: false });
+      newAppUsersCount = updateOperations.length;
+    }
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Incremental sync complete in ${elapsed}ms - ${newAppUsersCount} new app users found`);
+    
+    res.json({
+      success: true,
+      message: `Incremental sync complete`,
+      stats: {
+        total: existingContacts.length,
+        updated: newAppUsersCount,
+        newAppUsers: newAppUsersCount,
+        syncTimeMs: elapsed
+      }
+    });
+  } catch (error) {
+    console.error("❌ Error in incremental sync:", error);
+    res.status(500).json({ error: "Failed to perform incremental sync" });
+  }
+});
+
+// Get all stored contacts for the user (with pagination for large contact lists) - OPTIMIZED WITH CACHING
 router.get("/all", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
+    const startTime = Date.now();
     
     // Pagination parameters
     const page = parseInt(req.query.page as string) || 1;
@@ -247,21 +368,25 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
     // Search query parameter
     const searchQuery = req.query.search as string;
     
+    console.log(`📋 [${userId}] Fetching contacts - page ${page}, search: ${searchQuery || 'none'}`);
+    
     // Build query
     const query: any = { userId };
     if (searchQuery) {
       query.name = { $regex: searchQuery, $options: 'i' }; // Case-insensitive search
     }
     
-    // Get total count for pagination
-    const totalContacts = await Contact.countDocuments(query);
-    
-    const contacts = await Contact.find(query)
-      .populate({ path: 'appUserId', select: 'name profilePicture about', model: User })
-      .sort({ isAppUser: -1, name: 1 }) // App users first, then alphabetical
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    // Run count and query in parallel for better performance
+    const [totalContacts, contacts] = await Promise.all([
+      Contact.countDocuments(query),
+      Contact.find(query)
+        .populate({ path: 'appUserId', select: 'name profilePicture about', model: User })
+        .sort({ isAppUser: -1, name: 1 }) // App users first, then alphabetical
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec()
+    ]);
 
     const formattedContacts = contacts.map(contact => ({
       _id: contact._id,
@@ -279,6 +404,19 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
         : contact.appUserId,
       lastSynced: contact.lastSynced
     }));
+
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Fetched ${formattedContacts.length} contacts in ${elapsed}ms`);
+    
+    // Add ETag for caching
+    const etag = `"contacts-${userId}-${page}-${formattedContacts.length}-${totalContacts}"`;
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${userId}] Client has cached version - returning 304`);
+      return res.status(304).end();
+    }
+    
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
 
     res.json({ 
       success: true, 
