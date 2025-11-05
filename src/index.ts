@@ -4,6 +4,7 @@ dotenv.config();
 
 import express, { Request, Response } from "express";
 import cors from "cors";
+import compression from "compression";
 import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
@@ -27,22 +28,25 @@ import { SocketService } from "./services/socketService";
 const app = express();
 const server = createServer(app);
 
-// Socket.IO setup with CORS
+// Socket.IO setup with CORS - Optimized for speed
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
     credentials: true
   },
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  transports: ["polling", "websocket"], // Start with polling first
-  allowEIO3: true, // Support older Socket.IO versions
-  upgradeTimeout: 30000, // Allow more time for websocket upgrade
-  maxHttpBufferSize: 1e6 // 1MB buffer size
+  pingTimeout: 20000, // Reduced from 60s to 20s to detect disconnects faster
+  pingInterval: 10000, // Reduced from 25s to 10s for faster keepalive
+  transports: ["websocket", "polling"], // WebSocket first for speed
+  allowEIO3: true,
+  upgradeTimeout: 10000, // Reduced from 30s to 10s
+  maxHttpBufferSize: 5e6, // Increased to 5MB for card images
+  connectTimeout: 10000, // Add connection timeout
+  perMessageDeflate: false // Disable compression for speed
 });
 
 app.use(cors());
+app.use(compression()); // Enable gzip compression for faster responses
 app.use(express.json({ limit: "10mb" })); // instead of default
 
 // Create uploads directories if they don't exist

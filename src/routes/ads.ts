@@ -5,24 +5,32 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 const router = Router();
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
+// Optimized for speed with caching and reduced payload
 router.get("/active", async (req: Request, res: Response) => {
   try {
     const now = new Date();
 
+    // Set cache headers for 5 minutes (matches mobile React Query cache)
+    res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes
+    res.setHeader('ETag', `ads-${now.getTime()}`);
+
     // Get ads that are currently active (within date range)
-    // Limit results and use indexes to avoid memory issues
+    // Limit results and use lean() for better performance
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now }
     })
+      .select('title bottomImage fullscreenImage phoneNumber priority impressions clicks startDate endDate') // Only select needed fields
       .sort({ priority: -1, createdAt: -1 })
-      .limit(100) // Limit to prevent memory issues
-      .lean()
+      .limit(50) // Reduced from 100 to improve speed
+      .lean() // Convert to plain objects for faster serialization
       .exec();
 
     res.json({
       success: true,
-      data: ads
+      data: ads,
+      count: ads.length,
+      timestamp: now.toISOString()
     });
   } catch (error) {
     console.error("GET ACTIVE ADS ERROR:", error);
