@@ -64,7 +64,25 @@ if (!fs.existsSync(cardsDir)) {
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// single health route
+// Root health check for Render's health probe (responds to GET / or /health)
+app.get("/", (_req: Request, res: Response) => {
+  res.status(200).json({ 
+    status: "ok",
+    service: "Instantlly Cards Backend",
+    version: "1.5",
+    timestamp: Date.now()
+  });
+});
+
+app.get("/health", (_req: Request, res: Response) => {
+  res.status(200).json({ 
+    status: "ok",
+    service: "Instantlly Cards Backend",
+    timestamp: Date.now()
+  });
+});
+
+// Detailed health route
 app.get("/api/health", async (_req: Request, res: Response) => {
   try {
     // Check database connection
