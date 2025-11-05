@@ -6,7 +6,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "migrate:gridfs": "ts-node src/scripts/migrate-ads-to-gridfs.ts",
-    "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup"
+    "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup",
+    "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",
