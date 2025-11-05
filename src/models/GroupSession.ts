@@ -68,15 +68,15 @@ const GroupSessionSchema = new Schema<IGroupSession>({
   createdAt: { type: Date, default: Date.now },
   expiresAt: { 
     type: Date, 
-    required: true,
-    index: true // TTL index
+    required: true
+    // TTL index defined below with expireAfterSeconds
   },
   isActive: { type: Boolean, default: true }
 }, {
   timestamps: false
 });
 
-// TTL index - auto-delete expired sessions
+// TTL index - auto-delete expired sessions (only define once here, not in field definition)
 GroupSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const GroupSession = mongoose.model<IGroupSession>("GroupSession", GroupSessionSchema);
