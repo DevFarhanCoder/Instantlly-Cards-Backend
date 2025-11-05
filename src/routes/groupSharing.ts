@@ -633,4 +633,139 @@ router.get("/session-by-code/:code", requireAuth, async (req: Request, res: Resp
   }
 });
 
+/**
+ * POST /api/group-sharing/create-messaging-group/:sessionId
+ * Create a permanent messaging group from a group sharing session (Admin only)
+ */
+router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    const { adminId, groupName, groupDescription, groupIcon } = req.body;
+
+    console.log("👥 Creating messaging group from session:", { sessionId, adminId, groupName });
+
+    // Find the group session
+    const session = await GroupSession.findById(sessionId);
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: "Session not found"
+      });
+    }
+
+    // Verify admin
+    if (session.adminId.toString() !== adminId) {
+      console.log("❌ Unauthorized: Not admin");
+      return res.status(403).json({
+        success: false,
+        error: "Only admin can create group from session"
+      });
+    }
+
+    // Check if session is completed (cards have been shared)
+    if (session.status !== "completed") {
+      console.log("❌ Session not completed yet, status:", session.status);
+      return res.status(400).json({
+        success: false,
+        error: "Session must be completed before creating a group"
+      });
+    }
+
+    // Import Group model dynamically to avoid circular dependencies
+    const Group = (await import("../models/Group")).default;
+
+    // Extract participant user IDs (exclude admin as they'll be added separately)
+    const memberIds = session.participants
+      .filter(p => p.userId.toString() !== adminId)
+      .map(p => p.userId);
+
+    console.log("👥 Creating group with members:", {
+      admin: adminId,
+      memberCount: memberIds.length,
+      totalParticipants: session.participants.length
+    });
+
+    // Generate group name if not provided
+    const defaultGroupName = `Group ${session.code}`;
+    const finalGroupName = groupName || defaultGroupName;
+
+    // Generate unique invite code
+    let joinCode;
+    try {
+      joinCode = await Group.generateInviteCode();
+      console.log('✅ Generated invite code:', joinCode);
+    } catch (error) {
+      // Fallback code generation
+      const timestamp = Date.now().toString(36).toUpperCase();
+      joinCode = timestamp.substring(timestamp.length - 6);
+      console.log('✅ Fallback invite code:', joinCode);
+    }
+
+    // Create the messaging group
+    const group = await Group.create({
+      name: finalGroupName,
+      description: groupDescription || `Group created from sharing session ${session.code}`,
+      icon: groupIcon || '',
+      members: [...memberIds, new mongoose.Types.ObjectId(adminId)],
+      admin: new mongoose.Types.ObjectId(adminId),
+      joinCode: joinCode,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    console.log("✅ Messaging group created successfully:", group._id);
+
+    // Populate the group data
+    const populatedGroup = await Group.findById(group._id)
+      .populate('members', 'name phone profilePicture')
+      .populate('admin', 'name phone');
+
+    // Send notifications to members (non-blocking)
+    setImmediate(async () => {
+      try {
+        const admin = await User.findById(adminId);
+        const adminName = admin?.name || 'Someone';
+        
+        // Import notification service
+        const { sendGroupInviteNotification } = await import('../services/pushNotifications');
+        
+        for (const memberId of memberIds) {
+          try {
+            const member = await User.findById(memberId);
+            if (member?.pushToken && member.pushToken !== 'expo-go-local-mode') {
+              await sendGroupInviteNotification(
+                member.pushToken,
+                adminName,
+                group.name,
+                (group._id as any).toString(),
+                adminId
+              );
+              console.log(`📱 Group invite notification sent to ${member.name}`);
+            }
+          } catch (memberError) {
+            console.error(`Failed to send notification to member ${memberId}:`, memberError);
+          }
+        }
+      } catch (notificationError) {
+        console.error('Failed to send group notifications:', notificationError);
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      group: populatedGroup,
+      joinCode: joinCode,
+      message: "Messaging group created successfully"
+    });
+
+  } catch (error: any) {
+    console.error("❌ Error creating messaging group from session:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to create messaging group"
+    });
+  }
+});
+
 export default router;
