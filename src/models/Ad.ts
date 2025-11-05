@@ -10,15 +10,29 @@ const AdSchema = new mongoose.Schema(
     },
 
     // Bottom Banner Ad (Required - 624 × 174px)
+    // MIGRATION: Changed from base64 string to GridFS ObjectId reference
     bottomImage: {
-      type: String, // Base64 encoded image
+      type: String, // Base64 encoded image (legacy) OR GridFS ObjectId (new)
       required: true
     },
 
+    // GridFS reference for bottom image (new field)
+    bottomImageGridFS: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "adImages.files"
+    },
+
     // Full Screen Ad (Optional - 624 × 1000px)
+    // MIGRATION: Changed from base64 string to GridFS ObjectId reference
     fullscreenImage: {
-      type: String, // Base64 encoded image
+      type: String, // Base64 encoded image (legacy) OR GridFS ObjectId (new)
       default: ""
+    },
+
+    // GridFS reference for fullscreen image (new field)
+    fullscreenImageGridFS: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "adImages.files"
     },
 
     // Contact Information

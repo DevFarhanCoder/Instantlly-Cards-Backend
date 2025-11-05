@@ -1,70 +1,58 @@
 import { Router, Request, Response } from "express";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { gridfsService } from "../services/gridfsService";
 
 const router = Router();
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
-// Optimized for speed with caching and reduced payload
+// ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
 router.get("/active", async (req: Request, res: Response) => {
   try {
     const now = new Date();
 
-    // Set cache headers for 30 minutes (extended to reduce load)
-    res.setHeader('Cache-Control', 'public, max-age=1800'); // 30 minutes
-    res.setHeader('ETag', `ads-${now.getTime()}`);
+    // Set cache headers for 5 minutes
+    res.setHeader('Cache-Control', 'public, max-age=300');
 
     // Get ads that are currently active (within date range)
-    // Limit results and use lean() for better performance
+    // Only fetch metadata, NOT images (GridFS handles images separately)
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now }
     })
-      .select('title bottomImage fullscreenImage phoneNumber priority impressions clicks startDate endDate') // Only select needed fields
+      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
       .sort({ priority: -1, createdAt: -1 })
-      .limit(20) // CRITICAL: Reduced from 50 to 20 to prevent 502 errors
-      .lean() // Convert to plain objects for faster serialization
+      .limit(50) // Can handle more ads now (no heavy base64 payload)
+      .lean()
       .exec();
 
-    // CRITICAL FIX: Truncate base64 images if response is too large
-    // This prevents 502 gateway timeouts on Render
-    const maxResponseSize = 10 * 1024 * 1024; // 10MB limit
-    let estimatedSize = JSON.stringify(ads).length;
-
-    if (estimatedSize > maxResponseSize) {
-      console.warn(`⚠️ LARGE PAYLOAD WARNING: ${(estimatedSize / 1024 / 1024).toFixed(2)}MB - Applying image truncation`);
-      
-      // Return metadata only, images should be fetched separately
-      const lightweightAds = ads.map(ad => ({
-        _id: ad._id,
-        title: ad.title,
-        phoneNumber: ad.phoneNumber,
-        priority: ad.priority,
-        impressions: ad.impressions,
-        clicks: ad.clicks,
-        startDate: ad.startDate,
-        endDate: ad.endDate,
-        hasBottomImage: !!ad.bottomImage,
-        hasFullscreenImage: !!ad.fullscreenImage,
-        // Only include small preview or URL reference
-        bottomImageSize: ad.bottomImage?.length || 0,
-        fullscreenImageSize: ad.fullscreenImage?.length || 0
-      }));
-
-      return res.json({
-        success: true,
-        data: lightweightAds,
-        count: lightweightAds.length,
-        timestamp: now.toISOString(),
-        warning: "Images too large - use /api/ads/image/:id endpoint to fetch images separately"
-      });
-    }
+    // Transform ads to include image URLs instead of base64
+    const adsWithUrls = ads.map(ad => ({
+      _id: ad._id,
+      title: ad.title,
+      phoneNumber: ad.phoneNumber,
+      priority: ad.priority,
+      impressions: ad.impressions,
+      clicks: ad.clicks,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+      // Provide image URLs - client will fetch these separately
+      bottomImageUrl: ad.bottomImageGridFS 
+        ? `/api/ads/image/${ad._id}/bottom`
+        : null,
+      fullscreenImageUrl: ad.fullscreenImageGridFS 
+        ? `/api/ads/image/${ad._id}/fullscreen`
+        : null,
+      hasBottomImage: !!ad.bottomImageGridFS,
+      hasFullscreenImage: !!ad.fullscreenImageGridFS
+    }));
 
     res.json({
       success: true,
-      data: ads,
-      count: ads.length,
-      timestamp: now.toISOString()
+      data: adsWithUrls,
+      count: adsWithUrls.length,
+      timestamp: now.toISOString(),
+      imageBaseUrl: process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com"
     });
   } catch (error) {
     console.error("GET ACTIVE ADS ERROR:", error);
@@ -75,12 +63,22 @@ router.get("/active", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/ads/image/:id - Get single ad's images (NO AUTH)
-// Separate endpoint to fetch images on-demand
-router.get("/image/:id", async (req: Request, res: Response) => {
+// GET /api/ads/image/:id/:type - Get single ad's image from GridFS (NO AUTH)
+// Streams image efficiently from GridFS storage
+// :type can be 'bottom' or 'fullscreen'
+router.get("/image/:id/:type", async (req: Request, res: Response) => {
   try {
-    const ad = await Ad.findById(req.params.id)
-      .select('bottomImage fullscreenImage')
+    const { id, type } = req.params;
+
+    if (type !== "bottom" && type !== "fullscreen") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid image type. Must be 'bottom' or 'fullscreen'"
+      });
+    }
+
+    const ad = await Ad.findById(id)
+      .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
       .lean();
 
     if (!ad) {
@@ -90,21 +88,52 @@ router.get("/image/:id", async (req: Request, res: Response) => {
       });
     }
 
+    // Get GridFS file ID based on type
+    const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
+
+    if (!gridfsId) {
+      // Fallback to base64 if GridFS migration not complete
+      const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
+      
+      if (!base64Data || base64Data.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `${type} image not found`
+        });
+      }
+
+      // Return base64 as fallback (legacy support during migration)
+      console.warn(`⚠️ Serving base64 fallback for ad ${id} ${type} image`);
+      return res.json({
+        success: true,
+        data: base64Data,
+        source: "base64-legacy"
+      });
+    }
+
     // Set aggressive caching for images (24 hours)
     res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Content-Type', 'image/jpeg');
+
+    // Stream image from GridFS (most efficient - no buffering needed)
+    const downloadStream = gridfsService.getDownloadStream(gridfsId);
     
-    res.json({
-      success: true,
-      data: {
-        bottomImage: ad.bottomImage,
-        fullscreenImage: ad.fullscreenImage
-      }
+    downloadStream.on('error', (error) => {
+      console.error(`GridFS download error for ${id} ${type}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch image from storage"
+      });
     });
+
+    // Pipe GridFS stream directly to response (efficient streaming)
+    downloadStream.pipe(res);
+
   } catch (error) {
     console.error("GET AD IMAGE ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch ad images"
+      message: "Failed to fetch ad image"
     });
   }
 });
@@ -260,16 +289,44 @@ router.post("/", async (req: AuthReq, res: Response) => {
       });
     }
 
-    // Create ad
+    // Upload images to GridFS
+    console.log(`📤 Uploading images to GridFS for new ad: ${title}`);
+    
+    const bottomImageId = await gridfsService.uploadBase64(
+      bottomImage,
+      `${Date.now()}_bottom.jpg`,
+      {
+        title,
+        type: "bottom"
+      }
+    );
+
+    let fullscreenImageId = null;
+    if (fullscreenImage && fullscreenImage.length > 0) {
+      fullscreenImageId = await gridfsService.uploadBase64(
+        fullscreenImage,
+        `${Date.now()}_fullscreen.jpg`,
+        {
+          title,
+          type: "fullscreen"
+        }
+      );
+    }
+
+    // Create ad with GridFS references
     const ad = await Ad.create({
       title,
-      bottomImage,
-      fullscreenImage: fullscreenImage || "",
+      bottomImage: "", // Empty - using GridFS
+      bottomImageGridFS: bottomImageId,
+      fullscreenImage: "", // Empty - using GridFS
+      fullscreenImageGridFS: fullscreenImageId,
       phoneNumber,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
       priority: priority || 5
     });
+
+    console.log(`✅ Ad created with GridFS images: ${ad._id}`);
 
     res.status(201).json({
       success: true,
@@ -328,7 +385,7 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
 // DELETE /api/ads/:id - Delete ad (admin)
 router.delete("/:id", async (req: AuthReq, res: Response) => {
   try {
-    const ad = await Ad.findByIdAndDelete(req.params.id);
+    const ad = await Ad.findById(req.params.id);
 
     if (!ad) {
       return res.status(404).json({
@@ -337,9 +394,31 @@ router.delete("/:id", async (req: AuthReq, res: Response) => {
       });
     }
 
+    // Delete GridFS images if they exist
+    if (ad.bottomImageGridFS) {
+      try {
+        await gridfsService.deleteFile(ad.bottomImageGridFS);
+        console.log(`🗑️ Deleted bottom image from GridFS: ${ad.bottomImageGridFS}`);
+      } catch (error) {
+        console.error("Failed to delete bottom image from GridFS:", error);
+      }
+    }
+
+    if (ad.fullscreenImageGridFS) {
+      try {
+        await gridfsService.deleteFile(ad.fullscreenImageGridFS);
+        console.log(`🗑️ Deleted fullscreen image from GridFS: ${ad.fullscreenImageGridFS}`);
+      } catch (error) {
+        console.error("Failed to delete fullscreen image from GridFS:", error);
+      }
+    }
+
+    // Delete ad document
+    await Ad.findByIdAndDelete(req.params.id);
+
     res.json({
       success: true,
-      message: "Ad deleted successfully"
+      message: "Ad and associated images deleted successfully"
     });
   } catch (error) {
     console.error("DELETE AD ERROR:", error);

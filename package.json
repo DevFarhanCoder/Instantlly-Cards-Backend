@@ -4,7 +4,9 @@
   "scripts": {
     "dev": "nodemon src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "migrate:gridfs": "ts-node src/scripts/migrate-ads-to-gridfs.ts",
+    "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",

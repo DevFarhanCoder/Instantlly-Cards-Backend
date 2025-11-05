@@ -24,6 +24,7 @@ import adminAuthRouter from "./routes/adminAuth";
 import groupSharingRouter from "./routes/groupSharing";
 import adsRouter from "./routes/ads";
 import { SocketService } from "./services/socketService";
+import { gridfsService } from "./services/gridfsService";
 
 const app = express();
 const server = createServer(app);
@@ -119,6 +120,10 @@ async function startServer() {
     console.log("🔄 Connecting to MongoDB...");
     await connectDB();
     console.log("✅ MongoDB connected successfully!");
+
+    // Initialize GridFS for ad image storage
+    gridfsService.initialize();
+    console.log("✅ GridFS initialized for ad images");
 
     // Add routes after DB connection
     // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
