@@ -10,8 +10,8 @@ router.get("/active", async (req: Request, res: Response) => {
   try {
     const now = new Date();
 
-    // Set cache headers for 5 minutes (matches mobile React Query cache)
-    res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes
+    // Set cache headers for 30 minutes (extended to reduce load)
+    res.setHeader('Cache-Control', 'public, max-age=1800'); // 30 minutes
     res.setHeader('ETag', `ads-${now.getTime()}`);
 
     // Get ads that are currently active (within date range)
@@ -22,9 +22,43 @@ router.get("/active", async (req: Request, res: Response) => {
     })
       .select('title bottomImage fullscreenImage phoneNumber priority impressions clicks startDate endDate') // Only select needed fields
       .sort({ priority: -1, createdAt: -1 })
-      .limit(50) // Reduced from 100 to improve speed
+      .limit(20) // CRITICAL: Reduced from 50 to 20 to prevent 502 errors
       .lean() // Convert to plain objects for faster serialization
       .exec();
+
+    // CRITICAL FIX: Truncate base64 images if response is too large
+    // This prevents 502 gateway timeouts on Render
+    const maxResponseSize = 10 * 1024 * 1024; // 10MB limit
+    let estimatedSize = JSON.stringify(ads).length;
+
+    if (estimatedSize > maxResponseSize) {
+      console.warn(`⚠️ LARGE PAYLOAD WARNING: ${(estimatedSize / 1024 / 1024).toFixed(2)}MB - Applying image truncation`);
+      
+      // Return metadata only, images should be fetched separately
+      const lightweightAds = ads.map(ad => ({
+        _id: ad._id,
+        title: ad.title,
+        phoneNumber: ad.phoneNumber,
+        priority: ad.priority,
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+        hasBottomImage: !!ad.bottomImage,
+        hasFullscreenImage: !!ad.fullscreenImage,
+        // Only include small preview or URL reference
+        bottomImageSize: ad.bottomImage?.length || 0,
+        fullscreenImageSize: ad.fullscreenImage?.length || 0
+      }));
+
+      return res.json({
+        success: true,
+        data: lightweightAds,
+        count: lightweightAds.length,
+        timestamp: now.toISOString(),
+        warning: "Images too large - use /api/ads/image/:id endpoint to fetch images separately"
+      });
+    }
 
     res.json({
       success: true,
@@ -37,6 +71,40 @@ router.get("/active", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch ads"
+    });
+  }
+});
+
+// GET /api/ads/image/:id - Get single ad's images (NO AUTH)
+// Separate endpoint to fetch images on-demand
+router.get("/image/:id", async (req: Request, res: Response) => {
+  try {
+    const ad = await Ad.findById(req.params.id)
+      .select('bottomImage fullscreenImage')
+      .lean();
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: "Ad not found"
+      });
+    }
+
+    // Set aggressive caching for images (24 hours)
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    
+    res.json({
+      success: true,
+      data: {
+        bottomImage: ad.bottomImage,
+        fullscreenImage: ad.fullscreenImage
+      }
+    });
+  } catch (error) {
+    console.error("GET AD IMAGE ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch ad images"
     });
   }
 });
