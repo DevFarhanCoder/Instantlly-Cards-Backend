@@ -439,11 +439,15 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
           }
         }
         
-        // Create group document
+        // Create group document with generated joinCode
+        const joinCode = await Group.generateInviteCode();
+        console.log(`🔑 Generated joinCode: ${joinCode}`);
+        
         group = await Group.create({
           name: groupName.trim(),
           admin: adminObjectId,
           members: memberObjectIds,
+          joinCode: joinCode, // Explicitly set joinCode
           isActive: true,
           lastMessageTime: new Date()
         });
