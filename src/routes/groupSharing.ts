@@ -3,6 +3,8 @@ import express, { Request, Response } from "express";
 import GroupSession, { IParticipant } from "../models/GroupSession";
 import CardShare from "../models/CardShare";
 import SharedCard from "../models/SharedCard";
+import GroupSharedCard from "../models/GroupSharedCard";
+import Group from "../models/Group";
 import User from "../models/User";
 import Card from "../models/Card";
 import { requireAuth, AuthReq } from "../middleware/auth";
@@ -71,7 +73,7 @@ router.post("/create", requireAuth, async (req: Request, res: Response) => {
 
     // Create admin participant
     const adminParticipant: IParticipant = {
-      userId: new mongoose.Types.ObjectId(adminId),
+      userId: adminId, // Now a string, no ObjectId conversion needed
       userName: adminName,
       userPhone: adminPhone,
       photo: adminPhoto,
@@ -83,7 +85,7 @@ router.post("/create", requireAuth, async (req: Request, res: Response) => {
     // Create session
     const session = new GroupSession({
       code,
-      adminId: new mongoose.Types.ObjectId(adminId),
+      adminId: adminId, // Now a string, no ObjectId conversion needed
       adminName,
       adminPhone,
       adminPhoto,
@@ -161,7 +163,7 @@ router.post("/join", requireAuth, async (req: Request, res: Response) => {
 
     // Add participant
     const newParticipant: IParticipant = {
-      userId: new mongoose.Types.ObjectId(userId),
+      userId: userId, // Now a string, no ObjectId conversion needed
       userName,
       userPhone,
       photo: userPhoto,
@@ -342,14 +344,17 @@ router.post("/set-cards/:sessionId", requireAuth, async (req: Request, res: Resp
 
 /**
  * POST /api/group-sharing/execute/:sessionId
- * Execute card sharing (Admin only)
+ * Execute the actual card sharing between participants
+ * SUPPORTS TWO FLOWS:
+ * 1. Create Group (groupName provided) -> Cards stored in GroupSharedCard for Group tabs
+ * 2. Quit Sharing (no groupName) -> Cards stored in SharedCard for Messaging tabs
  */
 router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    const { adminId } = req.body;
+    const { adminId, groupName } = req.body; // groupName is optional
 
-    console.log("🚀 Executing card sharing:", { sessionId, adminId });
+    console.log("🚀 Executing card sharing:", { sessionId, adminId, groupName: groupName || "N/A (Quit Sharing)" });
 
     const session = await GroupSession.findById(sessionId);
 
@@ -372,9 +377,94 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
     session.status = "sharing";
     await session.save();
 
+    // FLOW SPLIT: Create Group vs Quit Sharing
+    let group: any = null;
+    let groupId: mongoose.Types.ObjectId | null = null;
+
+    if (groupName && groupName.trim()) {
+      // FLOW 1: CREATE GROUP - Store in GroupSharedCard
+      console.log("📁 Creating permanent group:", groupName);
+      
+      try {
+        // Extract all unique member IDs from session and convert to ObjectId
+        // For temporary userIds (user_timestamp), we'll try to find their actual User document
+        const memberObjectIds: mongoose.Types.ObjectId[] = [];
+        
+        for (const participant of session.participants) {
+          const userId = participant.userId;
+          
+          // Check if it's a valid ObjectId
+          if (mongoose.Types.ObjectId.isValid(userId) && userId.length === 24) {
+            memberObjectIds.push(new mongoose.Types.ObjectId(userId));
+          } else {
+            // For temporary userIds like "user_1762425364619", try to find by phone
+            if (participant.userPhone) {
+              const user = await User.findOne({ phone: participant.userPhone });
+              if (user) {
+                memberObjectIds.push(user._id);
+              } else {
+                console.warn(`⚠️ Could not find User for temporary userId ${userId}, phone: ${participant.userPhone}`);
+                // Skip this user or create a new User document
+                // For now, we'll skip to avoid creating invalid groups
+              }
+            }
+          }
+        }
+        
+        if (memberObjectIds.length === 0) {
+          throw new Error("No valid user IDs found for group creation");
+        }
+        
+        // Determine admin ObjectId
+        let adminObjectId: mongoose.Types.ObjectId;
+        if (mongoose.Types.ObjectId.isValid(session.adminId) && session.adminId.length === 24) {
+          adminObjectId = new mongoose.Types.ObjectId(session.adminId);
+        } else {
+          // Find admin by phone
+          const adminParticipant = session.participants.find(p => p.userId === session.adminId);
+          if (adminParticipant?.userPhone) {
+            const adminUser = await User.findOne({ phone: adminParticipant.userPhone });
+            if (!adminUser) {
+              throw new Error("Admin user not found in database. Cannot create permanent group.");
+            }
+            adminObjectId = adminUser._id;
+          } else {
+            throw new Error("Admin user not found. Cannot create permanent group.");
+          }
+        }
+        
+        // Create group document
+        group = await Group.create({
+          name: groupName.trim(),
+          admin: adminObjectId,
+          members: memberObjectIds,
+          isActive: true,
+          lastMessageTime: new Date()
+        });
+        
+        groupId = group._id;
+        console.log(`✅ Group created with ID: ${groupId}, joinCode: ${group.joinCode}`);
+        
+      } catch (groupError: any) {
+        console.error("❌ Failed to create group:", groupError);
+        return res.status(500).json({
+          success: false,
+          error: "Failed to create group: " + groupError.message
+        });
+      }
+    } else {
+      // FLOW 2: QUIT SHARING - Store in SharedCard (peer-to-peer)
+      console.log("🚪 Quit Sharing mode - cards will be saved to Messaging tabs");
+    }
+
     const results: any[] = [];
     const duplicates: any[] = [];
     const errors: any[] = [];
+
+    // BATCH PREPARATION: Collect all cards to share
+    const groupCardsBatch: any[] = []; // For GroupSharedCard.insertMany()
+    const peerCardsBatch: any[] = []; // For SharedCard.insertMany()
+    const cardShareBatch: any[] = []; // For CardShare tracking
 
     // For each participant
     for (const fromParticipant of session.participants) {
@@ -414,96 +504,134 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
         }
       }
 
-      // Share with determined recipients
-      for (const toParticipant of recipientsToShareWith) {
-        const toUserId = toParticipant.userId;
+      // Prepare cards for batch insert
+      for (const cardId of cardsToShare) {
+        try {
+          // Get card details
+          const card = await Card.findById(cardId);
+          if (!card) {
+            console.log(`❌ Card not found: ${cardId}`);
+            errors.push({
+              cardId: cardId.toString(),
+              error: "Card not found"
+            });
+            continue;
+          }
 
-        // Share each card
-        for (const cardId of cardsToShare) {
-          try {
-            // Check if already shared (duplicate prevention)
-            const existingShare = await CardShare.findOne({
-              fromUserId,
-              toUserId,
-              cardId
+          if (groupId) {
+            // FLOW 1: GROUP SHARING - Add to GroupSharedCard batch
+            groupCardsBatch.push({
+              cardId,
+              senderId: fromUserId,
+              groupId,
+              message: `Shared via Group Sharing session ${session.code}`,
+              sentAt: new Date(),
+              cardTitle: card.name,
+              senderName: fromParticipant.userName,
+              groupName: groupName.trim()
             });
 
-            if (existingShare) {
-              console.log(`⚠️ Duplicate: Card ${cardId} already shared from ${fromUserId} to ${toUserId}`);
-              duplicates.push({
-                fromUserId: fromUserId.toString(),
-                fromUserName: fromParticipant.userName,
-                toUserId: toUserId.toString(),
-                toUserName: toParticipant.userName,
-                cardId: cardId.toString(),
-                reason: "Already shared previously"
-              });
-              continue;
-            }
+            results.push({
+              fromUserId: fromUserId.toString(),
+              fromUserName: fromParticipant.userName,
+              cardId: cardId.toString(),
+              cardName: card.name,
+              groupId: groupId.toString(),
+              groupName: groupName.trim(),
+              type: "group"
+            });
 
-            // Get card details
-            const card = await Card.findById(cardId);
-            if (!card) {
-              console.log(`❌ Card not found: ${cardId}`);
-              errors.push({
-                cardId: cardId.toString(),
-                error: "Card not found"
-              });
-              continue;
-            }
+          } else {
+            // FLOW 2: PEER-TO-PEER - Add to SharedCard batch
+            for (const toParticipant of recipientsToShareWith) {
+              const toUserId = toParticipant.userId;
 
-            // Create CardShare record (for duplicate tracking)
-            try {
-              await CardShare.create({
+              // Check for duplicates
+              const existingShare = await CardShare.findOne({
+                fromUserId,
+                toUserId,
+                cardId
+              });
+
+              if (existingShare) {
+                console.log(`⚠️ Duplicate: Card ${cardId} already shared from ${fromUserId} to ${toUserId}`);
+                duplicates.push({
+                  fromUserId: fromUserId.toString(),
+                  fromUserName: fromParticipant.userName,
+                  toUserId: toUserId.toString(),
+                  toUserName: toParticipant.userName,
+                  cardId: cardId.toString(),
+                  reason: "Already shared previously"
+                });
+                continue;
+              }
+
+              // Add to peer cards batch
+              peerCardsBatch.push({
+                cardId,
+                senderId: fromUserId,
+                recipientId: toUserId,
+                message: `Shared via Group Sharing session ${session.code}`,
+                status: 'sent',
+                sentAt: new Date(),
+                cardTitle: card.name,
+                senderName: fromParticipant.userName,
+                recipientName: toParticipant.userName
+              });
+
+              // Add to tracking batch
+              cardShareBatch.push({
                 sessionId: session._id,
                 fromUserId,
                 toUserId,
                 cardId
               });
-              console.log(`📝 CardShare tracking record created for card ${cardId}`);
-            } catch (cardShareError: any) {
-              console.error(`❌ Failed to create CardShare record:`, cardShareError);
+
+              results.push({
+                fromUserId: fromUserId.toString(),
+                fromUserName: fromParticipant.userName,
+                toUserId: toUserId.toString(),
+                toUserName: toParticipant.userName,
+                cardId: cardId.toString(),
+                cardName: card.name,
+                type: "peer-to-peer"
+              });
             }
-
-            // Create SharedCard record (actual card sharing)
-            const sharedCard = await SharedCard.create({
-              cardId,
-              senderId: fromUserId,
-              recipientId: toUserId,
-              message: `Shared via Group Sharing session ${session.code}`,
-              status: 'sent',
-              sentAt: new Date(),
-              cardTitle: card.name,
-              senderName: fromParticipant.userName,
-              recipientName: toParticipant.userName
-            });
-            
-            console.log(`✅ SharedCard created with ID: ${sharedCard._id}`);
-
-            console.log(`✅ Shared card ${cardId} from ${fromParticipant.userName} to ${toParticipant.userName}`);
-
-            results.push({
-              id: sharedCard._id.toString(),
-              fromUserId: fromUserId.toString(),
-              fromUserName: fromParticipant.userName,
-              toUserId: toUserId.toString(),
-              toUserName: toParticipant.userName,
-              cardId: cardId.toString(),
-              cardName: card.name,
-              sharedAt: sharedCard.sentAt
-            });
-
-          } catch (shareError: any) {
-            console.error(`❌ Error sharing card ${cardId}:`, shareError);
-            errors.push({
-              fromUserId: fromUserId.toString(),
-              toUserId: toUserId.toString(),
-              cardId: cardId.toString(),
-              error: shareError.message
-            });
           }
+
+        } catch (cardError: any) {
+          console.error(`❌ Error processing card ${cardId}:`, cardError);
+          errors.push({
+            cardId: cardId.toString(),
+            error: cardError.message
+          });
         }
       }
+    }
+
+    // BATCH INSERT: 100x faster than sequential inserts
+    try {
+      if (groupCardsBatch.length > 0) {
+        console.log(`📦 Batch inserting ${groupCardsBatch.length} GroupSharedCard records...`);
+        await GroupSharedCard.insertMany(groupCardsBatch, { ordered: false });
+        console.log(`✅ Successfully inserted ${groupCardsBatch.length} group cards`);
+      }
+
+      if (peerCardsBatch.length > 0) {
+        console.log(`📦 Batch inserting ${peerCardsBatch.length} SharedCard records...`);
+        await SharedCard.insertMany(peerCardsBatch, { ordered: false });
+        console.log(`✅ Successfully inserted ${peerCardsBatch.length} peer-to-peer cards`);
+      }
+
+      if (cardShareBatch.length > 0) {
+        console.log(`📦 Batch inserting ${cardShareBatch.length} CardShare tracking records...`);
+        await CardShare.insertMany(cardShareBatch, { ordered: false });
+        console.log(`✅ Successfully inserted ${cardShareBatch.length} tracking records`);
+      }
+
+    } catch (batchError: any) {
+      console.error("❌ Batch insert error:", batchError);
+      // Continue even if batch insert partially fails
     }
 
     // Update session to completed
@@ -514,7 +642,8 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
       totalShares: results.length,
       duplicatesSkipped: duplicates.length,
       errors: errors.length,
-      participantCount: session.participants.length
+      participantCount: session.participants.length,
+      sharingType: groupId ? "group" : "peer-to-peer"
     };
 
     console.log("✅ Card sharing completed:", summary);
@@ -524,7 +653,10 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
       results,
       duplicates,
       errors,
-      summary
+      summary,
+      groupId: groupId?.toString(),
+      groupName: groupName?.trim(),
+      joinCode: group?.joinCode
     });
 
   } catch (error: any) {

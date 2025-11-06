@@ -2,7 +2,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IParticipant {
-  userId: mongoose.Types.ObjectId;
+  userId: string; // Changed from ObjectId to string to support temporary userIds
   userName: string;
   userPhone: string;
   photo?: string;
@@ -14,7 +14,7 @@ export interface IParticipant {
 
 export interface IGroupSession extends Document {
   code: string;
-  adminId: mongoose.Types.ObjectId;
+  adminId: string; // Changed from ObjectId to string to support temporary userIds
   adminName: string;
   adminPhone: string;
   adminPhoto?: string;
@@ -27,7 +27,7 @@ export interface IGroupSession extends Document {
 }
 
 const ParticipantSchema = new Schema<IParticipant>({
-  userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  userId: { type: String, required: true }, // Changed from ObjectId to String
   userName: { type: String, required: true },
   userPhone: { type: String, required: true },
   photo: { type: String },
@@ -46,8 +46,7 @@ const GroupSessionSchema = new Schema<IGroupSession>({
     length: 4
   },
   adminId: { 
-    type: Schema.Types.ObjectId, 
-    ref: "User", 
+    type: String, // Changed from ObjectId to String
     required: true,
     index: true
   },
