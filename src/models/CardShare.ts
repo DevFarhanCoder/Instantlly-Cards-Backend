@@ -3,8 +3,8 @@ import mongoose, { Schema, Document } from "mongoose";
 
 export interface ICardShare extends Document {
   sessionId: mongoose.Types.ObjectId;
-  fromUserId: mongoose.Types.ObjectId;
-  toUserId: mongoose.Types.ObjectId;
+  fromUserId: string;  // Changed to string to support temporary userIds
+  toUserId: string;    // Changed to string to support temporary userIds
   cardId: mongoose.Types.ObjectId;
   sharedAt: Date;
 }
@@ -17,13 +17,11 @@ const CardShareSchema = new Schema<ICardShare>({
     index: true
   },
   fromUserId: { 
-    type: Schema.Types.ObjectId, 
-    ref: "User", 
+    type: String,  // Changed from ObjectId to String
     required: true 
   },
   toUserId: { 
-    type: Schema.Types.ObjectId, 
-    ref: "User", 
+    type: String,  // Changed from ObjectId to String
     required: true 
   },
   cardId: { 

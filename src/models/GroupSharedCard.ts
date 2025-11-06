@@ -8,10 +8,9 @@ const groupSharedCardSchema = new mongoose.Schema({
     required: true 
   },
   
-  // Who sent the card
+  // Who sent the card (supports both ObjectId and string userIds)
   senderId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User', 
+    type: String,  // Changed from ObjectId to String to support temporary userIds
     required: true 
   },
   
