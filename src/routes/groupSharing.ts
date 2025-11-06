@@ -14,7 +14,7 @@ const router = express.Router();
 
 // Helper function to format participant
 const formatParticipant = (participant: IParticipant) => ({
-  id: participant.userId.toString(),
+  id: participant.userId,
   name: participant.userName,
   phone: participant.userPhone,
   photo: participant.photo,
@@ -28,7 +28,7 @@ const formatParticipant = (participant: IParticipant) => ({
 const formatSession = (session: any) => ({
   id: session._id.toString(),
   code: session.code,
-  adminId: session.adminId.toString(),
+  adminId: session.adminId,
   adminName: session.adminName,
   adminPhone: session.adminPhone,
   adminPhoto: session.adminPhoto,
@@ -149,7 +149,7 @@ router.post("/join", requireAuth, async (req: Request, res: Response) => {
 
     // Check if user already in session
     const existingParticipant = session.participants.find(
-      p => p.userId.toString() === userId
+      p => p.userId === userId
     );
 
     if (existingParticipant) {
@@ -255,7 +255,7 @@ router.post("/connect/:sessionId", requireAuth, async (req: Request, res: Respon
     }
 
     // Verify admin
-    if (session.adminId.toString() !== adminId) {
+    if (session.adminId !== adminId) {
       console.log("❌ Unauthorized: Not admin");
       return res.status(403).json({
         success: false,
@@ -305,7 +305,7 @@ router.post("/set-cards/:sessionId", requireAuth, async (req: Request, res: Resp
 
     // Find participant
     const participantIndex = session.participants.findIndex(
-      p => p.userId.toString() === userId
+      p => p.userId === userId
     );
 
     if (participantIndex === -1) {
@@ -365,8 +365,14 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
       });
     }
 
-    // Verify admin
-    if (session.adminId.toString() !== adminId) {
+    // Verify admin (adminId is now a string, no need for .toString())
+    console.log("🔐 Admin verification:", { 
+      sessionAdminId: session.adminId, 
+      requestAdminId: adminId,
+      match: session.adminId === adminId 
+    });
+    
+    if (session.adminId !== adminId) {
       return res.status(403).json({
         success: false,
         error: "Only admin can execute sharing"
@@ -482,23 +488,23 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
       if (session.allowParticipantSharing) {
         // Mode 1: Everyone shares with everyone (current behavior)
         recipientsToShareWith = session.participants.filter(
-          p => p.userId.toString() !== fromUserId.toString()
+          p => p.userId !== fromUserId
         );
         console.log(`📤 ${fromParticipant.userName} sharing with all participants (full exchange mode)`);
       } else {
         // Mode 2: Hub-spoke model (admin-controlled)
-        const isAdmin = fromUserId.toString() === session.adminId.toString();
+        const isAdmin = fromUserId === session.adminId;
         
         if (isAdmin) {
           // Admin shares with all participants
           recipientsToShareWith = session.participants.filter(
-            p => p.userId.toString() !== session.adminId.toString()
+            p => p.userId !== session.adminId
           );
           console.log(`📤 Admin ${fromParticipant.userName} sharing with all participants`);
         } else {
           // Non-admin participants only share with admin
           recipientsToShareWith = session.participants.filter(
-            p => p.userId.toString() === session.adminId.toString()
+            p => p.userId === session.adminId
           );
           console.log(`📤 ${fromParticipant.userName} sharing with admin only (restricted mode)`);
         }
@@ -532,7 +538,7 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
             });
 
             results.push({
-              fromUserId: fromUserId.toString(),
+              fromUserId: fromUserId,
               fromUserName: fromParticipant.userName,
               cardId: cardId.toString(),
               cardName: card.name,
@@ -556,9 +562,9 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
               if (existingShare) {
                 console.log(`⚠️ Duplicate: Card ${cardId} already shared from ${fromUserId} to ${toUserId}`);
                 duplicates.push({
-                  fromUserId: fromUserId.toString(),
+                  fromUserId: fromUserId,
                   fromUserName: fromParticipant.userName,
-                  toUserId: toUserId.toString(),
+                  toUserId: toUserId,
                   toUserName: toParticipant.userName,
                   cardId: cardId.toString(),
                   reason: "Already shared previously"
@@ -588,9 +594,9 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
               });
 
               results.push({
-                fromUserId: fromUserId.toString(),
+                fromUserId: fromUserId,
                 fromUserName: fromParticipant.userName,
-                toUserId: toUserId.toString(),
+                toUserId: toUserId,
                 toUserName: toParticipant.userName,
                 cardId: cardId.toString(),
                 cardName: card.name,
@@ -689,7 +695,7 @@ router.post("/end/:sessionId", requireAuth, async (req: Request, res: Response) 
     }
 
     // If admin is ending, mark session as completed
-    if (session.adminId.toString() === userId) {
+    if (session.adminId === userId) {
       session.status = "completed";
       session.isActive = false;
       await session.save();
@@ -704,7 +710,7 @@ router.post("/end/:sessionId", requireAuth, async (req: Request, res: Response) 
 
     // If participant is leaving, remove them
     session.participants = session.participants.filter(
-      p => p.userId.toString() !== userId
+      p => p.userId !== userId
     );
 
     // If no participants left, mark inactive
@@ -787,7 +793,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
     }
 
     // Verify admin
-    if (session.adminId.toString() !== adminId) {
+    if (session.adminId !== adminId) {
       console.log("❌ Unauthorized: Not admin");
       return res.status(403).json({
         success: false,
@@ -809,7 +815,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
 
     // Extract participant user IDs (exclude admin as they'll be added separately)
     const memberIds = session.participants
-      .filter(p => p.userId.toString() !== adminId)
+      .filter(p => p.userId !== adminId)
       .map(p => p.userId);
 
     console.log("👥 Creating group with members:", {
