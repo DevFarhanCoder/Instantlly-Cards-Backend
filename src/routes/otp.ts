@@ -10,6 +10,19 @@ const router = express.Router();
 const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || 'tH2an11rgORVwQE5FT8sHLqOYbn6AexAVGe3Y47JH9BszQM79JsISCg7aqGy';
 const FAST2SMS_URL = 'https://www.fast2sms.com/dev/bulkV2';
 
+// Debug endpoint to check API key configuration
+router.get('/debug-config', (req, res) => {
+  res.json({
+    apiKeyConfigured: !!FAST2SMS_API_KEY,
+    apiKeySource: process.env.FAST2SMS_API_KEY ? 'environment' : 'hardcoded',
+    apiKeyLength: FAST2SMS_API_KEY ? FAST2SMS_API_KEY.length : 0,
+    apiKeyFirst10: FAST2SMS_API_KEY ? FAST2SMS_API_KEY.substring(0, 10) + '...' : 'none',
+    apiKeyLast10: FAST2SMS_API_KEY ? '...' + FAST2SMS_API_KEY.substring(FAST2SMS_API_KEY.length - 10) : 'none',
+    fast2smsUrl: FAST2SMS_URL,
+    nodeEnv: process.env.NODE_ENV
+  });
+});
+
 // In-memory OTP store (use Redis in production)
 interface OTPRecord {
   code: string;
@@ -95,6 +108,8 @@ router.post('/send-otp', async (req, res) => {
       console.log('📞 Attempting to send SMS to:', cleanPhone);
       console.log('📝 Message:', message);
       console.log('🔑 Using Fast2SMS route: q (promotional - works but may fail for DND numbers)');
+      console.log('🔑 API Key first 10:', FAST2SMS_API_KEY.substring(0, 10) + '...');
+      console.log('🔑 API Key last 10: ...' + FAST2SMS_API_KEY.substring(FAST2SMS_API_KEY.length - 10));
       
       // Send OTP via Fast2SMS using route 'q' (promotional)
       // Note: Route 'v3' doesn't work with this account, 'dlt' needs DLT registration
@@ -107,11 +122,13 @@ router.post('/send-otp', async (req, res) => {
           route: 'q', // Promotional route - only one that works with this API key
           numbers: cleanPhone
         },
-        timeout: 10000 // 10 second timeout
+        timeout: 10000, // 10 second timeout
+        validateStatus: () => true // Accept any status code to see what's happening
       });
 
+      console.log('📡 Fast2SMS HTTP status:', response.status);
+      console.log('📡 Fast2SMS headers:', JSON.stringify(response.headers, null, 2));
       console.log('✅ Fast2SMS full response:', JSON.stringify(response.data, null, 2));
-      console.log('📊 Response status:', response.status);
       console.log('📊 Response return:', response.data?.return);
       console.log('📊 Response message:', response.data?.message);
 
