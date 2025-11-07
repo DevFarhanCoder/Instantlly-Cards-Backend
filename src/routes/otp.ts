@@ -89,14 +89,15 @@ router.post('/send-otp', async (req, res) => {
     const message = `Your InstantllyCards verification code is ${code}. It will expire in 5 minutes.`;
 
     try {
-      // Send OTP via Fast2SMS
+      // Send OTP via Fast2SMS using TRANSACTIONAL route (works with DND numbers)
       const response = await axios.get(FAST2SMS_URL, {
         params: {
           authorization: FAST2SMS_API_KEY,
           message,
           language: 'english',
-          route: 'q',
-          numbers: phone.replace(/\D/g, '') // Remove non-digits
+          route: 'v3', // Changed from 'q' to 'v3' (transactional route)
+          numbers: phone.replace(/\D/g, ''), // Remove non-digits
+          sender_id: 'TXTIND' // Default Fast2SMS transactional sender ID
         }
       });
 
@@ -109,20 +110,29 @@ router.post('/send-otp', async (req, res) => {
           ttl: ttlSeconds
         });
       } else {
-        throw new Error('Fast2SMS returned error');
+        // Log the specific error from Fast2SMS
+        console.error('❌ Fast2SMS error response:', response.data);
+        throw new Error(response.data?.message || 'Fast2SMS returned error');
       }
     } catch (smsError: any) {
       console.error('❌ Fast2SMS error:', smsError?.response?.data || smsError.message);
       
-      // For development: still return success and log the OTP
-      console.log('🔐 [DEV] OTP for', phone, ':', code);
+      // For development/testing: still return success and log the OTP
+      console.log('🔐 [DEV/FALLBACK] OTP for', phone, ':', code);
+      console.log('⚠️  SMS failed - possible causes:');
+      console.log('   - DND number (blocked in Fast2SMS)');
+      console.log('   - Insufficient credits');
+      console.log('   - Invalid API key or route');
+      console.log('   - Network error');
       
       return res.json({
         success: true,
-        message: 'OTP sent successfully',
+        message: 'OTP generated (check backend logs for code)',
         ttl: ttlSeconds,
-        // Remove this in production:
-        devOTP: process.env.NODE_ENV === 'development' ? code : undefined
+        // Return OTP in dev mode or when SMS fails (remove in production)
+        devOTP: code, // Always return for now since SMS might fail
+        smsStatus: 'failed',
+        smsError: smsError?.response?.data?.message || smsError.message
       });
     }
   } catch (error: any) {

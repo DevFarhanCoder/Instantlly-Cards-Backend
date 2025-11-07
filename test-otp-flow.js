@@ -2,7 +2,7 @@
 require('dotenv').config();
 const axios = require('axios');
 
-const BACKEND_URL = process.env.BACKEND_URL || 'https://instantlly-cards-backend.onrender.com';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://instantlly-cards-backend-6ki0.onrender.com';
 const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || 'tH2an11rgORVwQE5FT8sHLqOYbn6AexAVGe3Y47JH9BszQM79JsISCg7aqGy';
 
 async function testOTPFlow() {
