@@ -89,21 +89,34 @@ router.post('/send-otp', async (req, res) => {
     const message = `Your InstantllyCards verification code is ${code}. It will expire in 5 minutes.`;
 
     try {
-      // Send OTP via Fast2SMS using TRANSACTIONAL route (works with DND numbers)
+      // Clean phone number (remove +, spaces, hyphens)
+      const cleanPhone = phone.replace(/\D/g, '');
+      
+      console.log('📞 Attempting to send SMS to:', cleanPhone);
+      console.log('📝 Message:', message);
+      console.log('🔑 Using Fast2SMS route: q (promotional - works but may fail for DND numbers)');
+      
+      // Send OTP via Fast2SMS using route 'q' (promotional)
+      // Note: Route 'v3' doesn't work with this account, 'dlt' needs DLT registration
+      // Route 'q' works but may be blocked for DND numbers
       const response = await axios.get(FAST2SMS_URL, {
         params: {
           authorization: FAST2SMS_API_KEY,
           message,
           language: 'english',
-          route: 'v3', // Changed from 'q' to 'v3' (transactional route)
-          numbers: phone.replace(/\D/g, ''), // Remove non-digits
-          sender_id: 'TXTIND' // Default Fast2SMS transactional sender ID
-        }
+          route: 'q', // Promotional route - only one that works with this API key
+          numbers: cleanPhone
+        },
+        timeout: 10000 // 10 second timeout
       });
 
-      console.log('✅ Fast2SMS response:', response.data);
+      console.log('✅ Fast2SMS full response:', JSON.stringify(response.data, null, 2));
+      console.log('📊 Response status:', response.status);
+      console.log('📊 Response return:', response.data?.return);
+      console.log('📊 Response message:', response.data?.message);
 
       if (response.data && response.data.return === true) {
+        console.log('✅ SMS sent successfully via Fast2SMS');
         return res.json({
           success: true,
           message: 'OTP sent successfully',
@@ -111,28 +124,58 @@ router.post('/send-otp', async (req, res) => {
         });
       } else {
         // Log the specific error from Fast2SMS
-        console.error('❌ Fast2SMS error response:', response.data);
+        console.error('❌ Fast2SMS error response:', JSON.stringify(response.data, null, 2));
+        console.error('   Return:', response.data?.return);
+        console.error('   Message:', response.data?.message);
+        console.error('   Status Code:', response.data?.status_code);
+        
+        // If DND blocked, still return success with devOTP
+        if (response.data?.status_code === 427 || response.data?.message?.includes('DND')) {
+          console.log('📵 Number is in DND list - returning devOTP for manual entry');
+          return res.json({
+            success: true,
+            message: 'OTP generated. If SMS not received, use code from app.',
+            ttl: ttlSeconds,
+            devOTP: code, // Return OTP for DND numbers
+            smsStatus: 'blocked_dnd',
+            smsError: 'Number in DND list'
+          });
+        }
+        
         throw new Error(response.data?.message || 'Fast2SMS returned error');
       }
     } catch (smsError: any) {
-      console.error('❌ Fast2SMS error:', smsError?.response?.data || smsError.message);
+      console.error('❌ Fast2SMS error full details:');
+      console.error('   Type:', smsError.constructor.name);
+      console.error('   Message:', smsError.message);
+      console.error('   Response status:', smsError?.response?.status);
+      console.error('   Response data:', JSON.stringify(smsError?.response?.data, null, 2));
+      console.error('   Is timeout:', smsError.code === 'ECONNABORTED');
+      console.error('   Error code:', smsError.code);
       
       // For development/testing: still return success and log the OTP
       console.log('🔐 [DEV/FALLBACK] OTP for', phone, ':', code);
-      console.log('⚠️  SMS failed - possible causes:');
+      console.log('⚠️  SMS failed - returning OTP in response for user to enter manually');
+      console.log('   Possible causes:');
       console.log('   - DND number (blocked in Fast2SMS)');
-      console.log('   - Insufficient credits');
-      console.log('   - Invalid API key or route');
-      console.log('   - Network error');
+      console.log('   - Insufficient credits in Fast2SMS account');
+      console.log('   - Invalid API key or route not enabled');
+      console.log('   - Network error or timeout');
+      console.log('   - Fast2SMS service temporarily down');
       
       return res.json({
         success: true,
-        message: 'OTP generated (check backend logs for code)',
+        message: 'OTP generated. If SMS not received, use code from notification.',
         ttl: ttlSeconds,
-        // Return OTP in dev mode or when SMS fails (remove in production)
-        devOTP: code, // Always return for now since SMS might fail
+        // Always return OTP when SMS fails so user can proceed
+        devOTP: code,
         smsStatus: 'failed',
-        smsError: smsError?.response?.data?.message || smsError.message
+        smsError: smsError?.response?.data?.message || smsError.message || 'SMS delivery failed',
+        errorDetails: {
+          type: smsError.constructor.name,
+          code: smsError.code,
+          statusCode: smsError?.response?.data?.status_code
+        }
       });
     }
   } catch (error: any) {
