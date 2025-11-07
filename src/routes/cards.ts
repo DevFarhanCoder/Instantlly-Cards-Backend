@@ -204,10 +204,52 @@ r.post("/", async (req: AuthReq, res) => {
   }
 });
 
-// LIST own cards
+// LIST own cards (OPTIMIZED WITH PROPER CACHING AND LOGGING)
 r.get("/", async (req: AuthReq, res) => {
-  const items = await Card.find({ userId: req.userId! }).sort({ createdAt: -1 }).lean();
-  res.json({ data: items });
+  try {
+    const userId = req.userId!;
+    const startTime = Date.now();
+    
+    console.log(`📇 [${userId}] Fetching user's own cards...`);
+    
+    // Get user's cards with proper error handling
+    const items = await Card.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
+    
+    // Generate ETag for proper caching
+    const etag = `"own-cards-${userId}-${items.length}-${items[0]?.updatedAt || 'empty'}"`;
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
+      return res.status(304).end();
+    }
+    
+    // Set proper cache headers
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=60'); // Cache for 1 minute
+    
+    res.json({ 
+      success: true,
+      data: items,
+      meta: {
+        totalCards: items.length,
+        loadTimeMs: elapsed
+      }
+    });
+  } catch (err) {
+    console.error(`❌ [${req.userId}] ERROR fetching own cards:`, err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch cards",
+      data: [] 
+    });
+  }
 });
 
 // UPDATE
@@ -356,17 +398,21 @@ r.post("/:id/share", async (req: AuthReq, res) => {
   }
 });
 
-// GET SENT CARDS
+// GET SENT CARDS (OPTIMIZED WITH PROPER CACHING AND LOGGING)
 r.get("/sent", async (req: AuthReq, res) => {
   try {
     const senderId = req.userId!;
+    const startTime = Date.now();
+    
+    console.log(`📤 [${senderId}] Fetching sent cards...`);
     
     // Find all cards shared by this user, populate with card and recipient details
     const sentCards = await SharedCard.find({ senderId })
       .populate('cardId', 'companyName name companyPhoto')
       .populate('recipientId', 'name profilePicture')
       .sort({ sentAt: -1 })
-      .lean();
+      .lean()
+      .exec();
 
     // Format the response - filter out cards with deleted recipients/cards
     const formattedCards = sentCards
@@ -385,27 +431,57 @@ r.get("/sent", async (req: AuthReq, res) => {
         viewedAt: share.viewedAt
       }));
 
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${senderId}] Sent cards loaded in ${elapsed}ms - Found ${sentCards.length} total, ${formattedCards.length} valid`);
+
+    // Generate ETag for proper caching
+    const etag = `"sent-cards-${senderId}-${formattedCards.length}-${formattedCards[0]?.sentAt || 'empty'}"`;
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${senderId}] Client has cached sent cards - returning 304`);
+      return res.status(304).end();
+    }
+    
+    // Set proper cache headers
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=30'); // Cache for 30 seconds
+
     res.json({
       success: true,
-      data: formattedCards
+      data: formattedCards,
+      meta: {
+        totalSent: sentCards.length,
+        validCards: formattedCards.length,
+        filteredOut: sentCards.length - formattedCards.length,
+        loadTimeMs: elapsed
+      }
     });
   } catch (err) {
-    console.error("GET SENT CARDS ERROR", err);
-    res.status(500).json({ message: "Failed to fetch sent cards" });
+    console.error(`❌ [${req.userId}] GET SENT CARDS ERROR:`, err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch sent cards",
+      data: []
+    });
   }
 });
 
-// GET RECEIVED CARDS - Cards that have been shared with the current user
+// GET RECEIVED CARDS - Cards that have been shared with the current user (OPTIMIZED WITH PROPER CACHING AND LOGGING)
 r.get("/received", async (req: AuthReq, res) => {
   try {
     const recipientId = req.userId!;
+    const startTime = Date.now();
+    
+    console.log(`📥 [${recipientId}] Fetching received cards...`);
     
     // Find all cards shared with this user, populate with card and sender details
     const receivedCards = await SharedCard.find({ recipientId })
       .populate('cardId', 'companyName name companyPhoto')
       .populate('senderId', 'name profilePicture')
       .sort({ sentAt: -1 })
-      .lean();
+      .lean()
+      .exec();
 
     // Format the response - filter out cards with deleted senders/cards
     const formattedCards = receivedCards
@@ -426,13 +502,41 @@ r.get("/received", async (req: AuthReq, res) => {
         viewedAt: share.viewedAt
       }));
 
+    const elapsed = Date.now() - startTime;
+    const unviewedCount = formattedCards.filter(card => !card.isViewed).length;
+    console.log(`✅ [${recipientId}] Received cards loaded in ${elapsed}ms - Found ${receivedCards.length} total, ${formattedCards.length} valid, ${unviewedCount} unviewed`);
+
+    // Generate ETag for proper caching
+    const etag = `"received-cards-${recipientId}-${formattedCards.length}-${formattedCards[0]?.sentAt || 'empty'}"`;
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${recipientId}] Client has cached received cards - returning 304`);
+      return res.status(304).end();
+    }
+    
+    // Set proper cache headers
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=30'); // Cache for 30 seconds
+
     res.json({
       success: true,
-      data: formattedCards
+      data: formattedCards,
+      meta: {
+        totalReceived: receivedCards.length,
+        validCards: formattedCards.length,
+        unviewedCount: unviewedCount,
+        filteredOut: receivedCards.length - formattedCards.length,
+        loadTimeMs: elapsed
+      }
     });
   } catch (err) {
-    console.error("GET RECEIVED CARDS ERROR", err);
-    res.status(500).json({ message: "Failed to fetch received cards" });
+    console.error(`❌ [${req.userId}] GET RECEIVED CARDS ERROR:`, err);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch received cards",
+      data: []
+    });
   }
 });
 
@@ -441,9 +545,14 @@ r.get("/received", async (req: AuthReq, res) => {
 r.get("/:id", async (req: AuthReq, res) => {
   try {
     const cardId = req.params.id;
+    const userId = req.userId!;
+    const startTime = Date.now();
+    
+    console.log(`🔍 [${userId}] Fetching single card: ${cardId}`);
     
     // Validate ObjectId format
     if (!cardId.match(/^[0-9a-fA-F]{24}$/)) {
+      console.log(`❌ [${userId}] Invalid card ID format: ${cardId}`);
       return res.status(400).json({ 
         success: false,
         message: "Invalid card ID format" 
@@ -453,24 +562,46 @@ r.get("/:id", async (req: AuthReq, res) => {
     // Find the card and populate user details
     const card = await Card.findById(cardId)
       .populate('userId', 'name profilePicture')
-      .lean();
+      .lean()
+      .exec();
     
     if (!card) {
+      console.log(`❌ [${userId}] Card not found: ${cardId}`);
       return res.status(404).json({ 
         success: false,
         message: "Card not found" 
       });
     }
 
+    const elapsed = Date.now() - startTime;
+    console.log(`✅ [${userId}] Single card fetched in ${elapsed}ms - Card: ${(card as any).name || 'Unnamed'}`);
+
+    // Generate ETag for caching
+    const etag = `"card-${cardId}-${(card as any).updatedAt}"`;
+    
+    // Check if client has cached version
+    if (req.headers['if-none-match'] === etag) {
+      console.log(`💾 [${userId}] Client has cached card ${cardId} - returning 304`);
+      return res.status(304).end();
+    }
+    
+    // Set cache headers
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
+
     res.json({ 
       success: true,
-      data: card 
+      data: card,
+      meta: {
+        loadTimeMs: elapsed
+      }
     });
   } catch (err) {
-    console.error("GET CARD BY ID ERROR", err);
+    console.error(`❌ [${req.userId}] GET CARD BY ID ERROR for ${req.params.id}:`, err);
     res.status(500).json({ 
       success: false,
-      message: "Failed to fetch card" 
+      message: "Failed to fetch card",
+      data: null
     });
   }
 });
