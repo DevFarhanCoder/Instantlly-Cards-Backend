@@ -407,10 +407,13 @@ r.get("/sent", async (req: AuthReq, res) => {
     console.log(`📤 [${senderId}] Fetching sent cards...`);
     
     // Find all cards shared by this user, populate with card and recipient details
+    // Limit to 100 most recent to prevent timeouts in production
     const sentCards = await SharedCard.find({ senderId })
       .populate('cardId', 'companyName name companyPhoto')
       .populate('recipientId', 'name profilePicture')
       .sort({ sentAt: -1 })
+      .limit(100)
+      .maxTimeMS(10000) // 10 second timeout
       .lean()
       .exec();
 
@@ -475,11 +478,14 @@ r.get("/received", async (req: AuthReq, res) => {
     
     console.log(`📥 [${recipientId}] Fetching received cards...`);
     
-    // Find all cards shared with this user, populate with card and sender details
+    // Find all cards shared with this user, populate with card and sender details  
+    // Limit to 100 most recent to prevent timeouts in production
     const receivedCards = await SharedCard.find({ recipientId })
       .populate('cardId', 'companyName name companyPhoto')
       .populate('senderId', 'name profilePicture')
       .sort({ sentAt: -1 })
+      .limit(100)
+      .maxTimeMS(10000) // 10 second timeout
       .lean()
       .exec();
 
