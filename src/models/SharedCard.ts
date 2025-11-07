@@ -63,13 +63,33 @@ const sharedCardSchema = new mongoose.Schema({
     required: true 
   },
   
+  // PERFORMANCE OPTIMIZATION: Store photos directly (ultra denormalization)
+  // This eliminates need for additional queries to Card and User collections
+  cardPhoto: { 
+    type: String, 
+    default: "" 
+  },
+  
+  senderProfilePicture: { 
+    type: String, 
+    default: "" 
+  },
+  
+  recipientProfilePicture: { 
+    type: String, 
+    default: "" 
+  },
+  
 }, {
   timestamps: true // Adds createdAt and updatedAt
 });
 
-// Indexes for efficient queries
-sharedCardSchema.index({ senderId: 1, sentAt: -1 }); // For sent cards query
-sharedCardSchema.index({ recipientId: 1, sentAt: -1 }); // For received cards query
+// Indexes for efficient queries with cursor-based pagination
+sharedCardSchema.index({ senderId: 1, _id: -1 }); // For sent cards with cursor pagination
+sharedCardSchema.index({ recipientId: 1, _id: -1 }); // For received cards with cursor pagination
+sharedCardSchema.index({ senderId: 1, sentAt: -1 }); // For sent cards time-based sorting
+sharedCardSchema.index({ recipientId: 1, sentAt: -1 }); // For received cards time-based sorting
+sharedCardSchema.index({ recipientId: 1, status: 1, _id: -1 }); // For unviewed cards with cursor
 sharedCardSchema.index({ cardId: 1 }); // For card lookup
 sharedCardSchema.index({ status: 1 }); // For status filtering
 
