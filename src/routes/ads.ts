@@ -347,20 +347,53 @@ router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
   }
 });
 
-// GET /api/ads - Get all ads (admin)
+// GET /api/ads - Get all ads (admin) with pagination and filtering
 router.get("/", async (req: AdminAuthReq, res: Response) => {
   try {
     console.log('📊 Admin GET /api/ads - Request received');
+    
+    // SCALABILITY: Pagination parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Max 100 per page
+    const skip = (page - 1) * limit;
+    
+    // SCALABILITY: Filtering options
+    const filter: any = {};
+    
+    // Filter by status (active/expired/all)
+    if (req.query.status === 'active') {
+      const now = new Date();
+      filter.startDate = { $lte: now };
+      filter.endDate = { $gte: now };
+    } else if (req.query.status === 'expired') {
+      filter.endDate = { $lt: new Date() };
+    } else if (req.query.status === 'upcoming') {
+      filter.startDate = { $gt: new Date() };
+    }
+    
+    // Filter by search term (title or phone)
+    if (req.query.search) {
+      const searchTerm = req.query.search as string;
+      filter.$or = [
+        { title: { $regex: searchTerm, $options: 'i' } },
+        { phoneNumber: { $regex: searchTerm, $options: 'i' } }
+      ];
+    }
+    
+    // PERFORMANCE: Get total count for pagination (with same filters)
+    const totalAds = await Ad.countDocuments(filter);
+    
     // CRITICAL: Exclude base64 image fields to prevent timeout on large datasets
     // Only fetch metadata - images are served via GridFS endpoints
-    const ads = await Ad.find({})
+    const ads = await Ad.find(filter)
       .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
       .sort({ createdAt: -1 })
-      .limit(1000) // Limit to prevent memory issues
+      .skip(skip)
+      .limit(limit)
       .lean()
       .exec();
 
-    console.log(`✅ Found ${ads.length} ads from database`);
+    console.log(`✅ Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
 
     // Transform ads to include proper image URLs for admin dashboard
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
@@ -393,7 +426,15 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
     console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
     res.json({
       success: true,
-      data: adsWithImageUrls
+      data: adsWithImageUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalAds / limit),
+        totalAds: totalAds,
+        adsPerPage: limit,
+        hasNextPage: page < Math.ceil(totalAds / limit),
+        hasPrevPage: page > 1
+      }
     });
   } catch (error) {
     console.error("❌ GET ALL ADS ERROR:", error);

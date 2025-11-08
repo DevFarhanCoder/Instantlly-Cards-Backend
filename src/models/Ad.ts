@@ -91,4 +91,17 @@ AdSchema.index({ createdAt: -1 });
 // Compound index for active ads query with sort optimization
 AdSchema.index({ startDate: 1, endDate: 1, priority: -1, createdAt: -1 });
 
+// SCALABILITY: Additional indexes for crores of ads
+// Text search index for title and phone (enables fast search)
+AdSchema.index({ title: 'text', phoneNumber: 'text' });
+
+// Index for phone number exact lookups
+AdSchema.index({ phoneNumber: 1 });
+
+// Index for expired ads queries
+AdSchema.index({ endDate: 1 });
+
+// Index for upcoming ads queries
+AdSchema.index({ startDate: 1 });
+
 export default mongoose.model("Ad", AdSchema);
