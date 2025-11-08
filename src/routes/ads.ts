@@ -356,9 +356,26 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
       .lean()
       .exec();
 
+    // Transform ads to include proper image URLs for admin dashboard
+    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    const adsWithImageUrls = ads.map(ad => {
+      // If using GridFS (new ads), provide URL endpoints
+      if (ad.bottomImageGridFS) {
+        return {
+          ...ad,
+          bottomImage: `${imageBaseUrl}/api/ads/image/${ad._id}/bottom`,
+          fullscreenImage: ad.fullscreenImageGridFS 
+            ? `${imageBaseUrl}/api/ads/image/${ad._id}/fullscreen`
+            : ""
+        };
+      }
+      // Legacy ads with base64 - return as is
+      return ad;
+    });
+
     res.json({
       success: true,
-      data: ads
+      data: adsWithImageUrls
     });
   } catch (error) {
     console.error("GET ALL ADS ERROR:", error);
