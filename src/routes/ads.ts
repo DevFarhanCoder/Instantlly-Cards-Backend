@@ -362,18 +362,33 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
     // Transform ads to include proper image URLs for admin dashboard
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
     const adsWithImageUrls = ads.map((ad: any) => {
-      // If using GridFS (new ads), provide URL endpoints
-      if (ad.bottomImageGridFS) {
+      try {
+        // If using GridFS (new ads), provide URL endpoints
+        if (ad.bottomImageGridFS) {
+          const adId = ad._id.toString();
+          return {
+            ...ad,
+            _id: adId,
+            bottomImage: `${imageBaseUrl}/api/ads/image/${adId}/bottom`,
+            fullscreenImage: ad.fullscreenImageGridFS 
+              ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
+              : "",
+            bottomImageGridFS: ad.bottomImageGridFS?.toString(),
+            fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
+          };
+        }
+        // Legacy ads with base64 - return as is
         return {
           ...ad,
-          bottomImage: `${imageBaseUrl}/api/ads/image/${ad._id}/bottom`,
-          fullscreenImage: ad.fullscreenImageGridFS 
-            ? `${imageBaseUrl}/api/ads/image/${ad._id}/fullscreen`
-            : ""
+          _id: ad._id.toString(),
+          bottomImageGridFS: ad.bottomImageGridFS?.toString(),
+          fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
         };
+      } catch (mapError) {
+        console.error('❌ Error transforming ad:', ad._id, mapError);
+        // Return ad as-is if transformation fails
+        return ad;
       }
-      // Legacy ads with base64 - return as is
-      return ad;
     });
 
     console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
