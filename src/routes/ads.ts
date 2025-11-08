@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
 
 const router = Router();
@@ -297,13 +298,13 @@ router.post("/track-click/:id", async (req: Request, res: Response) => {
   }
 });
 
-// ========== ADMIN ROUTES (REQUIRE AUTH) ==========
+// ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
 
-router.use(requireAuth);
+router.use(requireAdminAuth);
 
 // GET /api/ads/analytics/summary - Get analytics summary (admin)
 // MUST be before /:id route to avoid matching "analytics" as an id
-router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
+router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
   try {
     const totalAds = await Ad.countDocuments();
     const now = new Date();
@@ -347,7 +348,7 @@ router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
 });
 
 // GET /api/ads - Get all ads (admin)
-router.get("/", async (req: AuthReq, res: Response) => {
+router.get("/", async (req: AdminAuthReq, res: Response) => {
   try {
     const ads = await Ad.find({})
       .sort({ createdAt: -1 })
@@ -369,7 +370,7 @@ router.get("/", async (req: AuthReq, res: Response) => {
 });
 
 // GET /api/ads/:id - Get single ad (admin)
-router.get("/:id", async (req: AuthReq, res: Response) => {
+router.get("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
     const ad = await Ad.findById(req.params.id).lean();
 
@@ -394,7 +395,7 @@ router.get("/:id", async (req: AuthReq, res: Response) => {
 });
 
 // POST /api/ads - Create new ad (admin)
-router.post("/", async (req: AuthReq, res: Response) => {
+router.post("/", async (req: AdminAuthReq, res: Response) => {
   try {
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
 
@@ -459,7 +460,7 @@ router.post("/", async (req: AuthReq, res: Response) => {
 });
 
 // PUT /api/ads/:id - Update ad (admin)
-router.put("/:id", async (req: AuthReq, res: Response) => {
+router.put("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
 
@@ -500,7 +501,7 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
 });
 
 // DELETE /api/ads/:id - Delete ad (admin)
-router.delete("/:id", async (req: AuthReq, res: Response) => {
+router.delete("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
     const ad = await Ad.findById(req.params.id);
 
