@@ -350,15 +350,18 @@ router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
 // GET /api/ads - Get all ads (admin)
 router.get("/", async (req: AdminAuthReq, res: Response) => {
   try {
+    console.log('📊 Admin GET /api/ads - Request received');
     const ads = await Ad.find({})
       .sort({ createdAt: -1 })
       .limit(1000) // Limit to prevent memory issues
       .lean()
       .exec();
 
+    console.log(`✅ Found ${ads.length} ads from database`);
+
     // Transform ads to include proper image URLs for admin dashboard
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
-    const adsWithImageUrls = ads.map(ad => {
+    const adsWithImageUrls = ads.map((ad: any) => {
       // If using GridFS (new ads), provide URL endpoints
       if (ad.bottomImageGridFS) {
         return {
@@ -373,15 +376,17 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
       return ad;
     });
 
+    console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
     res.json({
       success: true,
       data: adsWithImageUrls
     });
   } catch (error) {
-    console.error("GET ALL ADS ERROR:", error);
+    console.error("❌ GET ALL ADS ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch ads"
+      message: "Failed to fetch ads",
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
