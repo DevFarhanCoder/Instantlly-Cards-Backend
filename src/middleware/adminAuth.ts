@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 
+// Admin authentication middleware for ads dashboard and admin routes
 export interface AdminAuthReq extends Request {
   adminId?: string;
   adminUsername?: string;
