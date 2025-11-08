@@ -351,7 +351,10 @@ router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
 router.get("/", async (req: AdminAuthReq, res: Response) => {
   try {
     console.log('📊 Admin GET /api/ads - Request received');
+    // CRITICAL: Exclude base64 image fields to prevent timeout on large datasets
+    // Only fetch metadata - images are served via GridFS endpoints
     const ads = await Ad.find({})
+      .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
       .sort({ createdAt: -1 })
       .limit(1000) // Limit to prevent memory issues
       .lean()
@@ -363,24 +366,20 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
     const adsWithImageUrls = ads.map((ad: any) => {
       try {
-        // If using GridFS (new ads), provide URL endpoints
-        if (ad.bottomImageGridFS) {
-          const adId = ad._id.toString();
-          return {
-            ...ad,
-            _id: adId,
-            bottomImage: `${imageBaseUrl}/api/ads/image/${adId}/bottom`,
-            fullscreenImage: ad.fullscreenImageGridFS 
-              ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
-              : "",
-            bottomImageGridFS: ad.bottomImageGridFS?.toString(),
-            fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
-          };
-        }
-        // Legacy ads with base64 - return as is
+        const adId = ad._id.toString();
+        
+        // ALL ads (both legacy and new) now use GridFS image endpoints
+        // This ensures consistent behavior and avoids sending large base64 in response
         return {
           ...ad,
-          _id: ad._id.toString(),
+          _id: adId,
+          // Use GridFS endpoints for images (works for both old and new ads)
+          bottomImage: ad.bottomImageGridFS 
+            ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
+            : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
+          fullscreenImage: ad.fullscreenImageGridFS 
+            ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
+            : "", // No fullscreen if not set
           bottomImageGridFS: ad.bottomImageGridFS?.toString(),
           fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
         };
