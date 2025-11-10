@@ -717,8 +717,13 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
       updateData.bottomImageGridFS = bottomImageId;
       console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
     } else if (bottomImage && (bottomImage.startsWith('http://') || bottomImage.startsWith('https://'))) {
-      // Ignore - this is the GridFS endpoint URL from the edit form (no change needed)
-      console.log(`ℹ️  Bottom image unchanged (GridFS URL detected)`);
+      // GridFS URL detected - clear old base64 data if exists
+      if (existingAd.bottomImage && existingAd.bottomImage.length > 100) {
+        updateData.bottomImage = ""; // Clear legacy base64 field
+        console.log(`🧹 Clearing old base64 bottom image data (keeping GridFS reference)`);
+      } else {
+        console.log(`ℹ️  Bottom image unchanged (GridFS URL detected)`);
+      }
     }
 
     // Handle fullscreen image update (if new base64 image provided)
@@ -747,8 +752,13 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
         updateData.fullscreenImageGridFS = fullscreenImageId;
         console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
       } else if (fullscreenImage && (fullscreenImage.startsWith('http://') || fullscreenImage.startsWith('https://'))) {
-        // Ignore - this is the GridFS endpoint URL from the edit form (no change needed)
-        console.log(`ℹ️  Fullscreen image unchanged (GridFS URL detected)`);
+        // GridFS URL detected - clear old base64 data if exists
+        if (existingAd.fullscreenImage && existingAd.fullscreenImage.length > 100) {
+          updateData.fullscreenImage = ""; // Clear legacy base64 field
+          console.log(`🧹 Clearing old base64 fullscreen image data (keeping GridFS reference)`);
+        } else {
+          console.log(`ℹ️  Fullscreen image unchanged (GridFS URL detected)`);
+        }
       } else if (fullscreenImage === "" || fullscreenImage === null) {
         // User removed fullscreen image
         if (existingAd.fullscreenImageGridFS) {
