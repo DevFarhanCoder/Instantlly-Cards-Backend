@@ -485,21 +485,51 @@ router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
 // GET /api/ads - Get all ads (admin)
 router.get("/", async (req: AuthReq, res: Response) => {
   try {
+    console.log('📋 Admin fetching all ads...');
+    
+    // Check DB connection before querying
+    if (!isDBConnected()) {
+      console.error('❌ Database not connected - refusing query');
+      return res.status(503).json({
+        success: false,
+        message: "Database not connected. Please try again in a moment.",
+        error: "DB_NOT_CONNECTED"
+      });
+    }
+    
     const ads = await Ad.find({})
       .sort({ createdAt: -1 })
       .limit(1000) // Limit to prevent memory issues
+      .maxTimeMS(30000) // 30s timeout
       .lean()
       .exec();
+
+    console.log(`✅ Fetched ${ads.length} ads for admin`);
 
     res.json({
       success: true,
       data: ads
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("GET ALL ADS ERROR:", error);
+    console.error("Error name:", error.name);
+    console.error("Error message:", error.message);
+    
+    // Check for timeout
+    if (error.message?.includes('timeout') || error.name === 'MongoNetworkTimeoutError') {
+      console.error('⏱️ DATABASE TIMEOUT - MongoDB connection is too slow!');
+      console.error('💡 This indicates: Network latency OR MongoDB Atlas overload');
+      return res.status(504).json({
+        success: false,
+        message: "Database timeout - MongoDB connection is too slow. Check MongoDB Atlas status.",
+        error: "DB_TIMEOUT"
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: "Failed to fetch ads"
+      message: "Failed to fetch ads",
+      error: error.message
     });
   }
 });
