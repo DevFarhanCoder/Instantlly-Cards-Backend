@@ -30,10 +30,15 @@ export async function connectDB() {
       family: 4
     });
 
+    // Set connected flag immediately after successful connection
+    isConnected = true;
+    connectionAttempts = 0;
+    console.log("✅ MongoDB connection established");
+
     const c = mongoose.connection;
     
     c.on("connected", () => {
-      console.log("✅ MongoDB connected successfully");
+      console.log("✅ MongoDB connected event fired");
       isConnected = true;
       connectionAttempts = 0;
     });
@@ -62,7 +67,6 @@ export async function connectDB() {
       connectionAttempts = 0;
     });
     
-    console.log("MongoDB connection established");
   } catch (error: any) {
     connectionAttempts++;
     console.error(`❌ MongoDB connection failed (attempt ${connectionAttempts}/${MAX_RETRY_ATTEMPTS}):`, error.message);
