@@ -18,10 +18,6 @@ class OptimizedImageService {
   
   // Chunk size for streaming (512KB chunks - larger for better throughput)
   private readonly CHUNK_SIZE = 512 * 1024; // 512KB
-  
-  // Timeout settings - increased for slow networks
-  private readonly STREAM_TIMEOUT = 60000; // 60 seconds total
-  private readonly CHUNK_TIMEOUT = 15000; // 15 seconds per chunk (slow networks)
 
   initialize() {
     if (this.isInitialized) return;
@@ -36,7 +32,7 @@ class OptimizedImageService {
     });
 
     this.isInitialized = true;
-    console.log("✅ Optimized Image Service initialized (512KB chunks, 15s chunk timeout)");
+    console.log("✅ Optimized Image Service initialized (512KB chunks)");
   }
 
   /**
@@ -68,19 +64,12 @@ class OptimizedImageService {
     });
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        uploadStream.destroy();
-        reject(new Error("Upload timeout"));
-      }, this.STREAM_TIMEOUT);
-
       readStream
         .pipe(uploadStream)
         .on("error", (err) => {
-          clearTimeout(timeout);
           reject(err);
         })
         .on("finish", () => {
-          clearTimeout(timeout);
           console.log(`✅ Uploaded ${filename} (${uploadStream.id})`);
           resolve(uploadStream.id as ObjectId);
         });
@@ -88,8 +77,8 @@ class OptimizedImageService {
   }
 
   /**
-   * Download with chunked streaming and timeout protection
-   * Returns a controlled stream that won't hang
+   * Download with chunked streaming
+   * Returns a controlled stream
    */
   getChunkedDownloadStream(fileId: string | ObjectId) {
     if (!this.bucket) {
@@ -99,34 +88,20 @@ class OptimizedImageService {
     const id = typeof fileId === "string" ? new ObjectId(fileId) : fileId;
     const downloadStream = this.bucket.openDownloadStream(id);
 
-    // Add chunk tracking for timeout detection
-    let lastChunkTime = Date.now();
+    // Add chunk tracking for logging
     let totalBytes = 0;
     let chunkCount = 0;
 
-    const chunkMonitor = setInterval(() => {
-      const timeSinceLastChunk = Date.now() - lastChunkTime;
-      
-      if (timeSinceLastChunk > this.CHUNK_TIMEOUT) {
-        console.error(`⏱️ Chunk timeout - No data for ${timeSinceLastChunk}ms`);
-        clearInterval(chunkMonitor);
-        downloadStream.destroy(new Error("Chunk timeout"));
-      }
-    }, 1000);
-
     downloadStream.on('data', (chunk) => {
-      lastChunkTime = Date.now();
       totalBytes += chunk.length;
       chunkCount++;
     });
 
     downloadStream.on('end', () => {
-      clearInterval(chunkMonitor);
       console.log(`✅ Stream complete - ${chunkCount} chunks, ${(totalBytes / 1024).toFixed(2)}KB`);
     });
 
     downloadStream.on('error', (err) => {
-      clearInterval(chunkMonitor);
       console.error(`❌ Stream error after ${chunkCount} chunks:`, err.message);
     });
 
@@ -163,11 +138,6 @@ class OptimizedImageService {
     const downloadStream = this.bucket.openDownloadStream(id);
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        downloadStream.destroy();
-        reject(new Error(`Download timeout after ${(chunks.length * maxBatchSize / 1024).toFixed(2)}KB`));
-      }, this.STREAM_TIMEOUT);
-
       let currentBatch = 0;
 
       downloadStream
@@ -180,11 +150,9 @@ class OptimizedImageService {
           }
         })
         .on("error", (err) => {
-          clearTimeout(timeout);
           reject(err);
         })
         .on("end", () => {
-          clearTimeout(timeout);
           const buffer = Buffer.concat(chunks);
           const base64 = buffer.toString("base64");
           const contentType = this.getContentType(file.filename);
@@ -219,19 +187,13 @@ class OptimizedImageService {
 
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
-      const timeout = setTimeout(() => {
-        downloadStream.destroy();
-        reject(new Error("Range download timeout"));
-      }, this.CHUNK_TIMEOUT);
 
       downloadStream
         .on("data", (chunk) => chunks.push(chunk))
         .on("error", (err) => {
-          clearTimeout(timeout);
           reject(err);
         })
         .on("end", () => {
-          clearTimeout(timeout);
           resolve(Buffer.concat(chunks));
         });
     });

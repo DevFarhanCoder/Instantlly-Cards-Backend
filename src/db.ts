@@ -18,16 +18,8 @@ export async function connectDB() {
   
   try {
     await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 30000,
-      socketTimeoutMS: 90000, // Increased to 90s for slow GridFS streams
-      connectTimeoutMS: 30000,
-      maxPoolSize: 100, // Increased pool size for concurrent requests
-      minPoolSize: 20,
-      maxIdleTimeMS: 120000, // Keep connections alive longer
       retryWrites: true,
       retryReads: true,
-      heartbeatFrequencyMS: 10000,
-      family: 4
     });
 
     // Set connected flag immediately after successful connection
