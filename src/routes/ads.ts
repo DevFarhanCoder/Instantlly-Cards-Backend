@@ -716,6 +716,9 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
       updateData.bottomImage = ""; // Clear base64 field
       updateData.bottomImageGridFS = bottomImageId;
       console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
+    } else if (bottomImage && (bottomImage.startsWith('http://') || bottomImage.startsWith('https://'))) {
+      // Ignore - this is the GridFS endpoint URL from the edit form (no change needed)
+      console.log(`ℹ️  Bottom image unchanged (GridFS URL detected)`);
     }
 
     // Handle fullscreen image update (if new base64 image provided)
@@ -743,6 +746,9 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
         updateData.fullscreenImage = ""; // Clear base64 field
         updateData.fullscreenImageGridFS = fullscreenImageId;
         console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+      } else if (fullscreenImage && (fullscreenImage.startsWith('http://') || fullscreenImage.startsWith('https://'))) {
+        // Ignore - this is the GridFS endpoint URL from the edit form (no change needed)
+        console.log(`ℹ️  Fullscreen image unchanged (GridFS URL detected)`);
       } else if (fullscreenImage === "" || fullscreenImage === null) {
         // User removed fullscreen image
         if (existingAd.fullscreenImageGridFS) {
