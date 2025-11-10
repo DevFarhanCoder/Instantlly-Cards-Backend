@@ -1,10 +1,31 @@
 import { Router, Request, Response } from "express";
+import mongoose from "mongoose";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { gridfsService } from "../services/gridfsService";
 import { imageCache } from "../utils/imageCache";
+import { isDBConnected } from "../db";
 
 const router = Router();
+
+// GET /api/ads/health - Health check endpoint
+router.get("/health", async (req: Request, res: Response) => {
+  const health = {
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    database: {
+      connected: isDBConnected(),
+      state: ["disconnected", "connected", "connecting", "disconnecting"][
+        mongoose.connection.readyState
+      ] || "unknown"
+    },
+    cache: imageCache.getStats(),
+    uptime: process.uptime()
+  };
+
+  const statusCode = health.database.connected ? 200 : 503;
+  res.status(statusCode).json(health);
+});
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
 // ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
@@ -12,50 +33,31 @@ router.get("/active", async (req: Request, res: Response) => {
   try {
     const now = new Date();
 
-    // 🔍 LOG: Request received
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📱 [STEP 1] GET /api/ads/active - Request Received');
-    console.log('🕐 Timestamp:', now.toISOString());
-    console.log('🌐 User-Agent:', req.headers['user-agent']);
-    console.log('🔗 Origin:', req.headers.origin || 'No origin');
-    console.log('🔗 Referer:', req.headers.referer || 'No referer');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    // � Check database connection first
+    if (!isDBConnected()) {
+      console.error('❌ Database not connected - cannot fetch active ads');
+      return res.status(503).json({
+        success: false,
+        message: "Database temporarily unavailable",
+        data: [],
+        count: 0
+      });
+    }
 
     // Set cache headers for 5 minutes
     res.setHeader('Cache-Control', 'public, max-age=300');
 
-    // 🔍 LOG: Database query start
-    console.log('📊 [STEP 2] Querying Database for Active Ads');
-    console.log('🔎 Query criteria:', {
-      startDate: { $lte: now },
-      endDate: { $gte: now }
-    });
-
     // Get ads that are currently active (within date range)
-    // Only fetch metadata, NOT images (GridFS handles images separately)
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now }
     })
       .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
       .sort({ priority: -1, createdAt: -1 })
-      .limit(50) // Can handle more ads now (no heavy base64 payload)
+      .limit(50)
       .lean()
+      .maxTimeMS(10000) // 10 second timeout
       .exec();
-
-    // 🔍 LOG: Database query result
-    console.log('✅ [STEP 3] Database Query Complete');
-    console.log('📈 Total ads found:', ads.length);
-    if (ads.length > 0) {
-      console.log('📋 First ad sample:', {
-        _id: ads[0]._id,
-        title: ads[0].title,
-        hasBottomImageGridFS: !!ads[0].bottomImageGridFS,
-        hasFullscreenImageGridFS: !!ads[0].fullscreenImageGridFS,
-        bottomImageGridFS: ads[0].bottomImageGridFS?.toString() || 'NULL',
-        fullscreenImageGridFS: ads[0].fullscreenImageGridFS?.toString() || 'NULL'
-      });
-    }
 
     // Transform ads to include image URLs instead of base64
     const adsWithUrls = ads.map(ad => ({
@@ -80,22 +82,6 @@ router.get("/active", async (req: Request, res: Response) => {
 
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
 
-    // 🔍 LOG: Response preparation
-    console.log('🔧 [STEP 4] Preparing Response');
-    console.log('🌐 Image Base URL:', imageBaseUrl);
-    if (adsWithUrls.length > 0) {
-      console.log('📸 First ad URLs:', {
-        bottomImageUrl: adsWithUrls[0].bottomImageUrl,
-        fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
-        fullBottomUrl: adsWithUrls[0].bottomImageUrl 
-          ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}` 
-          : 'NULL',
-        fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl 
-          ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}` 
-          : 'NULL'
-      });
-    }
-
     const responseData = {
       success: true,
       data: adsWithUrls,
@@ -104,23 +90,35 @@ router.get("/active", async (req: Request, res: Response) => {
       imageBaseUrl: imageBaseUrl
     };
 
-    // 🔍 LOG: Sending response
-    console.log('📤 [STEP 5] Sending Response to Client');
-    console.log('📊 Response summary:', {
-      success: true,
-      count: adsWithUrls.length,
-      imageBaseUrl: imageBaseUrl,
-      adsWithImages: adsWithUrls.filter(ad => ad.hasBottomImage).length,
-      adsWithFullscreen: adsWithUrls.filter(ad => ad.hasFullscreenImage).length
-    });
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
     res.json(responseData);
-  } catch (error) {
+  } catch (error: any) {
+    // Check for authentication errors
+    if (error.message?.includes('Authentication failed') || 
+        error.message?.includes('auth failed') ||
+        error.message?.includes('bad auth')) {
+      console.error('🔐 MongoDB authentication error in active ads fetch');
+      return res.status(503).json({
+        success: false,
+        message: "Database authentication error. Please contact administrator.",
+        error: "DB_AUTH_FAILED"
+      });
+    }
+
+    // Check for timeout errors
+    if (error.message?.includes('timeout') || error.name === 'MongoNetworkTimeoutError') {
+      console.error('⏱️ Database timeout in active ads fetch');
+      return res.status(504).json({
+        success: false,
+        message: "Database query timeout. Please try again.",
+        error: "DB_TIMEOUT"
+      });
+    }
+
     console.error("❌ GET ACTIVE ADS ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch ads"
+      message: "Failed to fetch ads",
+      error: "INTERNAL_ERROR"
     });
   }
 });
@@ -132,9 +130,6 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
   try {
     const { id, type } = req.params;
 
-    // 🔍 LOG: Image request received
-    console.log('🖼️  GET /api/ads/image/:id/:type - Ad ID:', id, 'Type:', type);
-
     if (type !== "bottom" && type !== "fullscreen") {
       return res.status(400).json({
         success: false,
@@ -142,26 +137,31 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       });
     }
 
+    // 🔒 CRITICAL: Check database connection first
+    if (!isDBConnected()) {
+      console.error('❌ Database not connected - cannot fetch ad image');
+      return res.status(503).json({
+        success: false,
+        message: "Database temporarily unavailable. Please check connection settings.",
+        error: "DB_NOT_CONNECTED"
+      });
+    }
+
     // Check cache first to avoid database query
     const cached = imageCache.get(id, type as 'bottom' | 'fullscreen');
     if (cached) {
-      console.log('✅ Cache hit for ad:', id, 'type:', type);
-      
       if (cached.gridfsId) {
-        // Stream from GridFS using cached ID
         res.setHeader('Cache-Control', 'public, max-age=86400');
         res.setHeader('Content-Type', 'image/jpeg');
         
         const downloadStream = gridfsService.getDownloadStream(cached.gridfsId);
         downloadStream.on('error', (error) => {
-          console.error('❌ GridFS download error:', error.message);
           if (!res.headersSent) {
-            res.status(500).json({ success: false, message: "Failed to fetch image" });
+            res.status(500).json({ success: false, message: "Image stream error" });
           }
         });
         return downloadStream.pipe(res);
       } else if (cached.base64Data) {
-        // Return cached base64
         return res.json({
           success: true,
           data: cached.base64Data,
@@ -170,17 +170,36 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       }
     }
 
-    // Cache miss - fetch from database with timeout
-    console.log('⚠️  Cache miss - querying database for ad:', id);
-    const ad = await Promise.race([
-      Ad.findById(id)
+    // Cache miss - fetch from database with proper error handling
+    let ad;
+    try {
+      ad = await Ad.findById(id)
         .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
         .lean()
-        .maxTimeMS(5000), // 5 second query timeout
-      new Promise<null>((_, reject) => 
-        setTimeout(() => reject(new Error('Database query timeout after 5s')), 5000)
-      )
-    ]);
+        .maxTimeMS(10000) // Increased to 10s
+        .exec();
+    } catch (dbError: any) {
+      console.error('❌ Database query failed:', dbError.message);
+      
+      // Check for authentication errors
+      if (dbError.message.includes('Authentication failed') ||
+          dbError.message.includes('auth failed') ||
+          dbError.message.includes('bad auth')) {
+        console.error('🔐 MongoDB authentication error - wrong password!');
+        return res.status(503).json({
+          success: false,
+          message: "Database authentication error. Please contact administrator.",
+          error: "DB_AUTH_FAILED"
+        });
+      }
+      
+      // Timeout or network error
+      return res.status(504).json({
+        success: false,
+        message: "Database query timeout",
+        error: "DB_TIMEOUT"
+      });
+    }
 
     if (!ad) {
       return res.status(404).json({
@@ -209,8 +228,6 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
         });
       }
 
-      // Return base64 as fallback
-      console.log(`⚠️  Serving base64 fallback for ad ${id} ${type} image`);
       return res.json({
         success: true,
         data: base64Data,
@@ -222,35 +239,11 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Type', 'image/jpeg');
 
-    // Stream image from GridFS with timeout handling
+    // Stream image from GridFS
     const downloadStream = gridfsService.getDownloadStream(gridfsId);
     
-    // Set timeout for stream (30 seconds max for image download)
-    const streamTimeout = setTimeout(() => {
-      if (!res.headersSent) {
-        console.error('❌ GridFS stream timeout after 30s for ad:', id, 'type:', type);
-        downloadStream.destroy();
-        res.status(504).json({
-          success: false,
-          message: "Image download timeout"
-        });
-      }
-    }, 30000);
-
-    downloadStream.on('data', () => {
-      // Clear timeout on first data received
-      clearTimeout(streamTimeout);
-    });
-
-    downloadStream.on('end', () => {
-      clearTimeout(streamTimeout);
-      console.log('✅ GridFS Stream Complete for ad:', id, 'type:', type);
-    });
-    
     downloadStream.on('error', (error) => {
-      clearTimeout(streamTimeout);
-      console.error('❌ GridFS download error for ad:', id, 'type:', type, 'Error:', error.message);
-      
+      console.error('❌ GridFS error for ad:', id, error.message);
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
@@ -259,7 +252,6 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       }
     });
 
-    // Pipe GridFS stream directly to response
     downloadStream.pipe(res);
 
   } catch (error: any) {
@@ -268,7 +260,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
-        message: "Failed to fetch ad image"
+        message: "Internal server error"
       });
     }
   }
