@@ -571,17 +571,25 @@ router.get("/", async (req: AuthReq, res: Response) => {
 });
 
 // GET /api/ads/:id - Get single ad (admin)
+// GET /api/ads/:id - Get single ad by ID (admin)
 router.get("/:id", async (req: AuthReq, res: Response) => {
   try {
-    const ad = await Ad.findById(req.params.id).lean();
+    console.log(`📋 [GET /api/ads/:id] Fetching ad: ${req.params.id}`);
+    
+    // Exclude base64 images for faster response - frontend will use GridFS endpoints
+    const ad = await Ad.findById(req.params.id)
+      .select("-bottomImage -fullscreenImage")
+      .lean();
 
     if (!ad) {
+      console.log(`❌ [GET /api/ads/:id] Ad not found: ${req.params.id}`);
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
+    console.log(`✅ [GET /api/ads/:id] Found ad: ${ad.title}`);
     res.json({
       success: true,
       data: ad
