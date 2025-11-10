@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { gridfsService } from "../services/gridfsService";
+import { imageCache } from "../utils/imageCache";
 
 const router = Router();
 
@@ -132,69 +133,84 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     const { id, type } = req.params;
 
     // 🔍 LOG: Image request received
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('🖼️  [IMG STEP 1] GET /api/ads/image/:id/:type - Request Received');
-    console.log('🆔 Ad ID:', id);
-    console.log('📷 Image Type:', type);
-    console.log('🕐 Timestamp:', new Date().toISOString());
-    console.log('🌐 User-Agent:', req.headers['user-agent']);
-    console.log('🔗 Referer:', req.headers.referer || 'No referer');
+    console.log('🖼️  GET /api/ads/image/:id/:type - Ad ID:', id, 'Type:', type);
 
     if (type !== "bottom" && type !== "fullscreen") {
-      console.error('❌ [IMG ERROR] Invalid image type:', type);
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       return res.status(400).json({
         success: false,
         message: "Invalid image type. Must be 'bottom' or 'fullscreen'"
       });
     }
 
-    // 🔍 LOG: Fetching ad from database
-    console.log('📊 [IMG STEP 2] Fetching Ad from Database');
-    const ad = await Ad.findById(id)
-      .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
-      .lean();
+    // Check cache first to avoid database query
+    const cached = imageCache.get(id, type as 'bottom' | 'fullscreen');
+    if (cached) {
+      console.log('✅ Cache hit for ad:', id, 'type:', type);
+      
+      if (cached.gridfsId) {
+        // Stream from GridFS using cached ID
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Content-Type', 'image/jpeg');
+        
+        const downloadStream = gridfsService.getDownloadStream(cached.gridfsId);
+        downloadStream.on('error', (error) => {
+          console.error('❌ GridFS download error:', error.message);
+          if (!res.headersSent) {
+            res.status(500).json({ success: false, message: "Failed to fetch image" });
+          }
+        });
+        return downloadStream.pipe(res);
+      } else if (cached.base64Data) {
+        // Return cached base64
+        return res.json({
+          success: true,
+          data: cached.base64Data,
+          source: "base64-cached"
+        });
+      }
+    }
+
+    // Cache miss - fetch from database with timeout
+    console.log('⚠️  Cache miss - querying database for ad:', id);
+    const ad = await Promise.race([
+      Ad.findById(id)
+        .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
+        .lean()
+        .maxTimeMS(5000), // 5 second query timeout
+      new Promise<null>((_, reject) => 
+        setTimeout(() => reject(new Error('Database query timeout after 5s')), 5000)
+      )
+    ]);
 
     if (!ad) {
-      console.error('❌ [IMG ERROR] Ad not found in database:', id);
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
-    console.log('✅ [IMG STEP 3] Ad Found in Database');
-    console.log('📋 Ad data:', {
-      _id: ad._id,
-      bottomImageGridFS: ad.bottomImageGridFS?.toString() || 'NULL',
-      fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || 'NULL',
-      hasLegacyBottomImage: !!(ad.bottomImage && ad.bottomImage.length > 0),
-      hasLegacyFullscreenImage: !!(ad.fullscreenImage && ad.fullscreenImage.length > 0)
-    });
-
     // Get GridFS file ID based on type
     const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
+    const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
+
+    // Cache the result for future requests
+    imageCache.set(
+      id, 
+      type as 'bottom' | 'fullscreen', 
+      gridfsId?.toString() || null, 
+      base64Data || null
+    );
 
     if (!gridfsId) {
-      console.warn('⚠️  [IMG STEP 4] No GridFS ID found - Checking for legacy base64');
-      
-      // Fallback to base64 if GridFS migration not complete
-      const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
-      
       if (!base64Data || base64Data.length === 0) {
-        console.error('❌ [IMG ERROR] No image found (neither GridFS nor base64)');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         return res.status(404).json({
           success: false,
           message: `${type} image not found`
         });
       }
 
-      // Return base64 as fallback (legacy support during migration)
-      console.warn(`⚠️  [IMG STEP 5] Serving base64 fallback for ad ${id} ${type} image`);
-      console.log('📏 Base64 length:', base64Data.length, 'characters');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      // Return base64 as fallback
+      console.log(`⚠️  Serving base64 fallback for ad ${id} ${type} image`);
       return res.json({
         success: true,
         data: base64Data,
@@ -202,37 +218,38 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       });
     }
 
-    // 🔍 LOG: Preparing to stream from GridFS
-    console.log('✅ [IMG STEP 4] GridFS ID Found:', gridfsId.toString());
-    console.log('🔄 [IMG STEP 5] Initiating GridFS Stream');
-
     // Set aggressive caching for images (24 hours)
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Type', 'image/jpeg');
 
-    // Stream image from GridFS (most efficient - no buffering needed)
+    // Stream image from GridFS with timeout handling
     const downloadStream = gridfsService.getDownloadStream(gridfsId);
     
-    let streamStarted = false;
-    
-    downloadStream.on('data', (chunk) => {
-      if (!streamStarted) {
-        console.log('📦 [IMG STEP 6] GridFS Stream Started - Sending data to client');
-        console.log('📏 First chunk size:', chunk.length, 'bytes');
-        streamStarted = true;
+    // Set timeout for stream (30 seconds max for image download)
+    const streamTimeout = setTimeout(() => {
+      if (!res.headersSent) {
+        console.error('❌ GridFS stream timeout after 30s for ad:', id, 'type:', type);
+        downloadStream.destroy();
+        res.status(504).json({
+          success: false,
+          message: "Image download timeout"
+        });
       }
+    }, 30000);
+
+    downloadStream.on('data', () => {
+      // Clear timeout on first data received
+      clearTimeout(streamTimeout);
     });
 
     downloadStream.on('end', () => {
-      console.log('✅ [IMG STEP 7] GridFS Stream Complete - Image fully sent');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      clearTimeout(streamTimeout);
+      console.log('✅ GridFS Stream Complete for ad:', id, 'type:', type);
     });
     
     downloadStream.on('error', (error) => {
-      console.error('❌ [IMG ERROR] GridFS download error:', error);
-      console.error('🆔 Failed GridFS ID:', gridfsId.toString());
-      console.error('📷 Failed Type:', type);
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      clearTimeout(streamTimeout);
+      console.error('❌ GridFS download error for ad:', id, 'type:', type, 'Error:', error.message);
       
       if (!res.headersSent) {
         res.status(500).json({
@@ -242,16 +259,18 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       }
     });
 
-    // Pipe GridFS stream directly to response (efficient streaming)
+    // Pipe GridFS stream directly to response
     downloadStream.pipe(res);
 
-  } catch (error) {
-    console.error("❌ GET AD IMAGE ERROR:", error);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch ad image"
-    });
+  } catch (error: any) {
+    console.error("❌ GET AD IMAGE ERROR:", error.message || error);
+    
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch ad image"
+      });
+    }
   }
 });
 
@@ -532,6 +551,9 @@ router.delete("/:id", async (req: AuthReq, res: Response) => {
 
     // Delete ad document
     await Ad.findByIdAndDelete(req.params.id);
+
+    // Clear cache for this ad
+    imageCache.clear(req.params.id);
 
     res.json({
       success: true,
