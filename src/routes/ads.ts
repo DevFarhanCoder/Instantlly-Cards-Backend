@@ -510,11 +510,13 @@ router.get("/", async (req: AuthReq, res: Response) => {
     console.log('✅ Step 1 complete: MongoDB is connected');
     console.log('');
     console.log('🔍 Step 2: Starting database query...');
-    console.log('   Query: Ad.find({}).sort({ createdAt: -1 }).limit(1000)');
+    console.log('   Query: Ad.find({}).select(\'-bottomImage -fullscreenImage\').sort({ createdAt: -1 }).limit(1000)');
+    console.log('   Note: Excluding base64 images (2.9MB each) - using GridFS refs instead');
     
     const queryStartTime = Date.now();
     
     const ads = await Ad.find({})
+      .select("-bottomImage -fullscreenImage") // CRITICAL: Exclude base64 images (125MB for 43 ads!)
       .sort({ createdAt: -1 })
       .limit(1000)
       .lean()
