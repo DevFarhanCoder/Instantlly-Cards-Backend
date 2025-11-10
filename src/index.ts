@@ -1,4 +1,4 @@
-// index.ts - Updated 2025-11-10
+// index.ts - Updated 2025-11-10 - v1.0.4 (Increased GridFS timeouts)
 import dotenv from "dotenv";
 dotenv.config();
 
