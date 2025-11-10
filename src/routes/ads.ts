@@ -671,40 +671,112 @@ router.post("/", async (req: AuthReq, res: Response) => {
 // PUT /api/ads/:id - Update ad (admin)
 router.put("/:id", async (req: AuthReq, res: Response) => {
   try {
+    console.log(`📝 [PUT /api/ads/:id] Updating ad: ${req.params.id}`);
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
 
-    const updateData: any = {};
-
-    if (title) updateData.title = title;
-    if (bottomImage) updateData.bottomImage = bottomImage;
-    if (fullscreenImage !== undefined) updateData.fullscreenImage = fullscreenImage;
-    if (phoneNumber) updateData.phoneNumber = phoneNumber;
-    if (startDate) updateData.startDate = new Date(startDate);
-    if (endDate) updateData.endDate = new Date(endDate);
-    if (priority !== undefined) updateData.priority = priority;
-
-    const ad = await Ad.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    );
-
-    if (!ad) {
+    // Get existing ad
+    const existingAd = await Ad.findById(req.params.id);
+    if (!existingAd) {
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
+    const updateData: any = {};
+
+    // Update basic fields
+    if (title) updateData.title = title;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+    if (startDate) updateData.startDate = new Date(startDate);
+    if (endDate) updateData.endDate = new Date(endDate);
+    if (priority !== undefined) updateData.priority = priority;
+
+    // Handle bottom image update (if new base64 image provided)
+    if (bottomImage && bottomImage.startsWith('data:image')) {
+      console.log(`📤 Uploading new bottom image to GridFS for ad: ${existingAd.title}`);
+      
+      // Delete old GridFS image if exists
+      if (existingAd.bottomImageGridFS) {
+        try {
+          await gridfsService.deleteFile(existingAd.bottomImageGridFS);
+          console.log(`🗑️ Deleted old bottom image from GridFS`);
+        } catch (error) {
+          console.error("Failed to delete old bottom image:", error);
+        }
+      }
+      
+      // Upload new image to GridFS
+      const bottomImageId = await gridfsService.uploadBase64(
+        bottomImage,
+        `${Date.now()}_bottom.jpg`,
+        { title: existingAd.title, type: "bottom" }
+      );
+      
+      updateData.bottomImage = ""; // Clear base64 field
+      updateData.bottomImageGridFS = bottomImageId;
+      console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
+    }
+
+    // Handle fullscreen image update (if new base64 image provided)
+    if (fullscreenImage !== undefined) {
+      if (fullscreenImage && fullscreenImage.startsWith('data:image')) {
+        console.log(`📤 Uploading new fullscreen image to GridFS for ad: ${existingAd.title}`);
+        
+        // Delete old GridFS image if exists
+        if (existingAd.fullscreenImageGridFS) {
+          try {
+            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
+            console.log(`🗑️ Deleted old fullscreen image from GridFS`);
+          } catch (error) {
+            console.error("Failed to delete old fullscreen image:", error);
+          }
+        }
+        
+        // Upload new image to GridFS
+        const fullscreenImageId = await gridfsService.uploadBase64(
+          fullscreenImage,
+          `${Date.now()}_fullscreen.jpg`,
+          { title: existingAd.title, type: "fullscreen" }
+        );
+        
+        updateData.fullscreenImage = ""; // Clear base64 field
+        updateData.fullscreenImageGridFS = fullscreenImageId;
+        console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+      } else if (fullscreenImage === "" || fullscreenImage === null) {
+        // User removed fullscreen image
+        if (existingAd.fullscreenImageGridFS) {
+          try {
+            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
+            console.log(`🗑️ Deleted fullscreen image from GridFS (user removed it)`);
+          } catch (error) {
+            console.error("Failed to delete fullscreen image:", error);
+          }
+        }
+        updateData.fullscreenImage = "";
+        updateData.fullscreenImageGridFS = null;
+      }
+    }
+
+    // Update ad
+    const ad = await Ad.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select("-bottomImage -fullscreenImage"); // Exclude base64 for performance
+
+    console.log(`✅ [PUT /api/ads/:id] Ad updated successfully: ${ad?.title}`);
+
     res.json({
       success: true,
       data: ad
     });
-  } catch (error) {
-    console.error("UPDATE AD ERROR:", error);
+  } catch (error: any) {
+    console.error("❌ [PUT /api/ads/:id] UPDATE AD ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update ad"
+      message: "Failed to update ad",
+      error: error.message
     });
   }
 });
