@@ -484,28 +484,86 @@ router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
 
 // GET /api/ads - Get all ads (admin)
 router.get("/", async (req: AuthReq, res: Response) => {
+  const requestStartTime = Date.now();
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('📋 [GET /api/ads] Request received from:', req.ip);
+  console.log('🕐 Request time:', new Date().toISOString());
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  
   try {
-    console.log('📋 Admin fetching all ads...');
+    console.log('🔍 Step 1: Checking MongoDB connection status...');
+    console.log('   Mongoose state:', mongoose.connection.readyState);
+    console.log('   States: 0=disconnected, 1=connected, 2=connecting, 3=disconnecting');
+    
+    if (mongoose.connection.readyState !== 1) {
+      console.error('❌ MongoDB not connected! Current state:', mongoose.connection.readyState);
+      return res.status(503).json({
+        success: false,
+        message: "Database not connected",
+        debug: {
+          mongooseState: mongoose.connection.readyState,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+    
+    console.log('✅ Step 1 complete: MongoDB is connected');
+    console.log('');
+    console.log('🔍 Step 2: Starting database query...');
+    console.log('   Query: Ad.find({}).sort({ createdAt: -1 }).limit(1000)');
+    
+    const queryStartTime = Date.now();
     
     const ads = await Ad.find({})
       .sort({ createdAt: -1 })
-      .limit(1000) // Limit to prevent memory issues
+      .limit(1000)
       .lean()
       .exec();
 
-    console.log(`✅ Fetched ${ads.length} ads for admin`);
-
-    res.json({
+    const queryTime = Date.now() - queryStartTime;
+    console.log(`✅ Step 2 complete: Query finished in ${queryTime}ms`);
+    console.log(`   Found ${ads.length} ads`);
+    console.log('');
+    console.log('🔍 Step 3: Preparing response...');
+    
+    const totalTime = Date.now() - requestStartTime;
+    const response = {
       success: true,
-      data: ads
-    });
+      data: ads,
+      debug: {
+        totalAds: ads.length,
+        queryTimeMs: queryTime,
+        totalTimeMs: totalTime,
+        timestamp: new Date().toISOString()
+      }
+    };
+    
+    console.log(`✅ Step 3 complete: Sending response (${JSON.stringify(response).length} bytes)`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`✅ [GET /api/ads] SUCCESS - Total time: ${totalTime}ms`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    res.json(response);
   } catch (error: any) {
-    console.error("GET ALL ADS ERROR:", error);
+    const totalTime = Date.now() - requestStartTime;
+    console.log('');
+    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.error('❌ [GET /api/ads] ERROR after', totalTime, 'ms');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     res.status(500).json({
       success: false,
       message: "Failed to fetch ads",
-      error: error.message
+      error: error.message,
+      debug: {
+        errorName: error.name,
+        errorMessage: error.message,
+        totalTimeMs: totalTime,
+        timestamp: new Date().toISOString()
+      }
     });
   }
 });
