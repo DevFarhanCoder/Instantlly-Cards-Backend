@@ -16,12 +16,12 @@ class OptimizedImageService {
   private bucket: GridFSBucket | null = null;
   private isInitialized = false;
   
-  // Chunk size for streaming (256KB chunks)
-  private readonly CHUNK_SIZE = 256 * 1024; // 256KB
+  // Chunk size for streaming (512KB chunks - larger for better throughput)
+  private readonly CHUNK_SIZE = 512 * 1024; // 512KB
   
-  // Timeout settings
-  private readonly STREAM_TIMEOUT = 15000; // 15 seconds
-  private readonly CHUNK_TIMEOUT = 5000; // 5 seconds per chunk
+  // Timeout settings - increased for slow networks
+  private readonly STREAM_TIMEOUT = 60000; // 60 seconds total
+  private readonly CHUNK_TIMEOUT = 15000; // 15 seconds per chunk (slow networks)
 
   initialize() {
     if (this.isInitialized) return;
@@ -32,11 +32,11 @@ class OptimizedImageService {
 
     this.bucket = new GridFSBucket(mongoose.connection.db, {
       bucketName: "adImages",
-      chunkSizeBytes: this.CHUNK_SIZE // Use 256KB chunks instead of default 255KB
+      chunkSizeBytes: this.CHUNK_SIZE // Use 512KB chunks for better throughput
     });
 
     this.isInitialized = true;
-    console.log("✅ Optimized Image Service initialized (256KB chunks)");
+    console.log("✅ Optimized Image Service initialized (512KB chunks, 15s chunk timeout)");
   }
 
   /**
