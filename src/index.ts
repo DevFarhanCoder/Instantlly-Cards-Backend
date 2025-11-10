@@ -1,4 +1,4 @@
-// index.ts
+// index.ts - Updated 2025-11-10
 import dotenv from "dotenv";
 dotenv.config();
 
