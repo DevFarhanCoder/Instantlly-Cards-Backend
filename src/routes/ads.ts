@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { gridfsService } from "../services/gridfsService";
+import { optimizedImageService } from "../services/optimizedImageService";
 import { imageCache } from "../utils/imageCache";
 import { isDBConnected } from "../db";
 
@@ -154,13 +155,26 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
         res.setHeader('Cache-Control', 'public, max-age=86400');
         res.setHeader('Content-Type', 'image/jpeg');
         
-        const downloadStream = gridfsService.getDownloadStream(cached.gridfsId);
-        downloadStream.on('error', (error) => {
-          if (!res.headersSent) {
-            res.status(500).json({ success: false, message: "Image stream error" });
-          }
-        });
-        return downloadStream.pipe(res);
+        // Use optimized chunked streaming
+        try {
+          const downloadStream = optimizedImageService.getChunkedDownloadStream(cached.gridfsId);
+          
+          downloadStream.on('error', (error) => {
+            console.error('❌ Chunked stream error:', error.message);
+            if (!res.headersSent) {
+              res.status(500).json({ 
+                success: false, 
+                message: "Image stream error",
+                error: "STREAM_ERROR"
+              });
+            }
+          });
+          
+          return downloadStream.pipe(res);
+        } catch (error: any) {
+          console.error('❌ Failed to create stream:', error.message);
+          // Fall through to database query
+        }
       } else if (cached.base64Data) {
         return res.json({
           success: true,
@@ -239,20 +253,50 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Type', 'image/jpeg');
 
-    // Stream image from GridFS
-    const downloadStream = gridfsService.getDownloadStream(gridfsId);
-    
-    downloadStream.on('error', (error) => {
-      console.error('❌ GridFS error for ad:', id, error.message);
+    // Use optimized chunked streaming with automatic timeout protection
+    try {
+      const downloadStream = optimizedImageService.getChunkedDownloadStream(gridfsId);
+      
+      // Add response timeout handler
+      const streamTimeout = setTimeout(() => {
+        console.error('⏱️ Response timeout for ad:', id);
+        downloadStream.destroy();
+        if (!res.headersSent) {
+          res.status(504).json({
+            success: false,
+            message: "Image download timeout - please try again",
+            error: "RESPONSE_TIMEOUT"
+          });
+        }
+      }, 20000); // 20 second max for full response
+      
+      downloadStream.on('error', (error) => {
+        clearTimeout(streamTimeout);
+        console.error('❌ GridFS error for ad:', id, error.message);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: "Failed to fetch image from storage",
+            error: "GRIDFS_ERROR"
+          });
+        }
+      });
+      
+      downloadStream.on('end', () => {
+        clearTimeout(streamTimeout);
+      });
+
+      downloadStream.pipe(res);
+    } catch (error: any) {
+      console.error('❌ Failed to stream image:', error.message);
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
-          message: "Failed to fetch image from storage"
+          message: "Failed to initialize image stream",
+          error: "STREAM_INIT_ERROR"
         });
       }
-    });
-
-    downloadStream.pipe(res);
+    }
 
   } catch (error: any) {
     console.error("❌ GET AD IMAGE ERROR:", error.message || error);
@@ -263,6 +307,87 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
         message: "Internal server error"
       });
     }
+  }
+});
+
+// GET /api/ads/image/:id/:type/metadata - Get image metadata without downloading
+// Useful for clients to check file size before downloading
+router.get("/image/:id/:type/metadata", async (req: Request, res: Response) => {
+  try {
+    const { id, type } = req.params;
+
+    if (type !== "bottom" && type !== "fullscreen") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid image type"
+      });
+    }
+
+    // Check database connection
+    if (!isDBConnected()) {
+      return res.status(503).json({
+        success: false,
+        message: "Database temporarily unavailable",
+        error: "DB_NOT_CONNECTED"
+      });
+    }
+
+    // Get ad with timeout protection
+    const ad = await Ad.findById(id)
+      .select('bottomImageGridFS fullscreenImageGridFS title')
+      .lean()
+      .maxTimeMS(5000)
+      .exec();
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: "Ad not found"
+      });
+    }
+
+    const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
+
+    if (!gridfsId) {
+      return res.status(404).json({
+        success: false,
+        message: `${type} image not found`
+      });
+    }
+
+    // Get file metadata
+    const metadata = await optimizedImageService.getFileMetadata(gridfsId);
+
+    if (!metadata) {
+      return res.status(404).json({
+        success: false,
+        message: "Image file not found in storage"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        adId: id,
+        type: type,
+        filename: metadata.filename,
+        sizeKB: metadata.sizeKB,
+        sizeBytes: metadata.length,
+        chunks: metadata.chunks,
+        chunkSize: metadata.chunkSize,
+        uploadDate: metadata.uploadDate,
+        // Suggest batched loading for large files
+        suggestBatchedLoad: metadata.length > 1024 * 1024, // > 1MB
+        estimatedLoadTime: `${Math.ceil(metadata.length / (256 * 1024))} seconds`
+      }
+    });
+
+  } catch (error: any) {
+    console.error("❌ GET IMAGE METADATA ERROR:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get image metadata"
+    });
   }
 });
 
