@@ -12,11 +12,11 @@ const AdSchema = new mongoose.Schema(
     // Bottom Banner Ad (Required - 624 × 174px)
     // MIGRATION: Changed from base64 string to GridFS ObjectId reference
     bottomImage: {
-      type: String, // Base64 encoded image (legacy) OR GridFS ObjectId (new)
-      required: true
+      type: String, // Base64 encoded image (legacy) OR empty string when using GridFS
+      default: "" // Empty when using GridFS reference
     },
 
-    // GridFS reference for bottom image (new field)
+    // GridFS reference for bottom image (new field - required when bottomImage is empty)
     bottomImageGridFS: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "adImages.files"
