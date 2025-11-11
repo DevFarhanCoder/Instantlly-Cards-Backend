@@ -678,26 +678,27 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
     if (bottomImage && bottomImage.startsWith('data:image')) {
       console.log(`📤 Uploading new bottom image to GridFS for ad: ${existingAd.title}`);
       
-      // Delete old GridFS image if exists
-      if (existingAd.bottomImageGridFS) {
-        try {
-          await gridfsService.deleteFile(existingAd.bottomImageGridFS);
-          console.log(`🗑️ Deleted old bottom image from GridFS`);
-        } catch (error) {
-          console.error("Failed to delete old bottom image:", error);
-        }
-      }
-      
-      // Upload new image to GridFS
+      // Upload new image to GridFS FIRST
       const bottomImageId = await gridfsService.uploadBase64(
         bottomImage,
         `${Date.now()}_bottom.jpg`,
         { title: existingAd.title, type: "bottom" }
       );
+      console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
+      
+      // Only delete old GridFS image AFTER successful upload
+      if (existingAd.bottomImageGridFS) {
+        try {
+          await gridfsService.deleteFile(existingAd.bottomImageGridFS);
+          console.log(`🗑️ Deleted old bottom image from GridFS`);
+        } catch (error) {
+          console.error("⚠️ Failed to delete old bottom image:", error);
+          // Continue anyway - new image is uploaded successfully
+        }
+      }
       
       updateData.bottomImage = ""; // Clear base64 field
       updateData.bottomImageGridFS = bottomImageId;
-      console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
     } else if (bottomImage && (bottomImage.startsWith('http://') || bottomImage.startsWith('https://'))) {
       // GridFS URL detected - clear old base64 data if exists
       if (existingAd.bottomImage && existingAd.bottomImage.length > 100) {
@@ -713,26 +714,27 @@ router.put("/:id", async (req: AuthReq, res: Response) => {
       if (fullscreenImage && fullscreenImage.startsWith('data:image')) {
         console.log(`📤 Uploading new fullscreen image to GridFS for ad: ${existingAd.title}`);
         
-        // Delete old GridFS image if exists
-        if (existingAd.fullscreenImageGridFS) {
-          try {
-            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
-            console.log(`🗑️ Deleted old fullscreen image from GridFS`);
-          } catch (error) {
-            console.error("Failed to delete old fullscreen image:", error);
-          }
-        }
-        
-        // Upload new image to GridFS
+        // Upload new image to GridFS FIRST
         const fullscreenImageId = await gridfsService.uploadBase64(
           fullscreenImage,
           `${Date.now()}_fullscreen.jpg`,
           { title: existingAd.title, type: "fullscreen" }
         );
+        console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+        
+        // Only delete old GridFS image AFTER successful upload
+        if (existingAd.fullscreenImageGridFS) {
+          try {
+            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
+            console.log(`🗑️ Deleted old fullscreen image from GridFS`);
+          } catch (error) {
+            console.error("⚠️ Failed to delete old fullscreen image:", error);
+            // Continue anyway - new image is uploaded successfully
+          }
+        }
         
         updateData.fullscreenImage = ""; // Clear base64 field
         updateData.fullscreenImageGridFS = fullscreenImageId;
-        console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
       } else if (fullscreenImage && (fullscreenImage.startsWith('http://') || fullscreenImage.startsWith('https://'))) {
         // GridFS URL detected - clear old base64 data if exists
         if (existingAd.fullscreenImage && existingAd.fullscreenImage.length > 100) {
