@@ -253,25 +253,11 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Type', 'image/jpeg');
 
-    // Use optimized chunked streaming with automatic timeout protection
+    // Use optimized chunked streaming
     try {
       const downloadStream = optimizedImageService.getChunkedDownloadStream(gridfsId);
       
-      // Add response timeout handler
-      const streamTimeout = setTimeout(() => {
-        console.error('⏱️ Response timeout for ad:', id);
-        downloadStream.destroy();
-        if (!res.headersSent) {
-          res.status(504).json({
-            success: false,
-            message: "Image download timeout - please try again",
-            error: "RESPONSE_TIMEOUT"
-          });
-        }
-      }, 60000); // 60 second max for full response (large images up to 5MB)
-      
       downloadStream.on('error', (error) => {
-        clearTimeout(streamTimeout);
         console.error('❌ GridFS error for ad:', id, error.message);
         if (!res.headersSent) {
           res.status(500).json({
@@ -280,10 +266,6 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
             error: "GRIDFS_ERROR"
           });
         }
-      });
-      
-      downloadStream.on('end', () => {
-        clearTimeout(streamTimeout);
       });
 
       downloadStream.pipe(res);
