@@ -268,7 +268,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
             error: "RESPONSE_TIMEOUT"
           });
         }
-      }, 20000); // 20 second max for full response
+      }, 60000); // 60 second max for full response (large images up to 5MB)
       
       downloadStream.on('error', (error) => {
         clearTimeout(streamTimeout);
