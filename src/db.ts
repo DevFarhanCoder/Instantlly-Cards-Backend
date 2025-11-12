@@ -1,29 +1,92 @@
 // src/db.ts
 import mongoose from "mongoose";
 
+let isConnected = false;
+let connectionAttempts = 0;
+const MAX_RETRY_ATTEMPTS = 3;
+
 export async function connectDB() {
-  if (mongoose.connection.readyState === 1) return; // already connected
+  if (mongoose.connection.readyState === 1) {
+    isConnected = true;
+    return; // already connected
+  }
+  
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error("MONGODB_URI is not set");
 
   console.log("Attempting MongoDB connection...");
   
-  await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 10000, // Increased from 5s to 10s for better reliability
-    socketTimeoutMS: 15000, // Increased from 10s to 15s
-    connectTimeoutMS: 10000, // Increased from 5s to 10s
-    maxPoolSize: 10, // Maintain up to 10 socket connections
-    minPoolSize: 5,  // Maintain minimum 5 socket connections
-    maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-    retryWrites: true,
-    retryReads: true
-  });
+  try {
+    await mongoose.connect(uri, {
+      retryWrites: true,
+      retryReads: true,
+    });
 
-  const c = mongoose.connection;
-  c.on("connected", () => console.log("✅ MongoDB connected"));
-  c.on("error", (e) => console.error("❌ MongoDB error:", e));
-  c.on("disconnected", () => console.warn("⚠️ MongoDB disconnected"));
-  c.on("reconnected", () => console.log("🔄 MongoDB reconnected"));
-  
-  console.log("MongoDB connection established");
+    // Set connected flag immediately after successful connection
+    isConnected = true;
+    connectionAttempts = 0;
+    console.log("✅ MongoDB connection established");
+
+    const c = mongoose.connection;
+    
+    c.on("connected", () => {
+      console.log("✅ MongoDB connected event fired");
+      isConnected = true;
+      connectionAttempts = 0;
+    });
+    
+    c.on("error", (e) => {
+      console.error("❌ MongoDB error:", e.message);
+      isConnected = false;
+      
+      // Check for authentication errors
+      if (e.message.includes("Authentication failed") || 
+          e.message.includes("auth failed") ||
+          e.message.includes("bad auth")) {
+        console.error("🔐 CRITICAL: MongoDB authentication failed - Check MONGODB_URI password!");
+        console.error("💡 Update password in Render.com environment variables");
+      }
+    });
+    
+    c.on("disconnected", () => {
+      console.warn("⚠️ MongoDB disconnected");
+      isConnected = false;
+    });
+    
+    c.on("reconnected", () => {
+      console.log("🔄 MongoDB reconnected");
+      isConnected = true;
+      connectionAttempts = 0;
+    });
+    
+  } catch (error: any) {
+    connectionAttempts++;
+    console.error(`❌ MongoDB connection failed (attempt ${connectionAttempts}/${MAX_RETRY_ATTEMPTS}):`, error.message);
+    
+    if (error.message.includes("Authentication failed") || 
+        error.message.includes("auth failed") ||
+        error.message.includes("bad auth")) {
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error("🔐 AUTHENTICATION ERROR - IMMEDIATE ACTION REQUIRED!");
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error("1. Go to Render.com dashboard");
+      console.error("2. Select 'Instantlly-Cards-Backend' service");
+      console.error("3. Click 'Environment' tab");
+      console.error("4. Update MONGODB_URI with new password");
+      console.error("5. Click 'Manual Deploy' to restart");
+      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+    
+    if (connectionAttempts < MAX_RETRY_ATTEMPTS) {
+      console.log(`⏳ Retrying connection in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      return connectDB(); // Retry
+    }
+    
+    throw error; // Give up after max attempts
+  }
+}
+
+export function isDBConnected(): boolean {
+  return isConnected && mongoose.connection.readyState === 1;
 }

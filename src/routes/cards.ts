@@ -565,11 +565,31 @@ r.get("/:id", async (req: AuthReq, res) => {
       });
     }
     
-    // Find the card and populate user details
-    const card = await Card.findById(cardId)
+    // First, try to find as a regular Card
+    let card = await Card.findById(cardId)
       .populate('userId', 'name profilePicture')
       .lean()
+      .maxTimeMS(5000)
       .exec();
+    
+    // If not found, check if it's a SharedCard ID (mobile app might be sending wrong ID)
+    if (!card) {
+      console.log(`🔄 [${userId}] Not found as Card, checking SharedCard: ${cardId}`);
+      const sharedCard = await SharedCard.findById(cardId)
+        .select('cardId')
+        .lean()
+        .maxTimeMS(3000)
+        .exec();
+      
+      if (sharedCard && sharedCard.cardId) {
+        console.log(`🔄 [${userId}] Found SharedCard, fetching actual card: ${sharedCard.cardId}`);
+        card = await Card.findById(sharedCard.cardId)
+          .populate('userId', 'name profilePicture')
+          .lean()
+          .maxTimeMS(5000)
+          .exec();
+      }
+    }
     
     if (!card) {
       console.log(`❌ [${userId}] Card not found: ${cardId}`);
@@ -580,10 +600,10 @@ r.get("/:id", async (req: AuthReq, res) => {
     }
 
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [${userId}] Single card fetched in ${elapsed}ms - Card: ${(card as any).name || 'Unnamed'}`);
+    console.log(`✅ [${userId}] Single card fetched in ${elapsed}ms - Card: ${(card as any).name || (card as any).companyName || 'Unnamed'}`);
 
     // Generate ETag for caching
-    const etag = `"card-${cardId}-${(card as any).updatedAt}"`;
+    const etag = `"card-${card._id}-${(card as any).updatedAt}"`;
     
     // Check if client has cached version
     if (req.headers['if-none-match'] === etag) {
@@ -602,12 +622,22 @@ r.get("/:id", async (req: AuthReq, res) => {
         loadTimeMs: elapsed
       }
     });
-  } catch (err) {
-    console.error(`❌ [${req.userId}] GET CARD BY ID ERROR for ${req.params.id}:`, err);
+  } catch (err: any) {
+    console.error(`❌ [${req.userId}] GET CARD BY ID ERROR for ${req.params.id}:`, err.message);
+    
+    // Handle timeout gracefully
+    if (err.message?.includes('timeout')) {
+      return res.status(504).json({ 
+        success: false,
+        message: "Request timeout - please try again",
+        error: "TIMEOUT"
+      });
+    }
+    
     res.status(500).json({ 
       success: false,
       message: "Failed to fetch card",
-      data: null
+      error: "INTERNAL_ERROR"
     });
   }
 });
@@ -618,32 +648,72 @@ r.post("/shared/:id/view", async (req: AuthReq, res) => {
     const sharedCardId = req.params.id;
     const userId = req.userId!;
     
-    // Update the shared card status to viewed
-    const updatedCard = await SharedCard.findOneAndUpdate(
-      { 
-        _id: sharedCardId, 
-        recipientId: userId,
-        status: { $ne: 'viewed' } // Only update if not already viewed
-      },
-      { 
-        status: 'viewed',
-        viewedAt: new Date()
-      },
-      { new: true }
-    );
+    console.log(`👁️ Marking card as viewed: ${sharedCardId} by user: ${userId}`);
+    
+    // Add timeout protection
+    const updatedCard = await Promise.race([
+      SharedCard.findOneAndUpdate(
+        { 
+          _id: sharedCardId, 
+          recipientId: userId,
+          status: { $ne: 'viewed' } // Only update if not already viewed
+        },
+        { 
+          status: 'viewed',
+          viewedAt: new Date()
+        },
+        { new: true }
+      ).maxTimeMS(5000).lean(),
+      new Promise<null>((_, reject) => 
+        setTimeout(() => reject(new Error('View update timeout')), 5000)
+      )
+    ]);
 
     if (!updatedCard) {
-      return res.status(404).json({ message: "Shared card not found or already viewed" });
+      console.log(`⚠️ Shared card not found or already viewed: ${sharedCardId}`);
+      
+      // Check if card exists at all
+      const cardExists = await SharedCard.findById(sharedCardId).select('_id status recipientId').maxTimeMS(3000).lean();
+      
+      if (!cardExists) {
+        return res.status(404).json({ 
+          success: false,
+          message: "Shared card not found",
+          error: "CARD_NOT_FOUND"
+        });
+      }
+      
+      // Card exists but either already viewed or user is not recipient
+      return res.status(200).json({ 
+        success: true, 
+        message: "Card already viewed or you are not the recipient",
+        alreadyViewed: cardExists.status === 'viewed'
+      });
     }
 
+    console.log(`✅ Card marked as viewed: ${sharedCardId}`);
     res.json({ 
       success: true, 
       message: "Card marked as viewed",
       viewedAt: updatedCard.viewedAt
     });
-  } catch (err) {
-    console.error("MARK CARD VIEWED ERROR", err);
-    res.status(500).json({ message: "Failed to mark card as viewed" });
+  } catch (err: any) {
+    console.error("❌ MARK CARD VIEWED ERROR:", err.message);
+    
+    // If timeout, return success anyway (update will complete eventually)
+    if (err.message?.includes('timeout')) {
+      return res.status(200).json({ 
+        success: true, 
+        message: "View status updating (may take a moment)",
+        pending: true
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to mark card as viewed",
+      error: "INTERNAL_ERROR"
+    });
   }
 });
 

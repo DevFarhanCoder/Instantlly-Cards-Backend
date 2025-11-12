@@ -1,4 +1,4 @@
-// index.ts
+// index.ts - Updated 2025-11-10 - v1.0.4 (Increased GridFS timeouts)
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -25,6 +25,7 @@ import groupSharingRouter from "./routes/groupSharing";
 import adsRouter from "./routes/ads";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
+import { optimizedImageService } from "./services/optimizedImageService";
 
 const app = express();
 const server = createServer(app);
@@ -142,6 +143,10 @@ async function startServer() {
     // Initialize GridFS for ad image storage
     gridfsService.initialize();
     console.log("✅ GridFS initialized for ad images");
+    
+    // Initialize optimized image service with chunked streaming
+    optimizedImageService.initialize();
+    console.log("✅ Optimized Image Service initialized (256KB chunks)");
 
     // Add routes after DB connection
     // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
