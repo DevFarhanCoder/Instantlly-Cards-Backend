@@ -8,6 +8,8 @@ import Group from "../models/Group";
 import Contact from "../models/Contact";
 import Notification from "../models/Notification";
 import SharedCard from "../models/SharedCard";
+import Ad from "../models/Ad";
+import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 
 const router = express.Router();
 
@@ -376,6 +378,237 @@ router.delete("/users/:userId", adminAuth, async (req: Request, res: Response) =
   } catch (error) {
     console.error('Error deleting user:', error);
     res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+// ==================== AD APPROVAL WORKFLOW ====================
+
+/**
+ * GET /api/admin/ads/pending
+ * Get all pending ads awaiting approval
+ */
+router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    console.log(`📋 Admin ${req.adminUsername} fetching pending ads`);
+
+    const pendingAds = await Ad.find({ status: 'pending' })
+      .sort({ createdAt: -1 }) // Most recent first
+      .select('-__v');
+
+    console.log(`✅ Found ${pendingAds.length} pending ads`);
+
+    const adsWithDetails = pendingAds.map((ad) => ({
+      id: ad._id,
+      title: ad.title,
+      phoneNumber: ad.phoneNumber,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+      status: ad.status,
+      uploadedBy: ad.uploadedBy,
+      uploaderName: ad.uploaderName,
+      priority: ad.priority,
+      bottomImageId: ad.bottomImageGridFS,
+      fullscreenImageId: ad.fullscreenImageGridFS,
+      impressions: ad.impressions,
+      clicks: ad.clicks,
+      createdAt: ad.createdAt,
+      updatedAt: ad.updatedAt,
+    }));
+
+    res.json({
+      success: true,
+      count: adsWithDetails.length,
+      ads: adsWithDetails,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching pending ads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pending ads',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/ads/:id/approve
+ * Approve a pending ad
+ */
+router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { priority } = req.body; // Optional: admin can set priority during approval
+
+    console.log(`✅ Admin ${req.adminUsername} approving ad ${id}`);
+
+    const ad = await Ad.findById(id);
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found',
+      });
+    }
+
+    if (ad.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Advertisement is already ${ad.status}`,
+      });
+    }
+
+    // Update ad status to approved
+    ad.status = 'approved';
+    ad.approvedBy = req.adminId || req.adminUsername || 'admin';
+    ad.approvalDate = new Date();
+    
+    if (priority !== undefined) {
+      ad.priority = Math.min(Math.max(parseInt(priority), 1), 10); // Clamp between 1-10
+    }
+
+    await ad.save();
+
+    console.log(`✅ Ad ${id} approved by ${req.adminUsername}`);
+
+    res.json({
+      success: true,
+      message: 'Advertisement approved successfully',
+      ad: {
+        id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate,
+        priority: ad.priority,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error approving ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve advertisement',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/ads/:id/reject
+ * Reject a pending ad with reason
+ */
+router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    console.log(`❌ Admin ${req.adminUsername} rejecting ad ${id}`);
+
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required',
+      });
+    }
+
+    const ad = await Ad.findById(id);
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found',
+      });
+    }
+
+    if (ad.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Advertisement is already ${ad.status}`,
+      });
+    }
+
+    // Update ad status to rejected
+    ad.status = 'rejected';
+    ad.approvedBy = req.adminId || req.adminUsername || 'admin';
+    ad.approvalDate = new Date();
+    ad.rejectionReason = reason.trim();
+
+    await ad.save();
+
+    console.log(`❌ Ad ${id} rejected by ${req.adminUsername}: ${reason}`);
+
+    res.json({
+      success: true,
+      message: 'Advertisement rejected',
+      ad: {
+        id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate,
+        rejectionReason: ad.rejectionReason,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error rejecting ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reject advertisement',
+    });
+  }
+});
+
+/**
+ * GET /api/admin/ads/all
+ * Get all ads with filtering options
+ */
+router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { status, uploadedBy } = req.query;
+    
+    const filter: any = {};
+    if (status) {
+      filter.status = status;
+    }
+    if (uploadedBy) {
+      filter.uploadedBy = uploadedBy;
+    }
+
+    console.log(`📋 Admin ${req.adminUsername} fetching ads with filter:`, filter);
+
+    const ads = await Ad.find(filter)
+      .sort({ createdAt: -1 })
+      .select('-__v');
+
+    const adsWithDetails = ads.map((ad) => ({
+      id: ad._id,
+      title: ad.title,
+      phoneNumber: ad.phoneNumber,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+      status: ad.status,
+      uploadedBy: ad.uploadedBy,
+      uploaderName: ad.uploaderName,
+      approvedBy: ad.approvedBy,
+      approvalDate: ad.approvalDate,
+      rejectionReason: ad.rejectionReason,
+      priority: ad.priority,
+      bottomImageId: ad.bottomImageGridFS,
+      fullscreenImageId: ad.fullscreenImageGridFS,
+      impressions: ad.impressions,
+      clicks: ad.clicks,
+      createdAt: ad.createdAt,
+      updatedAt: ad.updatedAt,
+    }));
+
+    res.json({
+      success: true,
+      count: adsWithDetails.length,
+      ads: adsWithDetails,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all ads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch advertisements',
+    });
   }
 });
 
