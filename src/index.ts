@@ -23,6 +23,7 @@ import adminRouter from "./routes/admin";
 import adminAuthRouter from "./routes/adminAuth";
 import groupSharingRouter from "./routes/groupSharing";
 import adsRouter from "./routes/ads";
+import channelPartnerAdsRouter from "./routes/channelPartnerAds";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { optimizedImageService } from "./services/optimizedImageService";
@@ -168,6 +169,8 @@ async function startServer() {
     console.log("✅ Mounted /api/group-sharing routes (7 endpoints)");    
     app.use("/api/ads", adsRouter);
     console.log("✅ Mounted /api/ads routes (advertisement management)");
+    app.use("/api/channel-partner/ads", channelPartnerAdsRouter);
+    console.log("✅ Mounted /api/channel-partner/ads routes (channel partner ad upload/management)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);
