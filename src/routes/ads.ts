@@ -48,10 +48,11 @@ router.get("/active", async (req: Request, res: Response) => {
     // Set cache headers for 5 minutes
     res.setHeader('Cache-Control', 'public, max-age=300');
 
-    // Get ads that are currently active (within date range)
+    // Get ads that are currently active (within date range) AND approved
     const ads = await Ad.find({
       startDate: { $lte: now },
-      endDate: { $gte: now }
+      endDate: { $gte: now },
+      status: 'approved' // ← NEW: Only show approved ads in mobile app
     })
       .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
       .sort({ priority: -1, createdAt: -1 })
