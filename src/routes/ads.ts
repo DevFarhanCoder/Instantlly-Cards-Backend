@@ -623,7 +623,7 @@ router.post("/", async (req: AuthReq, res: Response) => {
       );
     }
 
-    // Create ad with GridFS references
+    // Create ad with GridFS references - AUTO-APPROVED for admin uploads
     const ad = await Ad.create({
       title,
       bottomImage: "", // Empty - using GridFS
@@ -633,7 +633,10 @@ router.post("/", async (req: AuthReq, res: Response) => {
       phoneNumber,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
-      priority: priority || 5
+      priority: priority || 5,
+      status: 'approved', // ✅ AUTO-APPROVE admin uploads
+      uploadedBy: 'admin',
+      uploaderName: 'Admin'
     });
 
     console.log(`✅ Ad created with GridFS images: ${ad._id}`);
