@@ -12,15 +12,18 @@ export function requireAuth(req: AuthReq, res: Response, next: NextFunction) {
   if (!token) return res.status(401).json({ message: 'Missing token' });
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET as string) as { sub: string };
+    const payload = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+    
+    // Support both user tokens (payload.sub) and admin tokens (payload.id)
+    const userId = payload.sub || payload.id;
     
     // Validate that the userId is a proper ObjectId format
-    if (!mongoose.Types.ObjectId.isValid(payload.sub)) {
-      console.log(`❌ Invalid ObjectId format in token: ${payload.sub}`);
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      console.log(`❌ Invalid ObjectId format in token: ${userId}`);
       return res.status(401).json({ message: 'Invalid user ID format in token' });
     }
     
-    req.userId = payload.sub;
+    req.userId = userId;
     next();
   } catch (error) {
     console.log(`❌ Token verification failed:`, error);
