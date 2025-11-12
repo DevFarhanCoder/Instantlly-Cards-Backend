@@ -53,7 +53,7 @@ router.post('/login', async (req: Request, res: Response) => {
     // Generate JWT token
     const token = jwt.sign(
       {
-        id: admin._id,
+        id: String(admin._id),
         username: admin.username,
         role: admin.role,
       },
@@ -67,7 +67,7 @@ router.post('/login', async (req: Request, res: Response) => {
       data: {
         token,
         admin: {
-          id: admin._id,
+          id: String(admin._id),
           username: admin.username,
           email: admin.email,
           role: admin.role,
@@ -168,7 +168,7 @@ router.get('/verify', async (req: Request, res: Response) => {
       success: true,
       data: {
         admin: {
-          id: admin._id,
+          id: String(admin._id),
           username: admin.username,
           email: admin.email,
           role: admin.role,
