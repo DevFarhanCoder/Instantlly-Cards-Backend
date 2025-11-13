@@ -11,6 +11,8 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
     const { subject, message, rating } = req.body;
     const userId = req.userId;
 
+    console.log('📝 Feedback submission received:', { userId, subject, rating });
+
     // Validate required fields
     if (!subject || !message) {
       return res.status(400).json({ 
@@ -22,11 +24,14 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
     // Get user details
     const user = await User.findById(userId);
     if (!user) {
+      console.log('❌ User not found:', userId);
       return res.status(404).json({ 
         success: false, 
         message: "User not found" 
       });
     }
+
+    console.log('👤 User found:', { name: user.name, phone: user.phone });
 
     // Create feedback
     const feedback = new Feedback({
@@ -40,7 +45,9 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
       status: "pending"
     });
 
+    console.log('💾 Saving feedback to database...');
     await feedback.save();
+    console.log('✅ Feedback saved successfully:', feedback._id);
 
     res.status(201).json({
       success: true,
@@ -48,7 +55,7 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
       data: feedback
     });
   } catch (error) {
-    console.error("Error submitting feedback:", error);
+    console.error("❌ Error submitting feedback:", error);
     res.status(500).json({ 
       success: false, 
       message: "Failed to submit feedback" 
@@ -83,6 +90,8 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
 
+    console.log('📋 Fetching all feedback - Status filter:', status);
+
     const query: any = {};
     if (status) {
       query.status = status;
@@ -99,6 +108,8 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
 
     const total = await Feedback.countDocuments(query);
 
+    console.log(`✅ Found ${feedbacks.length} feedbacks (Total: ${total})`);
+
     res.json({
       success: true,
       data: feedbacks,
@@ -110,7 +121,7 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
       }
     });
   } catch (error) {
-    console.error("Error fetching all feedback:", error);
+    console.error("❌ Error fetching all feedback:", error);
     res.status(500).json({ 
       success: false, 
       message: "Failed to fetch feedback" 
