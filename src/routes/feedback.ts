@@ -9,7 +9,7 @@ const router = Router();
 router.post("/", requireAuth, async (req: AuthReq, res) => {
   try {
     const { subject, message, rating } = req.body;
-    const userId = req.user!.userId;
+    const userId = req.userId;
 
     // Validate required fields
     if (!subject || !message) {
@@ -59,7 +59,7 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
 // Get user's feedback history
 router.get("/my-feedback", requireAuth, async (req: AuthReq, res) => {
   try {
-    const userId = req.user!.userId;
+    const userId = req.userId;
 
     const feedbacks = await Feedback.find({ userId })
       .sort({ createdAt: -1 })
@@ -170,7 +170,7 @@ router.patch("/:id/status", requireAuth, async (req: AuthReq, res) => {
 router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user!.userId;
+    const userId = req.userId;
 
     const feedback = await Feedback.findOne({ _id: id, userId });
 
