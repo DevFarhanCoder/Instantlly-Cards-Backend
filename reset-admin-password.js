@@ -18,7 +18,11 @@ async function resetAdminPassword() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
 
-    const admin = await Admin.findOne({ username: 'admin' });
+    // Find admin by current username (Farhan) or admin
+    let admin = await Admin.findOne({ username: 'Farhan' });
+    if (!admin) {
+      admin = await Admin.findOne({ username: 'admin' });
+    }
     
     if (!admin) {
       console.log('❌ Admin user not found');
@@ -40,8 +44,8 @@ async function resetAdminPassword() {
 
     console.log('\n✅ Admin credentials updated successfully!');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('Username: Farhan');
-    console.log('Password: Farhan_90');
+    console.log('Username: admin');
+    console.log('Password: admin123');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     await mongoose.disconnect();
