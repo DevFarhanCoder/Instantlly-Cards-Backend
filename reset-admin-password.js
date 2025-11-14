@@ -28,8 +28,8 @@ async function resetAdminPassword() {
     console.log('📋 Found admin:', admin.username, '-', admin.email);
     
     // Update username and password
-    const newUsername = 'Farhan';
-    const newPassword = 'Farhan_90';
+    const newUsername = 'admin';
+    const newPassword = 'admin123';
     
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
