@@ -27,17 +27,21 @@ async function resetAdminPassword() {
 
     console.log('📋 Found admin:', admin.username, '-', admin.email);
     
-    // Reset password to admin123
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash('admin123', salt);
+    // Update username and password
+    const newUsername = 'Farhan';
+    const newPassword = 'Farhan_90';
     
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    admin.username = newUsername;
     admin.password = hashedPassword;
     await admin.save();
 
-    console.log('\n✅ Password reset successfully!');
+    console.log('\n✅ Admin credentials updated successfully!');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('Username: admin');
-    console.log('Password: admin123');
+    console.log('Username: Farhan');
+    console.log('Password: Farhan_90');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     await mongoose.disconnect();
