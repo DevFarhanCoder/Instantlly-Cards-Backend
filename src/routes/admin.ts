@@ -9,6 +9,7 @@ import Contact from "../models/Contact";
 import Notification from "../models/Notification";
 import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
+import Transaction from "../models/Transaction";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 
 const router = express.Router();
@@ -431,7 +432,7 @@ router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Resp
 
 /**
  * POST /api/admin/ads/:id/approve
- * Approve a pending ad
+ * Approve a pending ad and deduct 1200 credits from creator
  */
 router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
@@ -454,6 +455,57 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
         success: false,
         message: `Advertisement is already ${ad.status}`,
       });
+    }
+
+    // Find the user who created the ad (by phone number in uploadedBy field)
+    let creditsDeducted = false;
+    let paymentRequired = 0;
+    let userCredits = 0;
+
+    if (ad.uploadedBy && ad.uploadedBy !== 'admin') {
+      const creator = await User.findOne({ phone: ad.uploadedBy });
+      
+      if (creator) {
+        const currentCredits = (creator as any).credits || 0;
+        const deductionAmount = 1200;
+
+        // Check if user has enough credits
+        if (currentCredits >= deductionAmount) {
+          // Deduct credits
+          creator.set({ credits: currentCredits - deductionAmount });
+          await creator.save();
+
+          // Create transaction record
+          await Transaction.create({
+            type: 'ad_deduction',
+            fromUser: creator._id,
+            amount: deductionAmount,
+            description: `Credits deducted for ad: ${ad.title}`,
+            balanceBefore: currentCredits,
+            balanceAfter: currentCredits - deductionAmount,
+            relatedAd: ad._id,
+            status: 'completed'
+          });
+
+          creditsDeducted = true;
+          userCredits = currentCredits - deductionAmount;
+          
+          // Calculate 15% payment required (15% of 1200 = 180)
+          paymentRequired = Math.round(deductionAmount * 0.15);
+
+          console.log(`💰 Deducted ${deductionAmount} credits from ${creator.name}. New balance: ${userCredits}. Payment required: ₹${paymentRequired}`);
+        } else {
+          console.log(`⚠️ User ${creator.name} has insufficient credits (${currentCredits}). Ad approval blocked.`);
+          return res.status(400).json({
+            success: false,
+            message: `Insufficient credits. User has ${currentCredits} credits but needs ${deductionAmount} credits to approve this ad.`,
+            userCredits: currentCredits,
+            required: deductionAmount
+          });
+        }
+      } else {
+        console.log(`⚠️ Could not find user with phone ${ad.uploadedBy} for credits deduction`);
+      }
     }
 
     // Update ad status to approved
@@ -480,6 +532,17 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
         approvalDate: ad.approvalDate,
         priority: ad.priority,
       },
+      credits: {
+        deducted: creditsDeducted,
+        amount: creditsDeducted ? 1200 : 0,
+        remainingBalance: creditsDeducted ? userCredits : null,
+        paymentRequired: creditsDeducted ? paymentRequired : 0,
+        paymentDetails: creditsDeducted ? {
+          description: `15% payment for ad approval`,
+          amount: paymentRequired,
+          currency: 'INR'
+        } : null
+      }
     });
   } catch (error) {
     console.error('❌ Error approving ad:', error);

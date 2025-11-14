@@ -6,10 +6,21 @@ import path from "path";
 import mongoose from "mongoose";
 import User from "../models/User";
 import Contact from "../models/Contact";
+import Transaction from "../models/Transaction";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
 
 const router = Router();
+
+// Helper function to generate unique referral code
+function generateReferralCode(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -39,12 +50,13 @@ router.post("/signup", async (req, res) => {
   try {
     console.log('🚀 Starting simple signup process...');
     
-    const { name, phone, password } = req.body;
+    const { name, phone, password, referralCode } = req.body;
     
     console.log('📝 Raw signup data received:', {
       name: name || 'undefined',
       phone: phone || 'undefined', 
       password: password ? '***' + password.slice(-2) : 'undefined',
+      referralCode: referralCode || 'none',
       bodyKeys: Object.keys(req.body)
     });
 
@@ -76,6 +88,7 @@ router.post("/signup", async (req, res) => {
     const cleanPhone = phone.trim();
     const cleanName = name.trim();
     const cleanPassword = password.trim();
+    const cleanReferralCode = referralCode?.trim().toUpperCase();
     
     // Validate phone format
     if (!/^\+[1-9]\d{1,14}$/.test(cleanPhone)) {
@@ -101,21 +114,50 @@ router.post("/signup", async (req, res) => {
     }
     console.log('✅ Phone number is available');
 
+    // Check if referral code is valid (if provided)
+    let referrer = null;
+    if (cleanReferralCode) {
+      referrer = await User.findOne({ referralCode: cleanReferralCode });
+      if (!referrer) {
+        console.log('❌ Invalid referral code:', cleanReferralCode);
+        return res.status(400).json({ 
+          message: 'Invalid referral code' 
+        });
+      }
+      console.log('✅ Valid referral code from:', referrer.name);
+    }
+
     // Hash password
     console.log('🔐 Hashing password...');
     const hashedPassword = await bcrypt.hash(cleanPassword, 12);
 
-    // Create user data object - ONLY name, phone, password
-    const userData = {
+    // Generate unique referral code for new user
+    let newReferralCode = generateReferralCode();
+    let codeExists = await User.findOne({ referralCode: newReferralCode });
+    while (codeExists) {
+      newReferralCode = generateReferralCode();
+      codeExists = await User.findOne({ referralCode: newReferralCode });
+    }
+
+    // Create user data object with 500,000 credits
+    const userData: any = {
       name: cleanName,
       phone: cleanPhone,
-      password: hashedPassword
+      password: hashedPassword,
+      credits: 500000, // 5 lac credits
+      referralCode: newReferralCode
     };
+
+    if (referrer) {
+      userData.referredBy = referrer._id;
+    }
 
     console.log('👤 Creating new user with data:', { 
       name: userData.name, 
       phone: userData.phone, 
-      hasPassword: !!userData.password 
+      hasPassword: !!userData.password,
+      credits: userData.credits,
+      referralCode: userData.referralCode
     });
 
     // Create and save user
@@ -123,6 +165,38 @@ router.post("/signup", async (req, res) => {
     const savedUser = await user.save();
 
     console.log('✅ User created successfully with ID:', savedUser._id);
+
+    // Create signup bonus transaction
+    await Transaction.create({
+      type: 'signup_bonus',
+      toUser: savedUser._id,
+      amount: 500000,
+      description: 'Signup bonus - 5 lac credits',
+      balanceBefore: 0,
+      balanceAfter: 500000,
+      status: 'completed'
+    });
+
+    // If referred by someone, give referrer 20% bonus (100,000 credits)
+    if (referrer) {
+      const referralBonus = 100000; // 20% of 500,000
+      referrer.credits = (referrer.credits || 0) + referralBonus;
+      await referrer.save();
+
+      // Create referral bonus transaction
+      await Transaction.create({
+        type: 'referral_bonus',
+        fromUser: savedUser._id,
+        toUser: referrer._id,
+        amount: referralBonus,
+        description: `Referral bonus - ${cleanName} joined using your code`,
+        balanceBefore: (referrer.credits || 0) - referralBonus,
+        balanceAfter: referrer.credits,
+        status: 'completed'
+      });
+
+      console.log(`💰 Referral bonus of ${referralBonus} credits given to ${referrer.name}`);
+    }
 
     // Notify all contacts who have this user's phone number in their contact list
     try {
@@ -187,7 +261,9 @@ router.post("/signup", async (req, res) => {
       name: savedUser.name,
       phone: savedUser.phone,
       profilePicture: savedUser.profilePicture || "",
-      about: (savedUser as any).about || "Available"
+      about: (savedUser as any).about || "Available",
+      credits: savedUser.credits,
+      referralCode: savedUser.referralCode
     };
 
     console.log('🎉 Signup successful for phone:', cleanPhone);
@@ -311,7 +387,9 @@ router.post("/login", async (req, res) => {
         phone: user.phone,
         email: user.email,
         profilePicture: user.profilePicture || "",
-        about: (user as any).about || "Available"
+        about: (user as any).about || "Available",
+        credits: (user as any).credits || 0,
+        referralCode: (user as any).referralCode
       },
     });
   } catch (e) {
@@ -338,6 +416,8 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
       about: (user as any).about || "Available",
+      credits: (user as any).credits || 0,
+      referralCode: (user as any).referralCode
     };
     
     console.log("Sending profile data:", profileData);

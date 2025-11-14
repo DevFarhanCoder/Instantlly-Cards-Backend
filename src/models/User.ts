@@ -23,6 +23,10 @@ const UserSchema = new Schema(
     pushToken: { type: String },
     platform: { type: String },
     pushTokenUpdatedAt: { type: Date },
+    // Credits system - 5 lac (500,000) credits on signup
+    credits: { type: Number, default: 500000 },
+    referralCode: { type: String, unique: true, sparse: true, index: true },
+    referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
 );
