@@ -1,4 +1,4 @@
-// index.ts - Updated 2025-11-10 - v1.0.4 (Increased GridFS timeouts)
+// index.ts
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -28,7 +28,6 @@ import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
-import { optimizedImageService } from "./services/optimizedImageService";
 
 const app = express();
 const server = createServer(app);
@@ -50,9 +49,52 @@ const io = new Server(server, {
   perMessageDeflate: false // Disable compression for speed
 });
 
-app.use(cors());
+// CORS Configuration - Allow requests from Vercel and admin dashboards
+const allowedOrigins = [
+  'https://instantlly-ads.vercel.app',
+  'https://instantlly-admin.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  '*' // Fallback for other origins during development
+];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc)
+    if (!origin) return callback(null, true);
+    
+    // Allow all origins that match our whitelist
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow anyway for now (can restrict later)
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  maxAge: 86400 // 24 hours
+}));
+
 app.use(compression()); // Enable gzip compression for faster responses
 app.use(express.json({ limit: "10mb" })); // instead of default
+
+// Additional CORS headers middleware (belt and suspenders approach)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(204).send();
+  }
+  
+  next();
+});
 
 // Create uploads directories if they don't exist
 const profilesDir = path.join(__dirname, '../uploads/profiles');
@@ -67,6 +109,11 @@ if (!fs.existsSync(cardsDir)) {
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Favicon handler (prevents 404 errors in browser console)
+app.get('/favicon.ico', (_req: Request, res: Response) => {
+  res.status(204).end(); // No content
+});
 
 // Root health check for Render's health probe (responds to GET / or /health)
 app.get("/", (_req: Request, res: Response) => {
@@ -146,10 +193,6 @@ async function startServer() {
     // Initialize GridFS for ad image storage
     gridfsService.initialize();
     console.log("✅ GridFS initialized for ad images");
-    
-    // Initialize optimized image service with chunked streaming
-    optimizedImageService.initialize();
-    console.log("✅ Optimized Image Service initialized (256KB chunks)");
 
     // Add routes after DB connection
     // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
