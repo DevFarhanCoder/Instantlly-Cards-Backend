@@ -1,32 +1,42 @@
 import { Router, Request, Response } from "express";
-import mongoose from "mongoose";
 import Ad from "../models/Ad";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
-import { optimizedImageService } from "../services/optimizedImageService";
-import { imageCache } from "../utils/imageCache";
-import { isDBConnected } from "../db";
+import { imageCache } from "../services/imageCache";
 
 const router = Router();
 
-// GET /api/ads/health - Health check endpoint
-router.get("/health", async (req: Request, res: Response) => {
-  const health = {
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    database: {
-      connected: isDBConnected(),
-      state: ["disconnected", "connected", "connecting", "disconnecting"][
-        mongoose.connection.readyState
-      ] || "unknown"
-    },
-    cache: imageCache.getStats(),
-    uptime: process.uptime()
-  };
+// Simple rate limiting to prevent accidental spam
+const uploadAttempts = new Map<string, { count: number; resetTime: number }>();
 
-  const statusCode = health.database.connected ? 200 : 503;
-  res.status(statusCode).json(health);
-});
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of uploadAttempts.entries()) {
+    if (value.resetTime < now) {
+      uploadAttempts.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
+function checkRateLimit(adminId: string, maxPerMinute: number = 60): boolean {
+  const now = Date.now();
+  const key = adminId;
+  
+  if (!uploadAttempts.has(key) || uploadAttempts.get(key)!.resetTime < now) {
+    uploadAttempts.set(key, { count: 1, resetTime: now + 60000 });
+    return true;
+  }
+  
+  const attempt = uploadAttempts.get(key)!;
+  if (attempt.count >= maxPerMinute) {
+    return false; // Rate limit exceeded
+  }
+  
+  attempt.count++;
+  return true;
+}
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
 // ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
@@ -34,32 +44,50 @@ router.get("/active", async (req: Request, res: Response) => {
   try {
     const now = new Date();
 
-    // � Check database connection first
-    if (!isDBConnected()) {
-      console.error('❌ Database not connected - cannot fetch active ads');
-      return res.status(503).json({
-        success: false,
-        message: "Database temporarily unavailable",
-        data: [],
-        count: 0
-      });
-    }
+    // 🔍 LOG: Request received
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📱 [STEP 1] GET /api/ads/active - Request Received');
+    console.log('🕐 Timestamp:', now.toISOString());
+    console.log('🌐 User-Agent:', req.headers['user-agent']);
+    console.log('🔗 Origin:', req.headers.origin || 'No origin');
+    console.log('🔗 Referer:', req.headers.referer || 'No referer');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     // Set cache headers for 5 minutes
     res.setHeader('Cache-Control', 'public, max-age=300');
 
-    // Get ads that are currently active (within date range) AND approved
+    // 🔍 LOG: Database query start
+    console.log('📊 [STEP 2] Querying Database for Active Ads');
+    console.log('🔎 Query criteria:', {
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    });
+
+    // Get ads that are currently active (within date range)
+    // Only fetch metadata, NOT images (GridFS handles images separately)
     const ads = await Ad.find({
       startDate: { $lte: now },
-      endDate: { $gte: now },
-      status: 'approved' // ← NEW: Only show approved ads in mobile app
+      endDate: { $gte: now }
     })
       .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
       .sort({ priority: -1, createdAt: -1 })
-      .limit(50)
+      .limit(50) // Can handle more ads now (no heavy base64 payload)
       .lean()
-      .maxTimeMS(10000) // 10 second timeout
       .exec();
+
+    // 🔍 LOG: Database query result
+    console.log('✅ [STEP 3] Database Query Complete');
+    console.log('📈 Total ads found:', ads.length);
+    if (ads.length > 0) {
+      console.log('📋 First ad sample:', {
+        _id: ads[0]._id,
+        title: ads[0].title,
+        hasBottomImageGridFS: !!ads[0].bottomImageGridFS,
+        hasFullscreenImageGridFS: !!ads[0].fullscreenImageGridFS,
+        bottomImageGridFS: ads[0].bottomImageGridFS?.toString() || 'NULL',
+        fullscreenImageGridFS: ads[0].fullscreenImageGridFS?.toString() || 'NULL'
+      });
+    }
 
     // Transform ads to include image URLs instead of base64
     const adsWithUrls = ads.map(ad => ({
@@ -84,6 +112,22 @@ router.get("/active", async (req: Request, res: Response) => {
 
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
 
+    // 🔍 LOG: Response preparation
+    console.log('🔧 [STEP 4] Preparing Response');
+    console.log('🌐 Image Base URL:', imageBaseUrl);
+    if (adsWithUrls.length > 0) {
+      console.log('📸 First ad URLs:', {
+        bottomImageUrl: adsWithUrls[0].bottomImageUrl,
+        fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
+        fullBottomUrl: adsWithUrls[0].bottomImageUrl 
+          ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}` 
+          : 'NULL',
+        fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl 
+          ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}` 
+          : 'NULL'
+      });
+    }
+
     const responseData = {
       success: true,
       data: adsWithUrls,
@@ -92,157 +136,143 @@ router.get("/active", async (req: Request, res: Response) => {
       imageBaseUrl: imageBaseUrl
     };
 
+    // 🔍 LOG: Sending response
+    console.log('📤 [STEP 5] Sending Response to Client');
+    console.log('📊 Response summary:', {
+      success: true,
+      count: adsWithUrls.length,
+      imageBaseUrl: imageBaseUrl,
+      adsWithImages: adsWithUrls.filter(ad => ad.hasBottomImage).length,
+      adsWithFullscreen: adsWithUrls.filter(ad => ad.hasFullscreenImage).length
+    });
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
     res.json(responseData);
-  } catch (error: any) {
-    // Check for authentication errors
-    if (error.message?.includes('Authentication failed') || 
-        error.message?.includes('auth failed') ||
-        error.message?.includes('bad auth')) {
-      console.error('🔐 MongoDB authentication error in active ads fetch');
-      return res.status(503).json({
-        success: false,
-        message: "Database authentication error. Please contact administrator.",
-        error: "DB_AUTH_FAILED"
-      });
-    }
-
-    // Check for timeout errors
-    if (error.message?.includes('timeout') || error.name === 'MongoNetworkTimeoutError') {
-      console.error('⏱️ Database timeout in active ads fetch');
-      return res.status(504).json({
-        success: false,
-        message: "Database query timeout. Please try again.",
-        error: "DB_TIMEOUT"
-      });
-    }
-
+  } catch (error) {
     console.error("❌ GET ACTIVE ADS ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch ads",
-      error: "INTERNAL_ERROR"
+      message: "Failed to fetch ads"
     });
   }
 });
 
 // GET /api/ads/image/:id/:type - Get single ad's image from GridFS (NO AUTH)
-// Streams image efficiently from GridFS storage
+// Streams image efficiently from GridFS storage with timeout protection
 // :type can be 'bottom' or 'fullscreen'
 router.get("/image/:id/:type", async (req: Request, res: Response) => {
+  // Set response timeout to 40 seconds (less than socket timeout)
+  req.setTimeout(40000);
+  
   try {
     const { id, type } = req.params;
 
+    // 🔍 LOG: Image request received
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🖼️  [IMG STEP 1] GET /api/ads/image/:id/:type - Request Received');
+    console.log('🆔 Ad ID:', id);
+    console.log('📷 Image Type:', type);
+    console.log('🕐 Timestamp:', new Date().toISOString());
+    console.log('🌐 User-Agent:', req.headers['user-agent']);
+    console.log('🔗 Referer:', req.headers.referer || 'No referer');
+
     if (type !== "bottom" && type !== "fullscreen") {
+      console.error('❌ [IMG ERROR] Invalid image type:', type);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       return res.status(400).json({
         success: false,
         message: "Invalid image type. Must be 'bottom' or 'fullscreen'"
       });
     }
 
-    // 🔒 CRITICAL: Check database connection first
-    if (!isDBConnected()) {
-      console.error('❌ Database not connected - cannot fetch ad image');
-      return res.status(503).json({
-        success: false,
-        message: "Database temporarily unavailable. Please check connection settings.",
-        error: "DB_NOT_CONNECTED"
-      });
+    // Check cache first (avoids GridFS timeout)
+    const cacheKey = `${id}-${type}`;
+    const cachedImage = imageCache.get(cacheKey);
+    
+    if (cachedImage) {
+      // Set caching headers
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('X-Cache', 'HIT');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      return res.send(cachedImage);
     }
 
-    // Check cache first to avoid database query
-    const cached = imageCache.get(id, type as 'bottom' | 'fullscreen');
-    if (cached) {
-      if (cached.gridfsId) {
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.setHeader('Content-Type', 'image/jpeg');
+    console.log('💨 [CACHE MISS] Image not in cache, fetching from GridFS');
+
+    // 🔍 LOG: Fetching ad from database
+    console.log('📊 [IMG STEP 2] Fetching Ad from Database');
+    
+    // Retry logic for database query (up to 3 attempts)
+    let ad = null;
+    let retries = 0;
+    const maxRetries = 3;
+    
+    while (retries < maxRetries && !ad) {
+      try {
+        ad = await Ad.findById(id)
+          .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
+          .maxTimeMS(10000) // 10 second timeout for this query
+          .lean();
         
-        // Use optimized chunked streaming
-        try {
-          const downloadStream = optimizedImageService.getChunkedDownloadStream(cached.gridfsId);
-          
-          downloadStream.on('error', (error) => {
-            console.error('❌ Chunked stream error:', error.message);
-            if (!res.headersSent) {
-              res.status(500).json({ 
-                success: false, 
-                message: "Image stream error",
-                error: "STREAM_ERROR"
-              });
-            }
-          });
-          
-          return downloadStream.pipe(res);
-        } catch (error: any) {
-          console.error('❌ Failed to create stream:', error.message);
-          // Fall through to database query
+        if (!ad && retries < maxRetries - 1) {
+          retries++;
+          console.warn(`⚠️  [IMG RETRY] Database query failed, retry ${retries}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 500 * retries)); // Exponential backoff
         }
-      } else if (cached.base64Data) {
-        return res.json({
-          success: true,
-          data: cached.base64Data,
-          source: "base64-cached"
-        });
+      } catch (dbError: any) {
+        retries++;
+        console.error(`❌ [IMG DB ERROR] Attempt ${retries}/${maxRetries}:`, dbError.message);
+        
+        if (retries >= maxRetries) {
+          throw dbError; // Throw after all retries exhausted
+        }
+        
+        // Exponential backoff: 500ms, 1000ms, 1500ms
+        await new Promise(resolve => setTimeout(resolve, 500 * retries));
       }
-    }
-
-    // Cache miss - fetch from database with proper error handling
-    let ad;
-    try {
-      ad = await Ad.findById(id)
-        .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
-        .lean()
-        .maxTimeMS(10000) // Increased to 10s
-        .exec();
-    } catch (dbError: any) {
-      console.error('❌ Database query failed:', dbError.message);
-      
-      // Check for authentication errors
-      if (dbError.message.includes('Authentication failed') ||
-          dbError.message.includes('auth failed') ||
-          dbError.message.includes('bad auth')) {
-        console.error('🔐 MongoDB authentication error - wrong password!');
-        return res.status(503).json({
-          success: false,
-          message: "Database authentication error. Please contact administrator.",
-          error: "DB_AUTH_FAILED"
-        });
-      }
-      
-      // Timeout or network error
-      return res.status(504).json({
-        success: false,
-        message: "Database query timeout",
-        error: "DB_TIMEOUT"
-      });
     }
 
     if (!ad) {
+      console.error('❌ [IMG ERROR] Ad not found in database:', id);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
+    console.log('✅ [IMG STEP 3] Ad Found in Database');
+    console.log('📋 Ad data:', {
+      _id: ad._id,
+      bottomImageGridFS: ad.bottomImageGridFS?.toString() || 'NULL',
+      fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || 'NULL',
+      hasLegacyBottomImage: !!(ad.bottomImage && ad.bottomImage.length > 0),
+      hasLegacyFullscreenImage: !!(ad.fullscreenImage && ad.fullscreenImage.length > 0)
+    });
+
     // Get GridFS file ID based on type
     const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
-    const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
-
-    // Cache the result for future requests
-    imageCache.set(
-      id, 
-      type as 'bottom' | 'fullscreen', 
-      gridfsId?.toString() || null, 
-      base64Data || null
-    );
 
     if (!gridfsId) {
+      console.warn('⚠️  [IMG STEP 4] No GridFS ID found - Checking for legacy base64');
+      
+      // Fallback to base64 if GridFS migration not complete
+      const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
+      
       if (!base64Data || base64Data.length === 0) {
+        console.error('❌ [IMG ERROR] No image found (neither GridFS nor base64)');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         return res.status(404).json({
           success: false,
           message: `${type} image not found`
         });
       }
 
+      // Return base64 as fallback (legacy support during migration)
+      console.warn(`⚠️  [IMG STEP 5] Serving base64 fallback for ad ${id} ${type} image`);
+      console.log('📏 Base64 length:', base64Data.length, 'characters');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       return res.json({
         success: true,
         data: base64Data,
@@ -250,126 +280,74 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       });
     }
 
-    // Set aggressive caching for images (24 hours)
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.setHeader('Content-Type', 'image/jpeg');
+    // 🔍 LOG: Preparing to stream from GridFS
+    console.log('✅ [IMG STEP 4] GridFS ID Found:', gridfsId.toString());
+    console.log('🔄 [IMG STEP 5] Buffering image from GridFS for caching');
 
-    // Use optimized chunked streaming
-    try {
-      const downloadStream = optimizedImageService.getChunkedDownloadStream(gridfsId);
+    // Buffer the entire image first (enables caching and retry)
+    const chunks: Buffer[] = [];
+    const downloadStream = gridfsService.getDownloadStream(gridfsId);
+    
+    let streamTimeout: NodeJS.Timeout | null = null;
+    let streamStarted = false;
+    
+    // Set 60 second timeout for GridFS retrieval (increased for buffering)
+    streamTimeout = setTimeout(() => {
+      console.error('❌ [IMG TIMEOUT] GridFS buffering timed out after 60s');
+      downloadStream.destroy();
+    }, 60000);
+    
+    downloadStream.on('data', (chunk: Buffer) => {
+      if (!streamStarted) {
+        console.log('📦 [IMG STEP 6] GridFS Stream Started - Buffering');
+        streamStarted = true;
+      }
+      chunks.push(chunk);
+    });
+
+    downloadStream.on('end', () => {
+      if (streamTimeout) clearTimeout(streamTimeout);
       
-      downloadStream.on('error', (error) => {
-        console.error('❌ GridFS error for ad:', id, error.message);
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            message: "Failed to fetch image from storage",
-            error: "GRIDFS_ERROR"
-          });
-        }
-      });
-
-      downloadStream.pipe(res);
-    } catch (error: any) {
-      console.error('❌ Failed to stream image:', error.message);
+      // Combine all chunks into single buffer
+      const imageBuffer = Buffer.concat(chunks);
+      console.log('✅ [IMG STEP 7] Image buffered successfully');
+      console.log(`📏 Total size: ${(imageBuffer.length / 1024).toFixed(2)} KB`);
+      
+      // Store in cache for future requests
+      imageCache.set(cacheKey, imageBuffer);
+      
+      // Send to client
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('X-Cache', 'MISS');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      res.send(imageBuffer);
+    });
+    
+    downloadStream.on('error', (error) => {
+      if (streamTimeout) clearTimeout(streamTimeout);
+      
+      console.error('❌ [IMG ERROR] GridFS download error:', error);
+      console.error('🆔 Failed GridFS ID:', gridfsId.toString());
+      console.error('📷 Failed Type:', type);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
-          message: "Failed to initialize image stream",
-          error: "STREAM_INIT_ERROR"
+          message: "Failed to fetch image from storage"
         });
-      }
-    }
-
-  } catch (error: any) {
-    console.error("❌ GET AD IMAGE ERROR:", error.message || error);
-    
-    if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        message: "Internal server error"
-      });
-    }
-  }
-});
-
-// GET /api/ads/image/:id/:type/metadata - Get image metadata without downloading
-// Useful for clients to check file size before downloading
-router.get("/image/:id/:type/metadata", async (req: Request, res: Response) => {
-  try {
-    const { id, type } = req.params;
-
-    if (type !== "bottom" && type !== "fullscreen") {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid image type"
-      });
-    }
-
-    // Check database connection
-    if (!isDBConnected()) {
-      return res.status(503).json({
-        success: false,
-        message: "Database temporarily unavailable",
-        error: "DB_NOT_CONNECTED"
-      });
-    }
-
-    // Get ad with timeout protection
-    const ad = await Ad.findById(id)
-      .select('bottomImageGridFS fullscreenImageGridFS title')
-      .lean()
-      .maxTimeMS(5000)
-      .exec();
-
-    if (!ad) {
-      return res.status(404).json({
-        success: false,
-        message: "Ad not found"
-      });
-    }
-
-    const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
-
-    if (!gridfsId) {
-      return res.status(404).json({
-        success: false,
-        message: `${type} image not found`
-      });
-    }
-
-    // Get file metadata
-    const metadata = await optimizedImageService.getFileMetadata(gridfsId);
-
-    if (!metadata) {
-      return res.status(404).json({
-        success: false,
-        message: "Image file not found in storage"
-      });
-    }
-
-    res.json({
-      success: true,
-      data: {
-        adId: id,
-        type: type,
-        filename: metadata.filename,
-        sizeKB: metadata.sizeKB,
-        sizeBytes: metadata.length,
-        chunks: metadata.chunks,
-        chunkSize: metadata.chunkSize,
-        uploadDate: metadata.uploadDate,
-        // Suggest batched loading for large files
-        suggestBatchedLoad: metadata.length > 1024 * 1024, // > 1MB
-        estimatedLoadTime: `${Math.ceil(metadata.length / (256 * 1024))} seconds`
       }
     });
 
   } catch (error: any) {
-    console.error("❌ GET IMAGE METADATA ERROR:", error.message);
+    console.error("❌ GET AD IMAGE ERROR:", error);
+    console.error("❌ Error type:", error.name);
+    console.error("❌ Error message:", error.message);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
     res.status(500).json({
       success: false,
-      message: "Failed to get image metadata"
+      message: "Failed to fetch ad image"
     });
   }
 });
@@ -416,13 +394,13 @@ router.post("/track-click/:id", async (req: Request, res: Response) => {
   }
 });
 
-// ========== ADMIN ROUTES (REQUIRE AUTH) ==========
+// ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
 
-router.use(requireAuth);
+router.use(requireAdminAuth);
 
 // GET /api/ads/analytics/summary - Get analytics summary (admin)
 // MUST be before /:id route to avoid matching "analytics" as an id
-router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
+router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
   try {
     const totalAds = await Ad.countDocuments();
     const now = new Date();
@@ -465,114 +443,117 @@ router.get("/analytics/summary", async (req: AuthReq, res: Response) => {
   }
 });
 
-// GET /api/ads - Get all ads (admin)
-router.get("/", async (req: AuthReq, res: Response) => {
-  const requestStartTime = Date.now();
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('📋 [GET /api/ads] Request received from:', req.ip);
-  console.log('🕐 Request time:', new Date().toISOString());
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  
+// GET /api/ads - Get all ads (admin) with pagination and filtering
+router.get("/", async (req: AdminAuthReq, res: Response) => {
   try {
-    console.log('🔍 Step 1: Checking MongoDB connection status...');
-    console.log('   Mongoose state:', mongoose.connection.readyState);
-    console.log('   States: 0=disconnected, 1=connected, 2=connecting, 3=disconnecting');
+    console.log('📊 Admin GET /api/ads - Request received');
     
-    if (mongoose.connection.readyState !== 1) {
-      console.error('❌ MongoDB not connected! Current state:', mongoose.connection.readyState);
-      return res.status(503).json({
-        success: false,
-        message: "Database not connected",
-        debug: {
-          mongooseState: mongoose.connection.readyState,
-          timestamp: new Date().toISOString()
-        }
-      });
+    // SCALABILITY: Pagination parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Max 100 per page
+    const skip = (page - 1) * limit;
+    
+    // SCALABILITY: Filtering options
+    const filter: any = {};
+    
+    // Filter by status (active/expired/all)
+    if (req.query.status === 'active') {
+      const now = new Date();
+      filter.startDate = { $lte: now };
+      filter.endDate = { $gte: now };
+    } else if (req.query.status === 'expired') {
+      filter.endDate = { $lt: new Date() };
+    } else if (req.query.status === 'upcoming') {
+      filter.startDate = { $gt: new Date() };
     }
     
-    console.log('✅ Step 1 complete: MongoDB is connected');
-    console.log('');
-    console.log('🔍 Step 2: Starting database query...');
-    console.log('   Query: Ad.find({}).select(\'-bottomImage -fullscreenImage\').sort({ createdAt: -1 }).limit(1000)');
-    console.log('   Note: Excluding base64 images (2.9MB each) - using GridFS refs instead');
+    // Filter by search term (title or phone)
+    if (req.query.search) {
+      const searchTerm = req.query.search as string;
+      filter.$or = [
+        { title: { $regex: searchTerm, $options: 'i' } },
+        { phoneNumber: { $regex: searchTerm, $options: 'i' } }
+      ];
+    }
     
-    const queryStartTime = Date.now();
+    // PERFORMANCE: Get total count for pagination (with same filters)
+    const totalAds = await Ad.countDocuments(filter);
     
-    const ads = await Ad.find({})
-      .select("-bottomImage -fullscreenImage") // CRITICAL: Exclude base64 images (125MB for 43 ads!)
+    // CRITICAL: Exclude base64 image fields to prevent timeout on large datasets
+    // Only fetch metadata - images are served via GridFS endpoints
+    const ads = await Ad.find(filter)
+      .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
       .sort({ createdAt: -1 })
-      .limit(1000)
+      .skip(skip)
+      .limit(limit)
       .lean()
       .exec();
 
-    const queryTime = Date.now() - queryStartTime;
-    console.log(`✅ Step 2 complete: Query finished in ${queryTime}ms`);
-    console.log(`   Found ${ads.length} ads`);
-    console.log('');
-    console.log('🔍 Step 3: Preparing response...');
-    
-    const totalTime = Date.now() - requestStartTime;
-    const response = {
-      success: true,
-      data: ads,
-      debug: {
-        totalAds: ads.length,
-        queryTimeMs: queryTime,
-        totalTimeMs: totalTime,
-        timestamp: new Date().toISOString()
-      }
-    };
-    
-    console.log(`✅ Step 3 complete: Sending response (${JSON.stringify(response).length} bytes)`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`✅ [GET /api/ads] SUCCESS - Total time: ${totalTime}ms`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`✅ Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
 
-    res.json(response);
-  } catch (error: any) {
-    const totalTime = Date.now() - requestStartTime;
-    console.log('');
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.error('❌ [GET /api/ads] ERROR after', totalTime, 'ms');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    
+    // Transform ads to include proper image URLs for admin dashboard
+    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    const adsWithImageUrls = ads.map((ad: any) => {
+      try {
+        const adId = ad._id.toString();
+        
+        // ALL ads (both legacy and new) now use GridFS image endpoints
+        // This ensures consistent behavior and avoids sending large base64 in response
+        return {
+          ...ad,
+          _id: adId,
+          // Use GridFS endpoints for images (works for both old and new ads)
+          bottomImage: ad.bottomImageGridFS 
+            ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
+            : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
+          fullscreenImage: ad.fullscreenImageGridFS 
+            ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
+            : "", // No fullscreen if not set
+          bottomImageGridFS: ad.bottomImageGridFS?.toString(),
+          fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
+        };
+      } catch (mapError) {
+        console.error('❌ Error transforming ad:', ad._id, mapError);
+        // Return ad as-is if transformation fails
+        return ad;
+      }
+    });
+
+    console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
+    res.json({
+      success: true,
+      data: adsWithImageUrls,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalAds / limit),
+        totalAds: totalAds,
+        adsPerPage: limit,
+        hasNextPage: page < Math.ceil(totalAds / limit),
+        hasPrevPage: page > 1
+      }
+    });
+  } catch (error) {
+    console.error("❌ GET ALL ADS ERROR:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch ads",
-      error: error.message,
-      debug: {
-        errorName: error.name,
-        errorMessage: error.message,
-        totalTimeMs: totalTime,
-        timestamp: new Date().toISOString()
-      }
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });
 
 // GET /api/ads/:id - Get single ad (admin)
-// GET /api/ads/:id - Get single ad by ID (admin)
-router.get("/:id", async (req: AuthReq, res: Response) => {
+router.get("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
-    console.log(`📋 [GET /api/ads/:id] Fetching ad: ${req.params.id}`);
-    
-    // Exclude base64 images for faster response - frontend will use GridFS endpoints
-    const ad = await Ad.findById(req.params.id)
-      .select("-bottomImage -fullscreenImage")
-      .lean();
+    const ad = await Ad.findById(req.params.id).lean();
 
     if (!ad) {
-      console.log(`❌ [GET /api/ads/:id] Ad not found: ${req.params.id}`);
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
-    console.log(`✅ [GET /api/ads/:id] Found ad: ${ad.title}`);
     res.json({
       success: true,
       data: ad
@@ -587,12 +568,36 @@ router.get("/:id", async (req: AuthReq, res: Response) => {
 });
 
 // POST /api/ads - Create new ad (admin)
-router.post("/", async (req: AuthReq, res: Response) => {
+router.post("/", async (req: AdminAuthReq, res: Response) => {
   try {
+    // Rate limiting: Max 60 ads per minute (1 per second average)
+    if (!checkRateLimit(req.adminId!, 60)) {
+      console.warn(`⚠️  Rate limit exceeded for admin ${req.adminId}`);
+      return res.status(429).json({
+        success: false,
+        message: "Too many uploads. Maximum 60 ads per minute. Please wait a moment."
+      });
+    }
+    
+    console.log('📝 POST /api/ads - Creating new ad');
+    console.log('👤 Admin ID:', req.adminId);
+    console.log('📊 Request body keys:', Object.keys(req.body));
+    
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
 
     // Validation
+    console.log('🔍 Validating fields:', {
+      hasTitle: !!title,
+      hasBottomImage: !!bottomImage,
+      hasPhoneNumber: !!phoneNumber,
+      hasStartDate: !!startDate,
+      hasEndDate: !!endDate,
+      bottomImageLength: bottomImage?.length,
+      fullscreenImageLength: fullscreenImage?.length
+    });
+    
     if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
+      console.error('❌ Validation failed - missing required fields');
       return res.status(400).json({
         success: false,
         message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
@@ -601,29 +606,47 @@ router.post("/", async (req: AuthReq, res: Response) => {
 
     // Upload images to GridFS
     console.log(`📤 Uploading images to GridFS for new ad: ${title}`);
+    console.log(`📏 Bottom image size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
+    if (fullscreenImage) {
+      console.log(`📏 Fullscreen image size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
+    }
     
-    const bottomImageId = await gridfsService.uploadBase64(
-      bottomImage,
-      `${Date.now()}_bottom.jpg`,
-      {
-        title,
-        type: "bottom"
-      }
-    );
-
+    let bottomImageId;
     let fullscreenImageId = null;
-    if (fullscreenImage && fullscreenImage.length > 0) {
-      fullscreenImageId = await gridfsService.uploadBase64(
-        fullscreenImage,
-        `${Date.now()}_fullscreen.jpg`,
+    
+    try {
+      bottomImageId = await gridfsService.uploadBase64(
+        bottomImage,
+        `${Date.now()}_bottom.jpg`,
         {
           title,
-          type: "fullscreen"
+          type: "bottom"
         }
       );
+      console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
+    } catch (uploadError) {
+      console.error(`❌ Failed to upload bottom image to GridFS:`, uploadError);
+      throw new Error(`Image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
     }
 
-    // Create ad with GridFS references - AUTO-APPROVED for admin uploads
+    if (fullscreenImage && fullscreenImage.length > 0) {
+      try {
+        fullscreenImageId = await gridfsService.uploadBase64(
+          fullscreenImage,
+          `${Date.now()}_fullscreen.jpg`,
+          {
+            title,
+            type: "fullscreen"
+          }
+        );
+        console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+      } catch (uploadError) {
+        console.error(`❌ Failed to upload fullscreen image to GridFS:`, uploadError);
+        throw new Error(`Fullscreen image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+      }
+    }
+
+    // Create ad with GridFS references
     const ad = await Ad.create({
       title,
       bottomImage: "", // Empty - using GridFS
@@ -633,10 +656,7 @@ router.post("/", async (req: AuthReq, res: Response) => {
       phoneNumber,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
-      priority: priority || 5,
-      status: 'approved', // ✅ AUTO-APPROVE admin uploads
-      uploadedBy: 'admin',
-      uploaderName: 'Admin'
+      priority: priority || 5
     });
 
     console.log(`✅ Ad created with GridFS images: ${ad._id}`);
@@ -646,147 +666,65 @@ router.post("/", async (req: AuthReq, res: Response) => {
       data: ad
     });
   } catch (error) {
-    console.error("CREATE AD ERROR:", error);
+    console.error("❌ CREATE AD ERROR:", error);
+    console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
+    console.error("❌ Error details:", {
+      name: error instanceof Error ? error.name : 'Unknown',
+      message: error instanceof Error ? error.message : String(error)
+    });
+    
     res.status(500).json({
       success: false,
-      message: "Failed to create ad"
+      message: "Failed to create ad",
+      error: error instanceof Error ? error.message : 'Unknown error',
+      details: process.env.NODE_ENV === 'development' ? error : undefined
     });
   }
 });
 
 // PUT /api/ads/:id - Update ad (admin)
-router.put("/:id", async (req: AuthReq, res: Response) => {
+router.put("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
-    console.log(`📝 [PUT /api/ads/:id] Updating ad: ${req.params.id}`);
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
 
-    // Get existing ad
-    const existingAd = await Ad.findById(req.params.id);
-    if (!existingAd) {
+    const updateData: any = {};
+
+    if (title) updateData.title = title;
+    if (bottomImage) updateData.bottomImage = bottomImage;
+    if (fullscreenImage !== undefined) updateData.fullscreenImage = fullscreenImage;
+    if (phoneNumber) updateData.phoneNumber = phoneNumber;
+    if (startDate) updateData.startDate = new Date(startDate);
+    if (endDate) updateData.endDate = new Date(endDate);
+    if (priority !== undefined) updateData.priority = priority;
+
+    const ad = await Ad.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!ad) {
       return res.status(404).json({
         success: false,
         message: "Ad not found"
       });
     }
 
-    const updateData: any = {};
-
-    // Update basic fields
-    if (title) updateData.title = title;
-    if (phoneNumber) updateData.phoneNumber = phoneNumber;
-    if (startDate) updateData.startDate = new Date(startDate);
-    if (endDate) updateData.endDate = new Date(endDate);
-    if (priority !== undefined) updateData.priority = priority;
-
-    // Handle bottom image update (if new base64 image provided)
-    if (bottomImage && bottomImage.startsWith('data:image')) {
-      console.log(`📤 Uploading new bottom image to GridFS for ad: ${existingAd.title}`);
-      
-      // Upload new image to GridFS FIRST
-      const bottomImageId = await gridfsService.uploadBase64(
-        bottomImage,
-        `${Date.now()}_bottom.jpg`,
-        { title: existingAd.title, type: "bottom" }
-      );
-      console.log(`✅ New bottom image uploaded to GridFS: ${bottomImageId}`);
-      
-      // Only delete old GridFS image AFTER successful upload
-      if (existingAd.bottomImageGridFS) {
-        try {
-          await gridfsService.deleteFile(existingAd.bottomImageGridFS);
-          console.log(`🗑️ Deleted old bottom image from GridFS`);
-        } catch (error) {
-          console.error("⚠️ Failed to delete old bottom image:", error);
-          // Continue anyway - new image is uploaded successfully
-        }
-      }
-      
-      updateData.bottomImage = ""; // Clear base64 field
-      updateData.bottomImageGridFS = bottomImageId;
-    } else if (bottomImage && (bottomImage.startsWith('http://') || bottomImage.startsWith('https://'))) {
-      // GridFS URL detected - clear old base64 data if exists
-      if (existingAd.bottomImage && existingAd.bottomImage.length > 100) {
-        updateData.bottomImage = ""; // Clear legacy base64 field
-        console.log(`🧹 Clearing old base64 bottom image data (keeping GridFS reference)`);
-      } else {
-        console.log(`ℹ️  Bottom image unchanged (GridFS URL detected)`);
-      }
-    }
-
-    // Handle fullscreen image update (if new base64 image provided)
-    if (fullscreenImage !== undefined) {
-      if (fullscreenImage && fullscreenImage.startsWith('data:image')) {
-        console.log(`📤 Uploading new fullscreen image to GridFS for ad: ${existingAd.title}`);
-        
-        // Upload new image to GridFS FIRST
-        const fullscreenImageId = await gridfsService.uploadBase64(
-          fullscreenImage,
-          `${Date.now()}_fullscreen.jpg`,
-          { title: existingAd.title, type: "fullscreen" }
-        );
-        console.log(`✅ New fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
-        
-        // Only delete old GridFS image AFTER successful upload
-        if (existingAd.fullscreenImageGridFS) {
-          try {
-            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
-            console.log(`🗑️ Deleted old fullscreen image from GridFS`);
-          } catch (error) {
-            console.error("⚠️ Failed to delete old fullscreen image:", error);
-            // Continue anyway - new image is uploaded successfully
-          }
-        }
-        
-        updateData.fullscreenImage = ""; // Clear base64 field
-        updateData.fullscreenImageGridFS = fullscreenImageId;
-      } else if (fullscreenImage && (fullscreenImage.startsWith('http://') || fullscreenImage.startsWith('https://'))) {
-        // GridFS URL detected - clear old base64 data if exists
-        if (existingAd.fullscreenImage && existingAd.fullscreenImage.length > 100) {
-          updateData.fullscreenImage = ""; // Clear legacy base64 field
-          console.log(`🧹 Clearing old base64 fullscreen image data (keeping GridFS reference)`);
-        } else {
-          console.log(`ℹ️  Fullscreen image unchanged (GridFS URL detected)`);
-        }
-      } else if (fullscreenImage === "" || fullscreenImage === null) {
-        // User removed fullscreen image
-        if (existingAd.fullscreenImageGridFS) {
-          try {
-            await gridfsService.deleteFile(existingAd.fullscreenImageGridFS);
-            console.log(`🗑️ Deleted fullscreen image from GridFS (user removed it)`);
-          } catch (error) {
-            console.error("Failed to delete fullscreen image:", error);
-          }
-        }
-        updateData.fullscreenImage = "";
-        updateData.fullscreenImageGridFS = null;
-      }
-    }
-
-    // Update ad
-    const ad = await Ad.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    ).select("-bottomImage -fullscreenImage"); // Exclude base64 for performance
-
-    console.log(`✅ [PUT /api/ads/:id] Ad updated successfully: ${ad?.title}`);
-
     res.json({
       success: true,
       data: ad
     });
-  } catch (error: any) {
-    console.error("❌ [PUT /api/ads/:id] UPDATE AD ERROR:", error);
+  } catch (error) {
+    console.error("UPDATE AD ERROR:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update ad",
-      error: error.message
+      message: "Failed to update ad"
     });
   }
 });
 
 // DELETE /api/ads/:id - Delete ad (admin)
-router.delete("/:id", async (req: AuthReq, res: Response) => {
+router.delete("/:id", async (req: AdminAuthReq, res: Response) => {
   try {
     const ad = await Ad.findById(req.params.id);
 
@@ -818,9 +756,6 @@ router.delete("/:id", async (req: AuthReq, res: Response) => {
 
     // Delete ad document
     await Ad.findByIdAndDelete(req.params.id);
-
-    // Clear cache for this ad
-    imageCache.clear(req.params.id);
 
     res.json({
       success: true,
