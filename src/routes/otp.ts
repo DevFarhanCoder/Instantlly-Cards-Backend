@@ -1,29 +1,12 @@
 // Instantlly-Cards-Backend/src/routes/otp.ts
 import express from 'express';
-import axios from 'axios';
 import crypto from 'crypto';
 import User from '../models/User';
 
 const router = express.Router();
 
-// Use environment variable for Fast2SMS API key
-const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || 'tH2an11rgORVwQE5FT8sHLqOYbn6AexAVGe3Y47JH9BszQM79JsISCg7aqGy';
-const FAST2SMS_URL = 'https://www.fast2sms.com/dev/bulkV2';
-
-// Debug endpoint to check API key configuration
-router.get('/debug-config', (req, res) => {
-  res.json({
-    apiKeyConfigured: !!FAST2SMS_API_KEY,
-    apiKeySource: process.env.FAST2SMS_API_KEY ? 'environment' : 'hardcoded',
-    apiKeyLength: FAST2SMS_API_KEY ? FAST2SMS_API_KEY.length : 0,
-    apiKeyFirst10: FAST2SMS_API_KEY ? FAST2SMS_API_KEY.substring(0, 10) + '...' : 'none',
-    apiKeyLast10: FAST2SMS_API_KEY ? '...' + FAST2SMS_API_KEY.substring(FAST2SMS_API_KEY.length - 10) : 'none',
-    fast2smsUrl: FAST2SMS_URL,
-    nodeEnv: process.env.NODE_ENV
-  });
-});
-
-// In-memory OTP store (use Redis in production)
+// In-memory OTP store (use Redis in production for scalability)
+// This stores OTPs temporarily for verification
 interface OTPRecord {
   code: string;
   expiresAt: number;
@@ -36,6 +19,15 @@ const otpStore = new Map<string, OTPRecord>();
 function generateOTP(): string {
   return crypto.randomInt(100000, 999999).toString();
 }
+
+// Debug endpoint to check configuration
+router.get('/debug-config', (req, res) => {
+  res.json({
+    service: 'Firebase Phone Authentication',
+    nodeEnv: process.env.NODE_ENV,
+    otpStoreSize: otpStore.size
+  });
+});
 
 // POST /api/auth/check-phone - Check if phone number exists
 router.post('/check-phone', async (req, res) => {
@@ -77,6 +69,8 @@ router.post('/check-phone', async (req, res) => {
 });
 
 // POST /api/auth/send-otp
+// This endpoint generates and stores an OTP
+// The actual SMS sending is handled by Firebase on the frontend
 router.post('/send-otp', async (req, res) => {
   try {
     const { phone } = req.body;
@@ -88,123 +82,39 @@ router.post('/send-otp', async (req, res) => {
       });
     }
 
-    console.log('📱 Sending OTP to:', phone);
+    console.log('📱 Generating OTP for:', phone);
 
     // Generate OTP
     const code = generateOTP();
     const ttlSeconds = 300; // 5 minutes
     const expiresAt = Date.now() + ttlSeconds * 1000;
 
-    // Store OTP
+    // Store OTP for backend verification
     otpStore.set(phone, { code, expiresAt, attempts: 0 });
 
-    // Prepare SMS message
-    const message = `Your InstantllyCards verification code is ${code}. It will expire in 5 minutes.`;
+    console.log('✅ OTP generated and stored:', code);
+    console.log('⏰ Expires at:', new Date(expiresAt).toISOString());
 
-    try {
-      // Clean phone number (remove +, spaces, hyphens)
-      const cleanPhone = phone.replace(/\D/g, '');
-      
-      console.log('📞 Attempting to send SMS to:', cleanPhone);
-      console.log('📝 Message:', message);
-      console.log('🔑 Using Fast2SMS route: q (promotional - works but may fail for DND numbers)');
-      console.log('🔑 API Key first 10:', FAST2SMS_API_KEY.substring(0, 10) + '...');
-      console.log('🔑 API Key last 10: ...' + FAST2SMS_API_KEY.substring(FAST2SMS_API_KEY.length - 10));
-      
-      // Send OTP via Fast2SMS using route 'q' (promotional)
-      // Note: Route 'v3' doesn't work with this account, 'dlt' needs DLT registration
-      // Route 'q' works but may be blocked for DND numbers
-      const response = await axios.get(FAST2SMS_URL, {
-        params: {
-          authorization: FAST2SMS_API_KEY,
-          message,
-          language: 'english',
-          route: 'q', // Promotional route - only one that works with this API key
-          numbers: cleanPhone
-        },
-        timeout: 10000, // 10 second timeout
-        validateStatus: () => true // Accept any status code to see what's happening
-      });
-
-      console.log('📡 Fast2SMS HTTP status:', response.status);
-      console.log('📡 Fast2SMS headers:', JSON.stringify(response.headers, null, 2));
-      console.log('✅ Fast2SMS full response:', JSON.stringify(response.data, null, 2));
-      console.log('📊 Response return:', response.data?.return);
-      console.log('📊 Response message:', response.data?.message);
-
-      if (response.data && response.data.return === true) {
-        console.log('✅ SMS sent successfully via Fast2SMS');
-        return res.json({
-          success: true,
-          message: 'OTP sent successfully',
-          ttl: ttlSeconds
-        });
-      } else {
-        // Log the specific error from Fast2SMS
-        console.error('❌ Fast2SMS error response:', JSON.stringify(response.data, null, 2));
-        console.error('   Return:', response.data?.return);
-        console.error('   Message:', response.data?.message);
-        console.error('   Status Code:', response.data?.status_code);
-        
-        // If DND blocked, still return success with devOTP
-        if (response.data?.status_code === 427 || response.data?.message?.includes('DND')) {
-          console.log('📵 Number is in DND list - returning devOTP for manual entry');
-          return res.json({
-            success: true,
-            message: 'OTP generated. If SMS not received, use code from app.',
-            ttl: ttlSeconds,
-            devOTP: code, // Return OTP for DND numbers
-            smsStatus: 'blocked_dnd',
-            smsError: 'Number in DND list'
-          });
-        }
-        
-        throw new Error(response.data?.message || 'Fast2SMS returned error');
-      }
-    } catch (smsError: any) {
-      console.error('❌ Fast2SMS error full details:');
-      console.error('   Type:', smsError.constructor.name);
-      console.error('   Message:', smsError.message);
-      console.error('   Response status:', smsError?.response?.status);
-      console.error('   Response data:', JSON.stringify(smsError?.response?.data, null, 2));
-      console.error('   Is timeout:', smsError.code === 'ECONNABORTED');
-      console.error('   Error code:', smsError.code);
-      
-      // For development/testing: still return success and log the OTP
-      console.log('🔐 [DEV/FALLBACK] OTP for', phone, ':', code);
-      console.log('⚠️  SMS failed - returning OTP in response for user to enter manually');
-      console.log('   Possible causes:');
-      console.log('   - DND number (blocked in Fast2SMS)');
-      console.log('   - Insufficient credits in Fast2SMS account');
-      console.log('   - Invalid API key or route not enabled');
-      console.log('   - Network error or timeout');
-      console.log('   - Fast2SMS service temporarily down');
-      
-      return res.json({
-        success: true,
-        message: 'OTP generated. If SMS not received, use code from notification.',
-        ttl: ttlSeconds,
-        // Always return OTP when SMS fails so user can proceed
-        devOTP: code,
-        smsStatus: 'failed',
-        smsError: smsError?.response?.data?.message || smsError.message || 'SMS delivery failed',
-        errorDetails: {
-          type: smsError.constructor.name,
-          code: smsError.code,
-          statusCode: smsError?.response?.data?.status_code
-        }
-      });
-    }
+    // Return success - Firebase will handle SMS on the frontend
+    return res.json({
+      success: true,
+      message: 'OTP ready for Firebase verification',
+      ttl: ttlSeconds,
+      // In development, you can return the OTP for testing
+      // Remove this in production when using real Firebase Phone Auth
+      ...(process.env.NODE_ENV === 'development' && { devOTP: code })
+    });
   } catch (error: any) {
-    console.error('💥 Send OTP error:', error);
+    console.error('💥 Generate OTP error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to send OTP. Please try again.'
+      message: 'Failed to generate OTP. Please try again.'
     });
   }
 });
 
 // POST /api/auth/verify-otp
+// Verifies the OTP entered by the user
 router.post('/verify-otp', (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -256,10 +166,7 @@ router.post('/verify-otp', (req, res) => {
 
     // OTP verified successfully
     otpStore.delete(phone);
-    console.log('✅ OTP verified for:', phone);
-
-    // You could mark the phone as verified in your database here
-    // or create a short-lived verification token
+    console.log('✅ OTP verified successfully for:', phone);
 
     return res.json({
       success: true,

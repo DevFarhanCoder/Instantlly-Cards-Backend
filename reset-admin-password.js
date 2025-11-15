@@ -18,7 +18,11 @@ async function resetAdminPassword() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB');
 
-    const admin = await Admin.findOne({ username: 'admin' });
+    // Find admin by current username (Farhan) or admin
+    let admin = await Admin.findOne({ username: 'Farhan' });
+    if (!admin) {
+      admin = await Admin.findOne({ username: 'admin' });
+    }
     
     if (!admin) {
       console.log('❌ Admin user not found');
@@ -27,14 +31,18 @@ async function resetAdminPassword() {
 
     console.log('📋 Found admin:', admin.username, '-', admin.email);
     
-    // Reset password to admin123
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash('admin123', salt);
+    // Update username and password
+    const newUsername = 'admin';
+    const newPassword = 'admin123';
     
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    admin.username = newUsername;
     admin.password = hashedPassword;
     await admin.save();
 
-    console.log('\n✅ Password reset successfully!');
+    console.log('\n✅ Admin credentials updated successfully!');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('Username: admin');
     console.log('Password: admin123');

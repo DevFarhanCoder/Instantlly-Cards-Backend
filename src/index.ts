@@ -25,6 +25,7 @@ import groupSharingRouter from "./routes/groupSharing";
 import adsRouter from "./routes/ads";
 import channelPartnerAdsRouter from "./routes/channelPartnerAds";
 import creditsRouter from "./routes/credits";
+import feedbackRouter from "./routes/feedback";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { optimizedImageService } from "./services/optimizedImageService";
@@ -174,6 +175,8 @@ async function startServer() {
     console.log("✅ Mounted /api/channel-partner/ads routes (channel partner ad upload/management)");
     app.use("/api/credits", creditsRouter);
     console.log("✅ Mounted /api/credits routes (credits system - balance, transfer, transactions)");
+    app.use("/api/feedback", feedbackRouter);
+    console.log("✅ Mounted /api/feedback routes (user feedback system)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);
