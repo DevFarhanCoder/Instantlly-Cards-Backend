@@ -421,7 +421,10 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
     };
     
     console.log("Sending profile data:", profileData);
-    res.json(profileData);
+    console.log("Credits value:", (user as any).credits);
+    
+    // Return with 'user' wrapper for frontend compatibility
+    res.json({ user: profileData });
   } catch (error) {
     console.error("GET PROFILE ERROR", error);
     res.status(500).json({ message: "Server error" });
