@@ -675,4 +675,180 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
   }
 });
 
+// GET /api/admin/users-stats - Get user statistics with total credits
+router.get("/users-stats", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    
+    // Calculate total credits across all users
+    const creditStats = await User.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalCredits: { $sum: "$credits" }
+        }
+      }
+    ]);
+
+    const totalCredits = creditStats.length > 0 ? creditStats[0].totalCredits : 0;
+
+    res.json({
+      success: true,
+      totalUsers,
+      totalCredits
+    });
+  } catch (error) {
+    console.error('❌ Error fetching user stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user statistics'
+    });
+  }
+});
+
+// GET /api/admin/all-transactions - Get all credit transactions
+router.get("/all-transactions", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { limit = 500, skip = 0, type, userId } = req.query;
+    
+    const query: any = {};
+    if (type) query.type = type;
+    if (userId) {
+      query.$or = [
+        { fromUser: userId },
+        { toUser: userId }
+      ];
+    }
+
+    const transactions = await Transaction.find(query)
+      .populate('fromUser', 'name phone profilePicture')
+      .populate('toUser', 'name phone profilePicture')
+      .sort({ createdAt: -1 })
+      .limit(Number(limit))
+      .skip(Number(skip));
+
+    const total = await Transaction.countDocuments(query);
+
+    res.json({
+      success: true,
+      transactions,
+      total,
+      limit: Number(limit),
+      skip: Number(skip)
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all transactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch transactions'
+    });
+  }
+});
+
+// GET /api/admin/user/:userId - Get specific user details including balance
+router.get("/user/:userId", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    const user = await User.findById(userId).select('name phone email credits profilePicture createdAt');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        credits: (user as any).credits || 0,
+        profilePicture: user.profilePicture,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user details'
+    });
+  }
+});
+
+// POST /api/admin/transfer-credits - Admin transfer credits to any user
+router.post("/transfer-credits", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { toUserId, amount, description } = req.body;
+    
+    // Validation
+    if (!toUserId || !amount) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Recipient and amount are required" 
+      });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Amount must be greater than 0" 
+      });
+    }
+
+    // Get recipient
+    const recipient = await User.findById(toUserId);
+    if (!recipient) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Recipient not found" 
+      });
+    }
+
+    // Add credits to recipient
+    const recipientCredits = (recipient as any).credits || 0;
+    recipient.set({ credits: recipientCredits + amount });
+    await recipient.save();
+
+    // Create transaction record
+    const transferDesc = description || `Admin credit - ${amount.toLocaleString('en-IN')} credits`;
+    
+    await Transaction.create({
+      type: 'admin_credit',
+      toUser: recipient._id,
+      amount: amount,
+      description: transferDesc,
+      balanceBefore: recipientCredits,
+      balanceAfter: recipientCredits + amount,
+      status: 'completed'
+    });
+
+    console.log(`✅ Admin transferred ${amount} credits to ${recipient.name}`);
+
+    res.json({
+      success: true,
+      message: `Successfully transferred ${amount} credits to ${recipient.name}`,
+      newBalance: recipientCredits + amount,
+      transfer: {
+        amount,
+        to: {
+          _id: recipient._id,
+          name: recipient.name,
+          phone: recipient.phone
+        }
+      }
+    });
+  } catch (error) {
+    console.error('❌ Admin transfer error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error during transfer" 
+    });
+  }
+});
+
 export default router;
