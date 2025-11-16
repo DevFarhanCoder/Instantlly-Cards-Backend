@@ -8,15 +8,38 @@ const router = Router();
 // GET /api/credits/balance - Get current credits balance
 router.get("/balance", requireAuth, async (req: AuthReq, res) => {
   try {
-    const user = await User.findById(req.userId).select('credits');
+    const user = await User.findById(req.userId).select('credits creditsExpiryDate');
     
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const currentCredits = (user as any).credits || 0;
+    const expiryDate = (user as any).creditsExpiryDate;
+    
+    // Check if credits have expired
+    let activeCredits = currentCredits;
+    let isExpired = false;
+    
+    if (expiryDate && new Date() > new Date(expiryDate)) {
+      // Credits expired, set to 0
+      isExpired = true;
+      activeCredits = 0;
+      
+      // Update user credits to 0 if not already
+      if (currentCredits > 0) {
+        (user as any).credits = 0;
+        await user.save();
+        console.log(`⏰ Credits expired for user ${req.userId}, reset to 0`);
+      }
+    }
+
     res.json({
       success: true,
-      credits: (user as any).credits || 0
+      credits: activeCredits,
+      creditsExpiryDate: expiryDate,
+      isExpired: isExpired,
+      daysRemaining: expiryDate ? Math.max(0, Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : null
     });
   } catch (error) {
     console.error("GET BALANCE ERROR", error);
@@ -149,6 +172,19 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       return res.status(404).json({ 
         success: false,
         message: "Sender not found" 
+      });
+    }
+
+    // Check if sender's credits have expired
+    const senderExpiryDate = (sender as any).creditsExpiryDate;
+    if (senderExpiryDate && new Date() > new Date(senderExpiryDate)) {
+      // Credits expired, set to 0
+      (sender as any).credits = 0;
+      await sender.save();
+      
+      return res.status(400).json({ 
+        success: false,
+        message: "Your credits have expired (valid for 1 month from signup). Please contact support to renew." 
       });
     }
 

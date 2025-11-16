@@ -139,12 +139,17 @@ router.post("/signup", async (req, res) => {
       codeExists = await User.findOne({ referralCode: newReferralCode });
     }
 
-    // Create user data object with 500,000 credits
+    // Set credits expiry date to 1 month from signup
+    const creditsExpiryDate = new Date();
+    creditsExpiryDate.setMonth(creditsExpiryDate.getMonth() + 1);
+
+    // Create user data object with 500,000 credits valid for 1 month
     const userData: any = {
       name: cleanName,
       phone: cleanPhone,
       password: hashedPassword,
       credits: 500000, // 5 lac credits
+      creditsExpiryDate: creditsExpiryDate, // Expire after 1 month
       referralCode: newReferralCode
     };
 
@@ -417,11 +422,13 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       profilePicture: user.profilePicture || "",
       about: (user as any).about || "Available",
       credits: (user as any).credits || 0,
+      creditsExpiryDate: (user as any).creditsExpiryDate,
       referralCode: (user as any).referralCode
     };
     
     console.log("Sending profile data:", profileData);
     console.log("Credits value:", (user as any).credits);
+    console.log("Credits expiry:", (user as any).creditsExpiryDate);
     
     // Return with 'user' wrapper for frontend compatibility
     res.json({ user: profileData });
