@@ -676,7 +676,7 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
 });
 
 // GET /api/admin/users-stats - Get user statistics with total credits
-router.get("/users-stats", adminAuth, async (req: Request, res: Response) => {
+router.get("/users-stats", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
     const totalUsers = await User.countDocuments();
     
@@ -707,7 +707,7 @@ router.get("/users-stats", adminAuth, async (req: Request, res: Response) => {
 });
 
 // GET /api/admin/all-transactions - Get all credit transactions
-router.get("/all-transactions", adminAuth, async (req: Request, res: Response) => {
+router.get("/all-transactions", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
     const { limit = 500, skip = 0, type, userId } = req.query;
     
@@ -746,7 +746,7 @@ router.get("/all-transactions", adminAuth, async (req: Request, res: Response) =
 });
 
 // GET /api/admin/user/:userId - Get specific user details including balance
-router.get("/user/:userId", adminAuth, async (req: Request, res: Response) => {
+router.get("/user/:userId", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
     const { userId } = req.params;
     
@@ -781,7 +781,7 @@ router.get("/user/:userId", adminAuth, async (req: Request, res: Response) => {
 });
 
 // POST /api/admin/transfer-credits - Admin transfer credits to any user
-router.post("/transfer-credits", adminAuth, async (req: Request, res: Response) => {
+router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
     const { toUserId, amount, description } = req.body;
     
