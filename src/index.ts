@@ -28,11 +28,12 @@ import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
+import { imageCache } from "./services/imageCache";
 
 const app = express();
 const server = createServer(app);
 
-// Socket.IO setup with CORS - Optimized for speed
+// Socket.IO setup with CORS - Optimized for speed and memory
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -44,7 +45,7 @@ const io = new Server(server, {
   transports: ["websocket", "polling"], // WebSocket first for speed
   allowEIO3: true,
   upgradeTimeout: 10000, // Reduced from 30s to 10s
-  maxHttpBufferSize: 5e6, // Increased to 5MB for card images
+  maxHttpBufferSize: 2e6, // Reduced to 2MB (was 5MB) to save memory on Render 512MB limit
   connectTimeout: 10000, // Add connection timeout
   perMessageDeflate: false // Disable compression for speed
 });
@@ -149,6 +150,9 @@ app.get("/api/health", async (_req: Request, res: Response) => {
       }
     }
     
+    const memUsage = process.memoryUsage();
+    const cacheStats = imageCache.getStats();
+    
     res.status(200).json({ 
       ok: true, 
       database: "mongodb", 
@@ -157,7 +161,13 @@ app.get("/api/health", async (_req: Request, res: Response) => {
       ts: Date.now(), 
       version: "1.5", // Simple signup - only name, phone, password
       hasJwtSecret: !!process.env.JWT_SECRET,
-      hasMongoUri: !!process.env.MONGODB_URI
+      hasMongoUri: !!process.env.MONGODB_URI,
+      memory: {
+        heapUsedMB: (memUsage.heapUsed / 1024 / 1024).toFixed(2),
+        heapTotalMB: (memUsage.heapTotal / 1024 / 1024).toFixed(2),
+        rssMB: (memUsage.rss / 1024 / 1024).toFixed(2)
+      },
+      cache: cacheStats
     });
   } catch (error) {
     console.error("Health check failed:", error);

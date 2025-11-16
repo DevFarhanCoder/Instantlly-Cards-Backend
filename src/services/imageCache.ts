@@ -166,12 +166,44 @@ class ImageCache {
   }
 
   /**
+   * Clear oldest N entries (for memory pressure relief)
+   */
+  private clearOldest(count: number): void {
+    // Sort by timestamp (oldest first)
+    const sorted = Array.from(this.cache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+    
+    let removedCount = 0;
+    let freedBytes = 0;
+    
+    for (let i = 0; i < Math.min(count, sorted.length); i++) {
+      const [key, value] = sorted[i];
+      freedBytes += value.size;
+      this.delete(key);
+      removedCount++;
+    }
+    
+    const freedMB = (freedBytes / 1024 / 1024).toFixed(2);
+    console.log(`🗑️  [MEMORY RELIEF] Cleared ${removedCount} oldest images (freed ${freedMB} MB)`);
+  }
+
+  /**
    * Start periodic cleanup
    */
   private startCleanup(): void {
     // Run cleanup every 30 minutes
     this.cleanupInterval = setInterval(() => {
       this.cleanup();
+      
+      // Check memory usage and clear cache if approaching limit
+      const memUsage = process.memoryUsage();
+      const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
+      const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
+      
+      // If using >400MB (80% of 512MB limit), aggressively clear cache
+      if (heapUsedMB > 400) {
+        console.log(`⚠️  [MEMORY PRESSURE] Heap at ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB - Clearing 50% of cache`);
+        this.clearOldest(Math.floor(this.cache.size / 2));
+      }
     }, 30 * 60 * 1000);
   }
 
@@ -208,8 +240,8 @@ class ImageCache {
   }
 }
 
-// Export singleton instance with 100MB limit and 24 hour TTL
-export const imageCache = new ImageCache(100, 24);
+// Export singleton instance with 50MB limit and 24 hour TTL (reduced for Render 512MB memory limit)
+export const imageCache = new ImageCache(50, 24);
 
 // Graceful shutdown handler
 process.on('SIGTERM', () => {
