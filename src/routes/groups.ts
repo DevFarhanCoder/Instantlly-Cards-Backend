@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Types } from 'mongoose';
 import Group from '../models/Group';
 import User from '../models/User';
+import GroupCall from '../models/GroupCall';
 import { requireAuth, AuthReq } from '../middleware/auth';
 import { sendMessageNotification, sendGroupInviteNotification } from '../services/pushNotifications';
 
@@ -326,6 +327,207 @@ router.delete('/', requireAuth, async (req: AuthReq, res: Response) => {
   } catch (error) {
     console.error('Clear groups error:', error);
     res.status(500).json({ error: 'Failed to clear groups' });
+  }
+});
+
+// Group Calling Endpoints
+
+// POST /api/groups/:id/call/initiate - Initiate a group call
+router.post('/:id/call/initiate', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { callType } = req.body; // 'audio' or 'video'
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const isMember = group.members.some(memberId => memberId.toString() === userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
+
+    // Get user details
+    const caller = await User.findById(userId).select('name profilePicture');
+    if (!caller) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate call session data
+    const callSession = {
+      callId: new Types.ObjectId().toString(),
+      groupId: groupId,
+      initiatorId: userId,
+      initiatorName: caller.name,
+      callType: callType || 'audio',
+      startTime: new Date(),
+      participants: [],
+      status: 'ringing'
+    };
+
+    // For now, we'll emit the call initiation via Socket.IO
+    // In a production system, you'd want to store active calls in Redis or MongoDB
+    
+    console.log(`📞 Group call initiated: ${caller.name} → ${group.name} (${callType})`);
+
+    res.json({
+      success: true,
+      message: 'Group call initiated successfully',
+      callSession: callSession
+    });
+  } catch (error) {
+    console.error('Initiate group call error:', error);
+    res.status(500).json({ error: 'Failed to initiate group call' });
+  }
+});
+
+// POST /api/groups/:id/call/join - Join an ongoing group call
+router.post('/:id/call/join', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { callId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const isMember = group.members.some(memberId => memberId.toString() === userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
+
+    // Get user details
+    const user = await User.findById(userId).select('name profilePicture');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`📞 User ${user.name} joining group call in ${group.name}`);
+
+    res.json({
+      success: true,
+      message: 'Successfully joined group call',
+      participant: {
+        userId: userId,
+        name: user.name,
+        profilePicture: user.profilePicture,
+        joinedAt: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Join group call error:', error);
+    res.status(500).json({ error: 'Failed to join group call' });
+  }
+});
+
+// POST /api/groups/:id/call/leave - Leave an ongoing group call
+router.post('/:id/call/leave', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { callId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Get user details for logging
+    const user = await User.findById(userId).select('name');
+    console.log(`📞 User ${user?.name} leaving group call`);
+
+    res.json({
+      success: true,
+      message: 'Successfully left group call',
+      leftAt: new Date()
+    });
+  } catch (error) {
+    console.error('Leave group call error:', error);
+    res.status(500).json({ error: 'Failed to leave group call' });
+  }
+});
+
+// POST /api/groups/:id/call/end - End a group call (only initiator or admin)
+router.post('/:id/call/end', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { callId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Verify group exists and user has permission to end call
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const isAdmin = group.admin.toString() === userId;
+    // In a real system, you'd also check if user is the call initiator
+    
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Only group admin can end calls' });
+    }
+
+    console.log(`📞 Group call ended in ${group.name}`);
+
+    res.json({
+      success: true,
+      message: 'Group call ended successfully',
+      endedAt: new Date()
+    });
+  } catch (error) {
+    console.error('End group call error:', error);
+    res.status(500).json({ error: 'Failed to end group call' });
+  }
+});
+
+// GET /api/groups/:id/call/status - Get current call status for a group
+router.get('/:id/call/status', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const isMember = group.members.some(memberId => memberId.toString() === userId);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
+
+    // In a real system, you'd check Redis or active call storage
+    // For now, return no active call
+    res.json({
+      success: true,
+      hasActiveCall: false,
+      callSession: null
+    });
+  } catch (error) {
+    console.error('Get call status error:', error);
+    res.status(500).json({ error: 'Failed to get call status' });
   }
 });
 

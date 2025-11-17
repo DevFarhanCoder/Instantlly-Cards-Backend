@@ -93,6 +93,24 @@ sharedCardSchema.index({ recipientId: 1, status: 1, _id: -1 }); // For unviewed 
 sharedCardSchema.index({ cardId: 1 }); // For card lookup
 sharedCardSchema.index({ status: 1 }); // For status filtering
 
+// Search indexes for fuzzy search functionality
+sharedCardSchema.index({ 
+  cardTitle: 'text', 
+  senderName: 'text', 
+  message: 'text' 
+}, {
+  name: 'search_index',
+  weights: {
+    cardTitle: 10,    // Higher weight for card titles
+    senderName: 5,    // Medium weight for sender names
+    message: 1        // Lower weight for messages
+  }
+});
+
+// Additional search indexes for case-insensitive queries
+sharedCardSchema.index({ recipientId: 1, cardTitle: 1 }); // For recipient + card title search
+sharedCardSchema.index({ recipientId: 1, senderName: 1 }); // For recipient + sender name search
+
 const SharedCard = mongoose.model('SharedCard', sharedCardSchema);
 
 export default SharedCard;

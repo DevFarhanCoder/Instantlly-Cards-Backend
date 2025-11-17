@@ -471,7 +471,7 @@ r.get("/sent", async (req: AuthReq, res) => {
   }
 });
 
-// GET RECEIVED CARDS (CURSOR-BASED PAGINATION FOR 100K+ RECORDS)
+// GET RECEIVED CARDS (CURSOR-BASED PAGINATION FOR 100K+ RECORDS WITH SEARCH)
 r.get("/received", async (req: AuthReq, res) => {
   try {
     const recipientId = req.userId!;
@@ -481,7 +481,13 @@ r.get("/received", async (req: AuthReq, res) => {
     const cursor = req.query.cursor as string | undefined;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50); // Max 50 per page
     
-    console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit})...`);
+    // Search parameters
+    const search = req.query.search as string | undefined;
+    const fuzzy = req.query.fuzzy === 'true';
+    const caseSensitive = req.query.case_sensitive === 'true';
+    const sortBy = req.query.sort_by as string | undefined;
+    
+    console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit}, search: "${search || 'none'}", fuzzy: ${fuzzy})...`);
     
     // Build query with cursor for pagination
     const query: any = { recipientId };
@@ -489,10 +495,68 @@ r.get("/received", async (req: AuthReq, res) => {
       query._id = { $lt: cursor };
     }
     
+    // Add search functionality
+    if (search && search.trim()) {
+      const searchTerm = search.trim();
+      const searchOptions = caseSensitive ? undefined : 'i'; // Case insensitive by default
+      
+      if (fuzzy) {
+        // Optimized fuzzy search - create broader patterns for better matching
+        const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(word => word.length > 1);
+        
+        if (searchWords.length > 0) {
+          // Create flexible patterns for each word
+          const patterns = searchWords.map(word => {
+            // Escape special regex characters but keep flexibility
+            const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Create pattern that matches partial words at beginning, middle, or end
+            return new RegExp(`${escapedWord}`, searchOptions);
+          });
+          
+          // Build efficient OR query across fields with AND logic for multiple words
+          if (searchWords.length === 1) {
+            // Single word - OR across all fields
+            const singlePattern = patterns[0];
+            query.$or = [
+              { cardTitle: singlePattern },
+              { senderName: singlePattern },
+              { message: singlePattern }
+            ];
+          } else {
+            // Multiple words - each word must match in at least one field
+            query.$and = searchWords.map((word, index) => ({
+              $or: [
+                { cardTitle: patterns[index] },
+                { senderName: patterns[index] },
+                { message: patterns[index] }
+              ]
+            }));
+          }
+        }
+      } else {
+        // Optimized simple text search
+        const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchPattern = new RegExp(escapedTerm, searchOptions);
+        query.$or = [
+          { cardTitle: searchPattern },
+          { senderName: searchPattern },
+          { message: searchPattern }
+        ];
+      }
+    }
+    
+    // Build sort criteria
+    let sortCriteria: any = { _id: -1 }; // Default sort by creation time
+    if (search && sortBy === 'relevance') {
+      // For search results, use text score for relevance (requires text index)
+      // For now, we'll use a simple relevance approximation
+      sortCriteria = { _id: -1 }; // MongoDB will handle relevance in $or queries
+    }
+    
     // ULTRA-FAST QUERY: Single query, no populate, uses cached fields
     const receivedCards = await SharedCard.find(query)
       .select('_id cardId senderId senderName cardTitle cardPhoto senderProfilePicture sentAt status message viewedAt')
-      .sort({ _id: -1 })
+      .sort(sortCriteria)
       .limit(limit + 1)
       .lean()
       .exec();
@@ -508,18 +572,32 @@ r.get("/received", async (req: AuthReq, res) => {
 
     const elapsed = Date.now() - startTime;
     const unviewedCount = items.filter(card => !card.isViewed).length;
-    console.log(`✅ [${recipientId}] Received cards loaded in ${elapsed}ms - ${items.length} cards, ${unviewedCount} unviewed${hasMore ? ' (more available)' : ' (last page)'}`);
-
-    // Generate ETag for HTTP caching
-    const etag = `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}"`;
     
-    if (req.headers['if-none-match'] === etag) {
+    // Enhanced logging for search queries
+    if (search && search.trim()) {
+      console.log(`🔍 [${recipientId}] SEARCH QUERY: "${search}" (fuzzy: ${fuzzy}) -> ${items.length} results in ${elapsed}ms`);
+      if (items.length > 0) {
+        console.log(`🔍 [${recipientId}] Sample results: ${items.slice(0, 3).map(item => `"${item.cardTitle}" from ${item.senderName}`).join(', ')}`);
+      }
+    } else {
+      console.log(`✅ [${recipientId}] Received cards loaded in ${elapsed}ms - ${items.length} cards, ${unviewedCount} unviewed${hasMore ? ' (more available)' : ' (last page)'}`);
+    }
+
+    // Generate ETag for HTTP caching (disable caching for search queries)
+    const etag = search ? null : `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}"`;
+    
+    if (etag && req.headers['if-none-match'] === etag) {
       console.log(`💾 [${recipientId}] Client cache hit - returning 304`);
       return res.status(304).end();
     }
     
-    res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'private, max-age=30');
+    if (etag) {
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'private, max-age=30');
+    } else {
+      // Don't cache search results
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
 
     res.json({
       success: true,

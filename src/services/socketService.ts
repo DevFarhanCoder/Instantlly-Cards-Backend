@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Message from '../models/Message';
 import Chat from '../models/Chat';
 import Group from '../models/Group';
+import GroupCall from '../models/GroupCall';
 import User from '../models/User';
 
 interface SocketUser {
@@ -152,6 +153,27 @@ export class SocketService {
       // Handle user status updates
       socket.on('update_status', (data: { status: 'online' | 'away' | 'busy' }) => {
         this.handleStatusUpdate(socket, data);
+      });
+
+      // Handle group calling events
+      socket.on('initiate_group_call', (data: { groupId: string; callType: 'audio' | 'video' }) => {
+        this.handleInitiateGroupCall(socket, data);
+      });
+
+      socket.on('join_group_call', (data: { groupId: string; callId: string }) => {
+        this.handleJoinGroupCall(socket, data);
+      });
+
+      socket.on('leave_group_call', (data: { groupId: string; callId: string }) => {
+        this.handleLeaveGroupCall(socket, data);
+      });
+
+      socket.on('end_group_call', (data: { groupId: string; callId: string }) => {
+        this.handleEndGroupCall(socket, data);
+      });
+
+      socket.on('group_call_signal', (data: { groupId: string; callId: string; signal: any; targetUserId?: string }) => {
+        this.handleGroupCallSignal(socket, data);
       });
 
       // Handle disconnection
@@ -542,5 +564,188 @@ export class SocketService {
   // Public method to check if user is online
   public isUserOnline(userId: string): boolean {
     return this.onlineUsers.has(userId);
+  }
+
+  // Group Calling Methods
+  private async handleInitiateGroupCall(socket: any, data: { groupId: string; callType: 'audio' | 'video' }) {
+    try {
+      console.log(`📞 ${socket.user.name} initiating ${data.callType} call in group ${data.groupId}`);
+      
+      // Verify user is member of group
+      const group = await Group.findById(data.groupId);
+      if (!group || !group.members.includes(new mongoose.Types.ObjectId(socket.userId))) {
+        socket.emit('error', { message: 'You are not a member of this group' });
+        return;
+      }
+
+      // Generate call session
+      const callId = new mongoose.Types.ObjectId().toString();
+      const callSession = {
+        callId: callId,
+        groupId: data.groupId,
+        initiatorId: socket.userId,
+        initiatorName: socket.user.name,
+        initiatorAvatar: socket.user.profilePicture,
+        callType: data.callType,
+        startTime: new Date(),
+        participants: [
+          {
+            userId: socket.userId,
+            name: socket.user.name,
+            profilePicture: socket.user.profilePicture,
+            joinedAt: new Date(),
+            isInitiator: true
+          }
+        ],
+        status: 'ringing'
+      };
+
+      // Join call room
+      socket.join(`call_${callId}`);
+
+      // Notify all group members about incoming call
+      for (const memberId of group.members) {
+        const memberIdStr = memberId.toString();
+        if (memberIdStr !== socket.userId) {
+          const memberSocket = this.onlineUsers.get(memberIdStr);
+          if (memberSocket) {
+            this.io.to(memberSocket.socketId).emit('incoming_group_call', {
+              callId: callId,
+              groupId: data.groupId,
+              groupName: group.name,
+              initiatorId: socket.userId,
+              initiatorName: socket.user.name,
+              initiatorAvatar: socket.user.profilePicture,
+              callType: data.callType,
+              startTime: callSession.startTime
+            });
+          }
+        }
+      }
+
+      // Send confirmation to initiator
+      socket.emit('group_call_initiated', callSession);
+
+    } catch (error) {
+      console.error('Error initiating group call:', error);
+      socket.emit('error', { message: 'Failed to initiate group call' });
+    }
+  }
+
+  private async handleJoinGroupCall(socket: any, data: { groupId: string; callId: string }) {
+    try {
+      console.log(`📞 ${socket.user.name} joining group call ${data.callId}`);
+      
+      // Join call room
+      socket.join(`call_${data.callId}`);
+
+      const participant = {
+        userId: socket.userId,
+        name: socket.user.name,
+        profilePicture: socket.user.profilePicture,
+        joinedAt: new Date(),
+        isInitiator: false
+      };
+
+      // Notify all participants about new joiner
+      socket.to(`call_${data.callId}`).emit('participant_joined', {
+        callId: data.callId,
+        participant: participant
+      });
+
+      // Send confirmation to joiner
+      socket.emit('joined_group_call', {
+        callId: data.callId,
+        groupId: data.groupId,
+        participant: participant
+      });
+
+    } catch (error) {
+      console.error('Error joining group call:', error);
+      socket.emit('error', { message: 'Failed to join group call' });
+    }
+  }
+
+  private async handleLeaveGroupCall(socket: any, data: { groupId: string; callId: string }) {
+    try {
+      console.log(`📞 ${socket.user.name} leaving group call ${data.callId}`);
+      
+      // Leave call room
+      socket.leave(`call_${data.callId}`);
+
+      // Notify remaining participants
+      socket.to(`call_${data.callId}`).emit('participant_left', {
+        callId: data.callId,
+        userId: socket.userId,
+        userName: socket.user.name,
+        leftAt: new Date()
+      });
+
+      // Send confirmation to leaver
+      socket.emit('left_group_call', {
+        callId: data.callId,
+        leftAt: new Date()
+      });
+
+    } catch (error) {
+      console.error('Error leaving group call:', error);
+      socket.emit('error', { message: 'Failed to leave group call' });
+    }
+  }
+
+  private async handleEndGroupCall(socket: any, data: { groupId: string; callId: string }) {
+    try {
+      console.log(`📞 ${socket.user.name} ending group call ${data.callId}`);
+      
+      // Verify user has permission to end call (admin or initiator check would go here)
+      
+      // Notify all participants that call is ending
+      this.io.to(`call_${data.callId}`).emit('group_call_ended', {
+        callId: data.callId,
+        endedBy: socket.userId,
+        endedByName: socket.user.name,
+        endedAt: new Date()
+      });
+
+      // Remove all participants from call room
+      const room = this.io.sockets.adapter.rooms.get(`call_${data.callId}`);
+      if (room) {
+        for (const socketId of room) {
+          this.io.sockets.sockets.get(socketId)?.leave(`call_${data.callId}`);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error ending group call:', error);
+      socket.emit('error', { message: 'Failed to end group call' });
+    }
+  }
+
+  private handleGroupCallSignal(socket: any, data: { groupId: string; callId: string; signal: any; targetUserId?: string }) {
+    try {
+      // Handle WebRTC signaling between participants
+      if (data.targetUserId) {
+        // Direct signaling to specific participant
+        const targetSocket = this.onlineUsers.get(data.targetUserId);
+        if (targetSocket) {
+          this.io.to(targetSocket.socketId).emit('group_call_signal', {
+            callId: data.callId,
+            fromUserId: socket.userId,
+            fromUserName: socket.user.name,
+            signal: data.signal
+          });
+        }
+      } else {
+        // Broadcast to all call participants
+        socket.to(`call_${data.callId}`).emit('group_call_signal', {
+          callId: data.callId,
+          fromUserId: socket.userId,
+          fromUserName: socket.user.name,
+          signal: data.signal
+        });
+      }
+    } catch (error) {
+      console.error('Error handling group call signal:', error);
+    }
   }
 }
