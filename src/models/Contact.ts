@@ -48,5 +48,6 @@ const ContactSchema = new Schema<IContact>({
 // Compound index for efficient queries
 ContactSchema.index({ userId: 1, phoneNumber: 1 }, { unique: true });
 ContactSchema.index({ userId: 1, isAppUser: 1 });
+ContactSchema.index({ userId: 1, name: 1 });
 
 export default mongoose.model<IContact>("Contact", ContactSchema);
