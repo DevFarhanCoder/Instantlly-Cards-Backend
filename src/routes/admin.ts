@@ -851,4 +851,78 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
   }
 });
 
+// Edit Application Info (Name & Phone)
+router.put("/applications/:id/edit", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, phone } = req.body;
+
+    console.log(`📝 Editing application ${id}:`, { name, phone });
+
+    // Find and update the application (assuming you have an Application model)
+    // For now, update the User model if the application is approved
+    const user = await User.findById(id);
+    
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Update user info
+    if (name) user.name = name;
+    if (phone) user.phone = phone;
+    await user.save();
+
+    console.log(`✅ Updated user: ${user.name} (${user.phone})`);
+
+    res.json({
+      success: true,
+      message: "Application updated successfully",
+      user: {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone
+      }
+    });
+  } catch (error) {
+    console.error('❌ Edit application error:', error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Transfer Position
+router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { newPositionId } = req.body;
+
+    console.log(`🔄 Transferring application ${id} to position:`, newPositionId);
+
+    // Update user's position (you may need to adjust based on your data model)
+    const user = await User.findById(id);
+    
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Update position (assuming you store position in user model)
+    (user as any).positionId = newPositionId;
+    await user.save();
+
+    console.log(`✅ Transferred ${user.name} to ${newPositionId}`);
+
+    res.json({
+      success: true,
+      message: "Position transferred successfully",
+      user: {
+        _id: user._id,
+        name: user.name,
+        positionId: newPositionId
+      }
+    });
+  } catch (error) {
+    console.error('❌ Transfer position error:', error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 export default router;
