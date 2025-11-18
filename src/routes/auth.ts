@@ -350,31 +350,45 @@ router.post("/login", async (req, res) => {
       });
     }
     
-    const { phone, password } = req.body ?? {};
+    // Support multiple field name variations for backward compatibility
+    // CRITICAL FIX: App v1.0.31 sends 'email' field instead of 'phone'!
+    const phone = req.body?.phone || req.body?.phoneNumber || req.body?.mobile || req.body?.number || req.body?.email;
+    const password = req.body?.password || req.body?.pwd || req.body?.pass;
+    
     if (!phone || !password) {
       console.log("Missing fields in login request - phone:", phone, "password:", !!password);
       console.log("Body keys:", Object.keys(req.body));
+      console.log("All body values:", JSON.stringify(req.body));
       return res.status(400).json({ 
-        message: "Missing fields: phone, password",
+        message: "Please enter both phone number and password",
         debug: {
           receivedFields: Object.keys(req.body),
           phoneExists: 'phone' in req.body,
-          passwordExists: 'password' in req.body
+          passwordExists: 'password' in req.body,
+          phoneValue: req.body?.phone,
+          allFields: req.body
         }
       });
     }
 
-    // Validate phone number format
-    if (!/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
+    // Validate phone number format (allow email format too since app sends email field)
+    const isEmail = phone.includes('@');
+    if (!isEmail && !/^\+?[\d\s\-\(\)]{10,15}$/.test(phone)) {
       console.log("Invalid phone format:", phone);
       return res.status(400).json({ message: "Invalid phone number format" });
     }
 
-    // Normalize phone number
-    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
-    console.log("Looking for user with normalized phone:", normalizedPhone);
+    // Normalize phone number (skip normalization for email)
+    const normalizedPhone = isEmail ? phone : phone.replace(/[\s\-\(\)]/g, '');
+    console.log("Looking for user with normalized phone/email:", normalizedPhone);
 
-    const user = await User.findOne({ phone: normalizedPhone }).select('+password');
+    // Search by phone OR email (since app v1.0.31 sends email field)
+    const user = await User.findOne({ 
+      $or: [
+        { phone: normalizedPhone },
+        { email: normalizedPhone }
+      ]
+    }).select('+password');
     if (!user) {
       console.log("User not found for phone:", normalizedPhone);
       return res.status(401).json({ message: "Invalid credentials" });
