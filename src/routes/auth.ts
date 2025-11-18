@@ -329,12 +329,39 @@ router.post("/signup", async (req, res) => {
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
+    console.log("Login attempt - Headers:", { 
+      contentType: req.get('content-type'),
+      contentLength: req.get('content-length'),
+      userAgent: req.get('user-agent')
+    });
+    console.log("Login attempt - Raw body:", req.body);
     console.log("Login attempt - Request body:", { phone: req.body?.phone, hasPassword: !!req.body?.password });
+    
+    // Check if body exists at all
+    if (!req.body || Object.keys(req.body).length === 0) {
+      console.log("❌ Empty request body received!");
+      return res.status(400).json({ 
+        message: "No data received. Please check your internet connection and try again.",
+        debug: {
+          bodyExists: !!req.body,
+          bodyKeys: req.body ? Object.keys(req.body) : [],
+          contentType: req.get('content-type')
+        }
+      });
+    }
     
     const { phone, password } = req.body ?? {};
     if (!phone || !password) {
-      console.log("Missing fields in login request");
-      return res.status(400).json({ message: "Missing fields: phone, password" });
+      console.log("Missing fields in login request - phone:", phone, "password:", !!password);
+      console.log("Body keys:", Object.keys(req.body));
+      return res.status(400).json({ 
+        message: "Missing fields: phone, password",
+        debug: {
+          receivedFields: Object.keys(req.body),
+          phoneExists: 'phone' in req.body,
+          passwordExists: 'password' in req.body
+        }
+      });
     }
 
     // Validate phone number format

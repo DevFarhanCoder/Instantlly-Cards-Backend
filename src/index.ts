@@ -79,7 +79,24 @@ app.use(cors({
 }));
 
 app.use(compression()); // Enable gzip compression for faster responses
-app.use(express.json({ limit: "10mb" })); // instead of default
+
+// Parse JSON bodies - with type checking for various content-types
+app.use(express.json({ 
+  limit: "10mb",
+  type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
+})); 
+
+// Parse URL-encoded bodies (for form submissions)
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Request logging middleware for debugging
+app.use((req, res, next) => {
+  if (req.path.includes('/login') || req.path.includes('/signup')) {
+    console.log(`📥 ${req.method} ${req.path} - Content-Type: ${req.get('content-type')}`);
+    console.log(`📦 Body keys: ${req.body ? Object.keys(req.body).join(', ') : 'no body'}`);
+  }
+  next()
+});
 
 // Additional CORS headers middleware (belt and suspenders approach)
 app.use((req, res, next) => {

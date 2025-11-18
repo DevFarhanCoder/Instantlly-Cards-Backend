@@ -101,7 +101,7 @@ router.post('/send-otp', async (req, res) => {
       message: 'OTP ready for Firebase verification',
       ttl: ttlSeconds,
       // In development, you can return the OTP for testing
-      // Remove this in production when using real Firebase Phone Auth
+      // Remove this in production when using                                                                                                                      real Firebase Phone Auth
       ...(process.env.NODE_ENV === 'development' && { devOTP: code })
     });
   } catch (error: any) {
