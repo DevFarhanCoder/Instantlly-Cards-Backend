@@ -15,7 +15,8 @@ const UserSchema = new Schema(
         message: 'Phone number must be between 10-15 digits'
       }
     },
-    password: { type: String, required: true, select: false },
+    password: { type: String, required: false, select: false }, // Optional for Firebase users
+    firebaseUid: { type: String, sparse: true, unique: true, index: true }, // Firebase user ID
     // Email is completely optional - no constraints at all
     email: { type: String },
     profilePicture: { type: String, default: "" },

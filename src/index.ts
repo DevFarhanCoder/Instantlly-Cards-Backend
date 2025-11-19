@@ -13,6 +13,7 @@ import { Server } from "socket.io";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import otpRouter from "./routes/otp";
+import firebaseAuthRouter from "./routes/firebaseAuth";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
@@ -222,12 +223,14 @@ async function startServer() {
     console.log("✅ GridFS initialized for ad images");
 
     // Add routes after DB connection
-    // Last updated: 2025-10-17 - Added OTP endpoints for phone verification
+    // Last updated: 2025-11-19 - Added Firebase authentication
     app.use("/api/auth", authRouter);
     app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp)
+    app.use("/api/auth", firebaseAuthRouter); // Firebase authentication (firebase-auth)
     app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint
     console.log("✅ Mounted /api/users route for search-by-phone endpoint");
     console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp)");
+    console.log("✅ Mounted /api/auth Firebase routes (firebase-auth)");
     app.use("/api/cards", cardsRouter);          
     app.use("/api/contacts", contactsRouter);    
     app.use("/api/notifications", notificationsRouter);    
