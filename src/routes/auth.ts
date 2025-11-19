@@ -366,8 +366,11 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid phone number format" });
     }
 
-    // Normalize phone number
-    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    // Normalize phone number - ensure + prefix for international format
+    let normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    if (!normalizedPhone.startsWith('+')) {
+      normalizedPhone = '+' + normalizedPhone;
+    }
     console.log("Looking for user with normalized phone:", normalizedPhone);
 
     const user = await User.findOne({ phone: normalizedPhone }).select('+password');

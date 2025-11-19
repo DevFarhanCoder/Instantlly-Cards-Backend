@@ -29,43 +29,18 @@ router.get('/debug-config', (req, res) => {
   });
 });
 
-// POST /api/auth/check-phone - Check if phone number exists
-router.post('/check-phone', async (req, res) => {
-  try {
-    const { phone } = req.body;
+// NOTE: /check-phone endpoint is now in auth.ts to avoid duplication
 
-    if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number is required'
-      });
-    }
-
-    console.log('🔍 Checking if phone exists:', phone);
-
-    // Check if user exists with this phone number
-    const existingUser = await User.findOne({ phone });
-
-    if (existingUser) {
-      return res.json({
-        success: true,
-        exists: true,
-        message: 'Phone number is already registered. Please login.'
-      });
-    }
-
-    return res.json({
-      success: true,
-      exists: false,
-      message: 'Phone number is available for registration'
-    });
-  } catch (error: any) {
-    console.error('💥 Check phone error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to check phone number'
-    });
-  }
+// Diagnostic endpoint to test if backend is reachable
+router.post('/ping', (req, res) => {
+  const { phone, timestamp } = req.body;
+  console.log('🏓 [PING] Received from mobile app:', { phone, timestamp });
+  res.json({
+    success: true,
+    message: 'Backend is reachable',
+    receivedPhone: phone,
+    serverTime: new Date().toISOString()
+  });
 });
 
 // POST /api/auth/send-otp
@@ -75,7 +50,10 @@ router.post('/send-otp', async (req, res) => {
   try {
     const { phone } = req.body;
 
+    console.log('📥 [SEND-OTP] Request received for phone:', phone);
+
     if (!phone) {
+      console.log('❌ [SEND-OTP] No phone number provided');
       return res.status(400).json({
         success: false,
         message: 'Phone number is required'
