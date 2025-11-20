@@ -55,6 +55,7 @@ const io = new Server(server, {
 const allowedOrigins = [
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
+  'https://instantllychannelpatneradmin.vercel.app',
   'http://localhost:3000',
   'http://localhost:3001',
   '*' // Fallback for other origins during development
