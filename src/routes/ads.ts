@@ -612,6 +612,61 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/ads/my-ads - Get user's own ads by phone number (public, no auth required)
+router.get("/my-ads", async (req: Request, res: Response) => {
+  try {
+    const phoneNumber = req.query.phoneNumber as string;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required"
+      });
+    }
+
+    console.log(`📱 Fetching ads for phone number: ${phoneNumber}`);
+
+    // Find all ads for this user (including pending, approved, rejected)
+    const ads = await Ad.find({ phoneNumber })
+      .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    console.log(`✅ Found ${ads.length} ads for user ${phoneNumber}`);
+
+    // Transform ads to include proper image URLs
+    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    const adsWithImageUrls = ads.map((ad: any) => {
+      const adId = ad._id.toString();
+      return {
+        ...ad,
+        _id: adId,
+        bottomImage: ad.bottomImageGridFS 
+          ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
+          : "",
+        fullscreenImage: ad.fullscreenImageGridFS 
+          ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
+          : "",
+        bottomImageGridFS: ad.bottomImageGridFS?.toString(),
+        fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
+      };
+    });
+
+    res.json({
+      success: true,
+      data: adsWithImageUrls,
+      count: adsWithImageUrls.length
+    });
+  } catch (error) {
+    console.error("❌ GET MY ADS ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch your ads"
+    });
+  }
+});
+
 // ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
 
 router.use(requireAdminAuth);
