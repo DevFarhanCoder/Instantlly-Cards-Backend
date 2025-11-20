@@ -72,6 +72,39 @@ const AdSchema = new mongoose.Schema(
       default: 5,
       min: 1,
       max: 10
+    },
+
+    // Approval Workflow Fields
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'approved', // Default to approved for backward compatibility with existing ads
+      index: true
+    },
+
+    uploadedBy: {
+      type: String, // Channel partner phone number or "admin" for admin-uploaded ads
+      default: 'admin'
+    },
+
+    uploaderName: {
+      type: String, // Name of the uploader
+      default: 'Admin'
+    },
+
+    approvedBy: {
+      type: String, // Admin ID who approved/rejected
+      default: null
+    },
+
+    approvalDate: {
+      type: Date,
+      default: null
+    },
+
+    rejectionReason: {
+      type: String,
+      default: null
     }
   },
   {
@@ -103,5 +136,10 @@ AdSchema.index({ endDate: 1 });
 
 // Index for upcoming ads queries
 AdSchema.index({ startDate: 1 });
+
+// Approval workflow indexes
+AdSchema.index({ status: 1 });
+AdSchema.index({ uploadedBy: 1, status: 1 });
+AdSchema.index({ status: 1, createdAt: -1 }); // For admin pending ads view
 
 export default mongoose.model("Ad", AdSchema);

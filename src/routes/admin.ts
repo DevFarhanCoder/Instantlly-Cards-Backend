@@ -382,6 +382,242 @@ router.delete("/users/:userId", adminAuth, async (req: Request, res: Response) =
   }
 });
 
+// ==================== AD APPROVAL WORKFLOW ====================
+
+/**
+ * GET /api/admin/ads/pending
+ * Get all pending ads awaiting approval
+ */
+router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    console.log(`📋 Admin ${req.adminUsername} fetching pending ads`);
+
+    const pendingAds = await Ad.find({ status: 'pending' })
+      .sort({ createdAt: -1 }) // Most recent first
+      .select('-__v');
+
+    console.log(`✅ Found ${pendingAds.length} pending ads`);
+
+    const adsWithDetails = pendingAds.map((ad) => ({
+      id: ad._id,
+      title: ad.title,
+      phoneNumber: ad.phoneNumber,
+      startDate: ad.startDate,
+      endDate: ad.endDate,
+      status: ad.status,
+      uploadedBy: ad.uploadedBy,
+      uploaderName: ad.uploaderName,
+      priority: ad.priority,
+      bottomImageId: ad.bottomImageGridFS,
+      fullscreenImageId: ad.fullscreenImageGridFS,
+      impressions: ad.impressions,
+      clicks: ad.clicks,
+      createdAt: ad.createdAt,
+      updatedAt: ad.updatedAt,
+    }));
+
+    res.json({
+      success: true,
+      count: adsWithDetails.length,
+      ads: adsWithDetails,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching pending ads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pending ads',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/ads/:id/approve
+ * Approve a pending ad and deduct 1200 credits from creator
+ */
+router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { priority } = req.body; // Optional: admin can set priority during approval
+
+    console.log(`✅ Admin ${req.adminUsername} approving ad ${id}`);
+
+    const ad = await Ad.findById(id);
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found',
+      });
+    }
+
+    if (ad.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Advertisement is already ${ad.status}`,
+      });
+    }
+
+    // Find the user who created the ad (by phone number in uploadedBy field)
+    let creditsDeducted = false;
+    let paymentRequired = 0;
+    let userCredits = 0;
+
+    if (ad.uploadedBy && ad.uploadedBy !== 'admin') {
+      const creator = await User.findOne({ phone: ad.uploadedBy });
+      
+      if (creator) {
+        const currentCredits = (creator as any).credits || 0;
+        const deductionAmount = 1200;
+
+        // Check if user has enough credits
+        if (currentCredits >= deductionAmount) {
+          // Deduct credits
+          creator.set({ credits: currentCredits - deductionAmount });
+          await creator.save();
+
+          // Create transaction record
+          await Transaction.create({
+            type: 'ad_deduction',
+            fromUser: creator._id,
+            amount: deductionAmount,
+            description: `Credits deducted for ad: ${ad.title}`,
+            balanceBefore: currentCredits,
+            balanceAfter: currentCredits - deductionAmount,
+            relatedAd: ad._id,
+            status: 'completed'
+          });
+
+          creditsDeducted = true;
+          userCredits = currentCredits - deductionAmount;
+          
+          // Calculate 15% payment required (15% of 1200 = 180)
+          paymentRequired = Math.round(deductionAmount * 0.15);
+
+          console.log(`💰 Deducted ${deductionAmount} credits from ${creator.name}. New balance: ${userCredits}. Payment required: ₹${paymentRequired}`);
+        } else {
+          console.log(`⚠️ User ${creator.name} has insufficient credits (${currentCredits}). Ad approval blocked.`);
+          return res.status(400).json({
+            success: false,
+            message: `Insufficient credits. User has ${currentCredits} credits but needs ${deductionAmount} credits to approve this ad.`,
+            userCredits: currentCredits,
+            required: deductionAmount
+          });
+        }
+      } else {
+        console.log(`⚠️ Could not find user with phone ${ad.uploadedBy} for credits deduction`);
+      }
+    }
+
+    // Update ad status to approved
+    ad.status = 'approved';
+    ad.approvedBy = req.adminId || req.adminUsername || 'admin';
+    ad.approvalDate = new Date();
+    
+    if (priority !== undefined) {
+      ad.priority = Math.min(Math.max(parseInt(priority), 1), 10); // Clamp between 1-10
+    }
+
+    await ad.save();
+
+    console.log(`✅ Ad ${id} approved by ${req.adminUsername}`);
+
+    res.json({
+      success: true,
+      message: 'Advertisement approved successfully',
+      ad: {
+        id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate,
+        priority: ad.priority,
+      },
+      credits: {
+        deducted: creditsDeducted,
+        amount: creditsDeducted ? 1200 : 0,
+        remainingBalance: creditsDeducted ? userCredits : null,
+        paymentRequired: creditsDeducted ? paymentRequired : 0,
+        paymentDetails: creditsDeducted ? {
+          description: `15% payment for ad approval`,
+          amount: paymentRequired,
+          currency: 'INR'
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error approving ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve advertisement',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/ads/:id/reject
+ * Reject a pending ad with reason
+ */
+router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    console.log(`❌ Admin ${req.adminUsername} rejecting ad ${id}`);
+
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required',
+      });
+    }
+
+    const ad = await Ad.findById(id);
+
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found',
+      });
+    }
+
+    if (ad.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Advertisement is already ${ad.status}`,
+      });
+    }
+
+    // Update ad status to rejected
+    ad.status = 'rejected';
+    ad.approvedBy = req.adminId || req.adminUsername || 'admin';
+    ad.approvalDate = new Date();
+    ad.rejectionReason = reason.trim();
+
+    await ad.save();
+
+    console.log(`❌ Ad ${id} rejected by ${req.adminUsername}: ${reason}`);
+
+    res.json({
+      success: true,
+      message: 'Advertisement rejected',
+      ad: {
+        id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate,
+        rejectionReason: ad.rejectionReason,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error rejecting ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reject advertisement',
+    });
+  }
+});
+
 /**
  * GET /api/admin/ads/all
  * Get all ads with filtering options
