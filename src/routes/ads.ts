@@ -38,56 +38,6 @@ function checkRateLimit(adminId: string, maxPerMinute: number = 60): boolean {
   return true;
 }
 
-// GET /api/ads/my-ads - Get user's own ads by phone number (all statuses)
-router.get("/my-ads", async (req: Request, res: Response) => {
-  try {
-    const { phone } = req.query;
-    
-    if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number is required'
-      });
-    }
-
-    console.log(`📱 Fetching ads for user: ${phone}`);
-
-    // Find all ads uploaded by this phone number (all statuses: pending, approved, rejected)
-    const ads = await Ad.find({ uploadedBy: phone })
-      .select('-__v')
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
-
-    console.log(`✅ Found ${ads.length} ads for user ${phone}`);
-
-    // Transform ads to include image URLs
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
-    const adsWithUrls = ads.map((ad: any) => ({
-      ...ad,
-      _id: ad._id.toString(),
-      bottomImage: ad.bottomImageGridFS 
-        ? `${imageBaseUrl}/api/ads/image/${ad._id}/bottom`
-        : "",
-      fullscreenImage: ad.fullscreenImageGridFS 
-        ? `${imageBaseUrl}/api/ads/image/${ad._id}/fullscreen`
-        : "",
-    }));
-
-    res.json({
-      success: true,
-      data: adsWithUrls,
-      count: adsWithUrls.length
-    });
-  } catch (error) {
-    console.error('❌ Error fetching user ads:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch ads'
-    });
-  }
-});
-
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
 // ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
 router.get("/active", async (req: Request, res: Response) => {
@@ -113,12 +63,11 @@ router.get("/active", async (req: Request, res: Response) => {
       endDate: { $gte: now }
     });
 
-    // Get ads that are currently active (within date range) AND approved
+    // Get ads that are currently active (within date range)
     // Only fetch metadata, NOT images (GridFS handles images separately)
     const ads = await Ad.find({
       startDate: { $lte: now },
-      endDate: { $gte: now },
-      status: 'approved' // ONLY show approved ads to mobile users
+      endDate: { $gte: now }
     })
       .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
       .sort({ priority: -1, createdAt: -1 })
@@ -128,7 +77,7 @@ router.get("/active", async (req: Request, res: Response) => {
 
     // 🔍 LOG: Database query result
     console.log('✅ [STEP 3] Database Query Complete');
-    console.log('📈 Total approved ads found:', ads.length);
+    console.log('📈 Total ads found:', ads.length);
     if (ads.length > 0) {
       console.log('📋 First ad sample:', {
         _id: ads[0]._id,
@@ -445,228 +394,6 @@ router.post("/track-click/:id", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/ads - Create new ad (admin or mobile user with approval workflow)
-// This route is BEFORE requireAdminAuth to allow mobile users to upload with pending status
-router.post("/", async (req: Request, res: Response) => {
-  try {
-    // Check if request has admin authentication
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    let isAdmin = false;
-    let adminId = null;
-    
-    // Try to verify admin token
-    if (token) {
-      try {
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
-        if (decoded.role === 'admin' || decoded.role === 'super_admin') {
-          isAdmin = true;
-          adminId = decoded.id || decoded.username;
-        }
-      } catch (err) {
-        // Not an admin token, treat as mobile user
-        console.log('📱 Non-admin token detected - will create ad with pending status');
-      }
-    }
-    
-    // Rate limiting: Max 60 ads per minute for admins, 10 per minute for mobile users
-    const rateLimitId = adminId || req.ip || 'anonymous';
-    const maxRate = isAdmin ? 60 : 10;
-    
-    if (!checkRateLimit(rateLimitId, maxRate)) {
-      console.warn(`⚠️  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
-      return res.status(429).json({
-        success: false,
-        message: `Too many uploads. Maximum ${maxRate} ads per minute. Please wait a moment.`
-      });
-    }
-    
-    console.log('📝 POST /api/ads - Creating new ad');
-    console.log('👤 User type:', isAdmin ? 'Admin' : 'Mobile User');
-    console.log('👤 User ID:', rateLimitId);
-    console.log('📊 Request body keys:', Object.keys(req.body));
-    
-    const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
-
-    // Validation
-    console.log('🔍 Validating fields:', {
-      hasTitle: !!title,
-      hasBottomImage: !!bottomImage,
-      hasPhoneNumber: !!phoneNumber,
-      hasStartDate: !!startDate,
-      hasEndDate: !!endDate,
-      bottomImageLength: bottomImage?.length,
-      fullscreenImageLength: fullscreenImage?.length
-    });
-    
-    if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
-      console.error('❌ Validation failed - missing required fields');
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
-      });
-    }
-
-    // Upload images to GridFS
-    console.log(`📤 Uploading images to GridFS for new ad: ${title}`);
-    console.log(`📏 Bottom image size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
-    if (fullscreenImage) {
-      console.log(`📏 Fullscreen image size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
-    }
-    
-    let bottomImageId;
-    let fullscreenImageId = null;
-    
-    try {
-      bottomImageId = await gridfsService.uploadBase64(
-        bottomImage,
-        `${Date.now()}_bottom.jpg`,
-        {
-          title,
-          type: "bottom"
-        }
-      );
-      console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
-    } catch (uploadError) {
-      console.error(`❌ Failed to upload bottom image to GridFS:`, uploadError);
-      throw new Error(`Image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
-    }
-
-    if (fullscreenImage && fullscreenImage.length > 0) {
-      try {
-        fullscreenImageId = await gridfsService.uploadBase64(
-          fullscreenImage,
-          `${Date.now()}_fullscreen.jpg`,
-          {
-            title,
-            type: "fullscreen"
-          }
-        );
-        console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
-      } catch (uploadError) {
-        console.error(`❌ Failed to upload fullscreen image to GridFS:`, uploadError);
-        throw new Error(`Fullscreen image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
-      }
-    }
-
-    // Create ad with GridFS references and approval workflow
-    const adData: any = {
-      title,
-      bottomImage: "", // Empty - using GridFS
-      bottomImageGridFS: bottomImageId,
-      fullscreenImage: "", // Empty - using GridFS
-      fullscreenImageGridFS: fullscreenImageId,
-      phoneNumber,
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
-      priority: priority || 5
-    };
-    
-    // Set approval status based on user type
-    if (isAdmin) {
-      // Admin uploads are auto-approved
-      adData.status = 'approved';
-      adData.uploadedBy = 'admin';
-      adData.uploaderName = 'Admin';
-      adData.approvedBy = adminId;
-      adData.approvalDate = new Date();
-      console.log('✅ Admin upload - auto-approved');
-    } else {
-      // Mobile user uploads require approval
-      adData.status = 'pending';
-      adData.uploadedBy = phoneNumber; // Use phone as identifier
-      adData.uploaderName = uploaderName || 'Mobile User';
-      adData.priority = 1; // Lower priority for pending ads
-      console.log('📱 Mobile upload - pending approval');
-    }
-    
-    const ad = await Ad.create(adData);
-
-    console.log(`✅ Ad created with GridFS images: ${ad._id}, status: ${ad.status}`);
-
-    // Different response messages for admin vs mobile user
-    const responseMessage = isAdmin 
-      ? 'Advertisement created and published successfully'
-      : 'Advertisement uploaded successfully. Awaiting admin approval.';
-
-    res.status(201).json({
-      success: true,
-      message: responseMessage,
-      data: ad,
-      requiresApproval: !isAdmin
-    });
-  } catch (error) {
-    console.error("❌ CREATE AD ERROR:", error);
-    console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
-    console.error("❌ Error details:", {
-      name: error instanceof Error ? error.name : 'Unknown',
-      message: error instanceof Error ? error.message : String(error)
-    });
-    
-    res.status(500).json({
-      success: false,
-      message: "Failed to create ad",
-      error: error instanceof Error ? error.message : 'Unknown error',
-      details: process.env.NODE_ENV === 'development' ? error : undefined
-    });
-  }
-});
-
-// GET /api/ads/my-ads - Get user's own ads by phone number (public, no auth required)
-router.get("/my-ads", async (req: Request, res: Response) => {
-  try {
-    const phoneNumber = req.query.phoneNumber as string;
-    
-    if (!phoneNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number is required"
-      });
-    }
-
-    console.log(`📱 Fetching ads for phone number: ${phoneNumber}`);
-
-    // Find all ads for this user (including pending, approved, rejected)
-    const ads = await Ad.find({ phoneNumber })
-      .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
-
-    console.log(`✅ Found ${ads.length} ads for user ${phoneNumber}`);
-
-    // Transform ads to include proper image URLs
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
-    const adsWithImageUrls = ads.map((ad: any) => {
-      const adId = ad._id.toString();
-      return {
-        ...ad,
-        _id: adId,
-        bottomImage: ad.bottomImageGridFS 
-          ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
-          : "",
-        fullscreenImage: ad.fullscreenImageGridFS 
-          ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
-          : "",
-        bottomImageGridFS: ad.bottomImageGridFS?.toString(),
-        fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
-      };
-    });
-
-    res.json({
-      success: true,
-      data: adsWithImageUrls,
-      count: adsWithImageUrls.length
-    });
-  } catch (error) {
-    console.error("❌ GET MY ADS ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch your ads"
-    });
-  }
-});
-
 // ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
 
 router.use(requireAdminAuth);
@@ -728,20 +455,6 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
     
     // SCALABILITY: Filtering options
     const filter: any = {};
-    
-    // IMPORTANT: Only show approved ads by default (for web dashboard)
-    // Admin dashboard can override this by passing approvalStatus=all
-    if (req.query.approvalStatus === 'all') {
-      // Show all ads regardless of approval status (for admin review)
-      // Don't add status filter
-    } else if (req.query.approvalStatus === 'pending') {
-      filter.status = 'pending';
-    } else if (req.query.approvalStatus === 'rejected') {
-      filter.status = 'rejected';
-    } else {
-      // Default: only show approved ads (for public web display)
-      filter.status = 'approved';
-    }
     
     // Filter by status (active/expired/all)
     if (req.query.status === 'active') {
@@ -850,6 +563,121 @@ router.get("/:id", async (req: AdminAuthReq, res: Response) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch ad"
+    });
+  }
+});
+
+// POST /api/ads - Create new ad (admin)
+router.post("/", async (req: AdminAuthReq, res: Response) => {
+  try {
+    // Rate limiting: Max 60 ads per minute (1 per second average)
+    if (!checkRateLimit(req.adminId!, 60)) {
+      console.warn(`⚠️  Rate limit exceeded for admin ${req.adminId}`);
+      return res.status(429).json({
+        success: false,
+        message: "Too many uploads. Maximum 60 ads per minute. Please wait a moment."
+      });
+    }
+    
+    console.log('📝 POST /api/ads - Creating new ad');
+    console.log('👤 Admin ID:', req.adminId);
+    console.log('📊 Request body keys:', Object.keys(req.body));
+    
+    const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority } = req.body;
+
+    // Validation
+    console.log('🔍 Validating fields:', {
+      hasTitle: !!title,
+      hasBottomImage: !!bottomImage,
+      hasPhoneNumber: !!phoneNumber,
+      hasStartDate: !!startDate,
+      hasEndDate: !!endDate,
+      bottomImageLength: bottomImage?.length,
+      fullscreenImageLength: fullscreenImage?.length
+    });
+    
+    if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
+      console.error('❌ Validation failed - missing required fields');
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
+      });
+    }
+
+    // Upload images to GridFS
+    console.log(`📤 Uploading images to GridFS for new ad: ${title}`);
+    console.log(`📏 Bottom image size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
+    if (fullscreenImage) {
+      console.log(`📏 Fullscreen image size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
+    }
+    
+    let bottomImageId;
+    let fullscreenImageId = null;
+    
+    try {
+      bottomImageId = await gridfsService.uploadBase64(
+        bottomImage,
+        `${Date.now()}_bottom.jpg`,
+        {
+          title,
+          type: "bottom"
+        }
+      );
+      console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
+    } catch (uploadError) {
+      console.error(`❌ Failed to upload bottom image to GridFS:`, uploadError);
+      throw new Error(`Image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+    }
+
+    if (fullscreenImage && fullscreenImage.length > 0) {
+      try {
+        fullscreenImageId = await gridfsService.uploadBase64(
+          fullscreenImage,
+          `${Date.now()}_fullscreen.jpg`,
+          {
+            title,
+            type: "fullscreen"
+          }
+        );
+        console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+      } catch (uploadError) {
+        console.error(`❌ Failed to upload fullscreen image to GridFS:`, uploadError);
+        throw new Error(`Fullscreen image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+      }
+    }
+
+    // Create ad with GridFS references
+    const ad = await Ad.create({
+      title,
+      bottomImage: "", // Empty - using GridFS
+      bottomImageGridFS: bottomImageId,
+      fullscreenImage: "", // Empty - using GridFS
+      fullscreenImageGridFS: fullscreenImageId,
+      phoneNumber,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      priority: priority || 5
+    });
+
+    console.log(`✅ Ad created with GridFS images: ${ad._id}`);
+
+    res.status(201).json({
+      success: true,
+      data: ad
+    });
+  } catch (error) {
+    console.error("❌ CREATE AD ERROR:", error);
+    console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
+    console.error("❌ Error details:", {
+      name: error instanceof Error ? error.name : 'Unknown',
+      message: error instanceof Error ? error.message : String(error)
+    });
+    
+    res.status(500).json({
+      success: false,
+      message: "Failed to create ad",
+      error: error instanceof Error ? error.message : 'Unknown error',
+      details: process.env.NODE_ENV === 'development' ? error : undefined
     });
   }
 });
