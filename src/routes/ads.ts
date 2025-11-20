@@ -41,7 +41,8 @@ function checkRateLimit(adminId: string, maxPerMinute: number = 60): boolean {
 // GET /api/ads/my-ads - Get user's own ads by phone number (all statuses)
 router.get("/my-ads", async (req: Request, res: Response) => {
   try {
-    const { phone } = req.query;
+    // Accept both 'phone' and 'phoneNumber' query params for backward compatibility
+    const phone = (req.query.phone || req.query.phoneNumber) as string;
     
     if (!phone) {
       return res.status(400).json({
@@ -59,13 +60,21 @@ router.get("/my-ads", async (req: Request, res: Response) => {
       .lean()
       .exec();
 
-    console.log(`✅ Found ${ads.length} ads for user ${phone}`);
+    console.log(`✅ Found ${ads.length} ads for user ${phone}. Statuses:`, 
+      ads.map(ad => ({ id: ad._id, status: (ad as any).status })));
 
-    // Transform ads to include image URLs
+    // Transform ads to include image URLs and ensure status field is included
     const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
     const adsWithUrls = ads.map((ad: any) => ({
       ...ad,
       _id: ad._id.toString(),
+      status: ad.status || 'approved', // Ensure status field exists
+      approvalStatus: ad.status || 'approved', // Add approvalStatus for mobile app compatibility
+      rejectionReason: ad.rejectionReason || null,
+      uploadedBy: ad.uploadedBy,
+      uploaderName: ad.uploaderName,
+      approvedBy: ad.approvedBy,
+      approvalDate: ad.approvalDate,
       bottomImage: ad.bottomImageGridFS 
         ? `${imageBaseUrl}/api/ads/image/${ad._id}/bottom`
         : "",
