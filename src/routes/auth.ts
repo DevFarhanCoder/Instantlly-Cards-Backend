@@ -654,15 +654,19 @@ router.post("/check-phone", async (req, res) => {
     }
     
     console.log(`[CHECK-PHONE] 🔑 Generated OTP: ${otp} for ${cleanPhone}`);
-    console.log(`[CHECK-PHONE] 📤 Calling Fast2SMS API...`);
+    console.log(`[CHECK-PHONE] 📤 Calling Fast2SMS API (DLT route)...`);
     
-    // Send OTP via Fast2SMS
+    // Send OTP via Fast2SMS using DLT/Quick SMS route (not OTP route)
     try {
-      // Fast2SMS OTP API format
+      // Fast2SMS Quick SMS API format (works without website verification)
+      const message = `${otp} is your verification code for Instantlly Cards. Valid for 5 minutes. Do not share with anyone.`;
+      
       const fast2smsPayload = new URLSearchParams({
         authorization: fast2smsApiKey,
-        variables_values: otp,
-        route: 'otp',
+        sender_id: 'FSTSMS',  // Default sender ID
+        message: message,
+        language: 'english',
+        route: 'q',  // Quick SMS route (instead of 'otp')
         numbers: cleanPhone
       });
 
