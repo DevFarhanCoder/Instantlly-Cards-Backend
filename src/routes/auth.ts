@@ -661,18 +661,13 @@ router.post("/check-phone", async (req, res) => {
       const fast2smsResponse = await axios.post(
         'https://www.fast2sms.com/dev/bulkV2',
         {
+          variables_values: otp,
           route: 'otp',
-          sender_id: 'TXTIND',
-          message: `${otp} is your verification code for Instantlly Cards`,
-          language: 'english',
-          flash: 0,
-          numbers: cleanPhone,
-          variables_values: otp
+          numbers: cleanPhone
         },
         {
           headers: {
-            'authorization': fast2smsApiKey,
-            'Content-Type': 'application/json'
+            'authorization': fast2smsApiKey
           },
           timeout: 10000 // 10 second timeout
         }
@@ -694,6 +689,8 @@ router.post("/check-phone", async (req, res) => {
       
     } catch (fast2smsError: any) {
       console.error(`[CHECK-PHONE] ❌ Fast2SMS API error:`, fast2smsError.message);
+      console.error(`[CHECK-PHONE] 📋 Error response:`, fast2smsError.response?.data);
+      console.error(`[CHECK-PHONE] 📊 Status:`, fast2smsError.response?.status);
       
       // Still return success to user, OTP is stored in cache for testing
       return res.json({
