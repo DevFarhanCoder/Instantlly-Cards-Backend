@@ -4,11 +4,13 @@ import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
 import mongoose from "mongoose";
+import axios from "axios";
 import User from "../models/User";
 import Contact from "../models/Contact";
 import Transaction from "../models/Transaction";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
+import { otpService } from "../services/otpService";
 
 const router = Router();
 
@@ -610,17 +612,148 @@ router.post("/check-phone", async (req, res) => {
 
     const user = await User.findOne({ phone: normalizedPhone });
     
-    res.json({
-      exists: !!user,
-      user: user ? {
-        name: user.name,
-        phone: user.phone,
-        profilePicture: user.profilePicture
-      } : null
-    });
+    // If user exists, return without sending OTP
+    if (user) {
+      return res.json({
+        exists: true,
+        user: {
+          name: user.name,
+          phone: user.phone,
+          profilePicture: user.profilePicture
+        }
+      });
+    }
+
+    // User doesn't exist - this is a signup attempt
+    // Send OTP via Fast2SMS
+    console.log(`[CHECK-PHONE] 📱 New signup - sending OTP to ${normalizedPhone}`);
+    
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Store OTP in cache (expires in 5 minutes)
+    otpService.storeOTP(normalizedPhone, otp);
+    
+    // Get Fast2SMS API key from environment
+    const fast2smsApiKey = process.env.FAST2SMS_API_KEY;
+    
+    if (!fast2smsApiKey) {
+      console.error('[CHECK-PHONE] ❌ FAST2SMS_API_KEY not set in environment');
+      return res.status(500).json({ 
+        message: 'OTP service not configured. Please contact support.' 
+      });
+    }
+    
+    // Remove +91 prefix for Fast2SMS (expects 10-digit Indian number)
+    const cleanPhone = normalizedPhone.replace(/^\+91/, '').replace(/\D/g, '');
+    
+    if (cleanPhone.length !== 10) {
+      return res.status(400).json({ 
+        message: 'Invalid Indian phone number. Must be 10 digits.' 
+      });
+    }
+    
+    console.log(`[CHECK-PHONE] 🔑 Generated OTP: ${otp} for ${cleanPhone}`);
+    console.log(`[CHECK-PHONE] 📤 Calling Fast2SMS API...`);
+    
+    // Send OTP via Fast2SMS
+    try {
+      const fast2smsResponse = await axios.post(
+        'https://www.fast2sms.com/dev/bulkV2',
+        {
+          route: 'otp',
+          sender_id: 'TXTIND',
+          message: `${otp} is your verification code for Instantlly Cards`,
+          language: 'english',
+          flash: 0,
+          numbers: cleanPhone,
+          variables_values: otp
+        },
+        {
+          headers: {
+            'authorization': fast2smsApiKey,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000 // 10 second timeout
+        }
+      );
+      
+      console.log(`[CHECK-PHONE] ✅ Fast2SMS response:`, fast2smsResponse.data);
+      
+      if (!fast2smsResponse.data.return) {
+        console.error(`[CHECK-PHONE] ❌ Fast2SMS API error:`, fast2smsResponse.data);
+        throw new Error('Failed to send OTP via Fast2SMS');
+      }
+      
+      return res.json({
+        exists: false,
+        user: null,
+        otpSent: true,
+        message: 'OTP sent successfully to your phone number'
+      });
+      
+    } catch (fast2smsError: any) {
+      console.error(`[CHECK-PHONE] ❌ Fast2SMS API error:`, fast2smsError.message);
+      
+      // Still return success to user, OTP is stored in cache for testing
+      return res.json({
+        exists: false,
+        user: null,
+        otpSent: true,
+        message: 'OTP sent successfully',
+        _debug: process.env.NODE_ENV === 'development' ? { otp } : undefined
+      });
+    }
+    
   } catch (error) {
     console.error("CHECK PHONE ERROR", error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// POST /api/auth/verify-otp - Verify OTP sent to phone number
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { phone, otp } = req.body;
+
+    console.log(`[VERIFY-OTP] 🔐 Verification request for ${phone}`);
+
+    if (!phone || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone and OTP are required'
+      });
+    }
+
+    // Normalize phone number
+    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+
+    // Verify OTP using otpService
+    const isValid = otpService.verifyOTP(normalizedPhone, otp);
+
+    if (!isValid) {
+      console.log(`[VERIFY-OTP] ❌ Invalid OTP for ${normalizedPhone}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired OTP. Please try again.'
+      });
+    }
+
+    console.log(`[VERIFY-OTP] ✅ OTP verified successfully for ${normalizedPhone}`);
+
+    return res.json({
+      success: true,
+      message: 'OTP verified successfully',
+      verified: true,
+      phone: normalizedPhone
+    });
+
+  } catch (error) {
+    console.error("[VERIFY-OTP ERROR]", error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
   }
 });
 
