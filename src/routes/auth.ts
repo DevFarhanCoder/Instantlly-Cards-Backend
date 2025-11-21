@@ -658,16 +658,19 @@ router.post("/check-phone", async (req, res) => {
     
     // Send OTP via Fast2SMS
     try {
-      const fast2smsResponse = await axios.post(
-        'https://www.fast2sms.com/dev/bulkV2',
-        {
-          variables_values: otp,
-          route: 'otp',
-          numbers: cleanPhone
-        },
+      // Fast2SMS OTP API format
+      const fast2smsPayload = new URLSearchParams({
+        authorization: fast2smsApiKey,
+        variables_values: otp,
+        route: 'otp',
+        numbers: cleanPhone
+      });
+
+      const fast2smsResponse = await axios.get(
+        `https://www.fast2sms.com/dev/bulkV2?${fast2smsPayload.toString()}`,
         {
           headers: {
-            'authorization': fast2smsApiKey
+            'Cache-Control': 'no-cache'
           },
           timeout: 10000 // 10 second timeout
         }
