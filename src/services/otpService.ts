@@ -1,4 +1,4 @@
-import NodeCache from 'node-cache';
+const NodeCache = require('node-cache');
 
 // Store OTPs in memory for 5 minutes (300 seconds)
 const otpCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
@@ -34,7 +34,7 @@ export const otpService = {
    * @returns boolean - true if OTP is valid
    */
   verifyOTP: (phone: string, otp: string): boolean => {
-    const data = otpCache.get<OTPData>(phone);
+    const data = otpCache.get(phone) as OTPData | undefined;
     
     if (!data) {
       console.log(`[OTP-VERIFY] ❌ No OTP found for ${phone}`);
@@ -87,6 +87,6 @@ export const otpService = {
    * @param phone - Phone number
    */
   getOTPData: (phone: string): OTPData | undefined => {
-    return otpCache.get<OTPData>(phone);
+    return otpCache.get(phone) as OTPData | undefined;
   }
 };

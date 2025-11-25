@@ -52,26 +52,29 @@ const io = new Server(server, {
 });
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
-const allowedOrigins = [
+const defaultAllowed = [
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
-  'https://instantllychannelpatneradmin.vercel.app',
   'http://localhost:3000',
-  'http://localhost:3001',
-  '*' // Fallback for other origins during development
+  'http://localhost:3001'
 ];
+
+const adminOrigin = process.env.ADMIN_WEB_ORIGIN; // e.g. https://instantllychannelpatneradmin.vercel.app
+const allowedOrigins = adminOrigin ? [...defaultAllowed, adminOrigin] : [...defaultAllowed];
 
 app.use(cors({
   origin: function(origin, callback) {
-    // Allow requests with no origin (mobile apps, Postman, etc)
+    // Allow requests with no origin (mobile apps, Postman, server-to-server)
     if (!origin) return callback(null, true);
-    
-    // Allow all origins that match our whitelist
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow anyway for now (can restrict later)
-    }
+
+    // Allow if origin in allowedOrigins
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // For development convenience, allow localhost origins
+    if (origin.startsWith('http://localhost')) return callback(null, true);
+
+    // Otherwise deny
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

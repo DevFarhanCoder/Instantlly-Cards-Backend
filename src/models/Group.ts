@@ -210,4 +210,6 @@ GroupSchema.methods.updateLastMessage = function(messageId: string) {
   return this.save();
 };
 
-export default mongoose.model<IGroup, IGroupModel>("Group", GroupSchema);
+const GroupModel = mongoose.model<IGroup, IGroupModel>("Group", GroupSchema);
+export default GroupModel;
+export { GroupModel };

@@ -4,6 +4,8 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
 import { imageCache } from "../services/imageCache";
+import User from "../models/User";
+const jwt = require('jsonwebtoken');
 
 const router = Router();
 
@@ -41,8 +43,52 @@ function checkRateLimit(adminId: string, maxPerMinute: number = 60): boolean {
 // GET /api/ads/my-ads - Get user's own ads by phone number (all statuses)
 router.get("/my-ads", async (req: Request, res: Response) => {
   try {
-    const { phone } = req.query;
-    
+    // Accept phone via query OR via Authorization JWT (preferred when user is signed-in)
+    let phone = (req.query.phone as string) || (req.query.phoneNumber as string);
+
+    // If no phone query param, try to read Authorization token and extract phone
+    if (!phone) {
+      const authHeader = req.headers.authorization;
+      const auth = authHeader?.replace(/^Bearer\s+/i, '') || null;
+      console.log('🔎 [my-ads] Authorization header present:', !!authHeader);
+      if (auth) {
+        try {
+          const payload: any = jwt.verify(auth, process.env.JWT_SECRET || '');
+          console.log('🔐 [my-ads] jwt.verify payload preview:', { sub: payload?.sub, phone: payload?.phone });
+          if (payload?.phone) phone = payload.phone;
+          else if (payload?.sub) {
+            // Try to fetch user record for phone
+            try {
+              const user = await User.findById(payload.sub).select('phone').lean() as any;
+              console.log('🔍 [my-ads] Loaded user for phone extraction:', { found: !!user, phone: user?.phone });
+              if (user?.phone) phone = user.phone;
+            } catch (uErr) {
+              console.warn('Could not load user for phone extraction from token:', (uErr as any)?.message || uErr);
+            }
+          }
+        } catch (tokenErr) {
+          // Token verify failed — attempt decode to inspect payload (no signature check)
+          console.warn('⚠️ [my-ads] jwt.verify failed:', (tokenErr as any)?.message || tokenErr);
+          try {
+            const decoded: any = jwt.decode(auth);
+            console.log('🔎 [my-ads] jwt.decode fallback payload preview:', { sub: decoded?.sub, phone: decoded?.phone });
+            if (decoded?.phone) phone = decoded.phone;
+            else if (decoded?.sub) {
+              try {
+                const user = await User.findById(decoded.sub).select('phone').lean() as any;
+                console.log('🔍 [my-ads] Loaded user (decode fallback):', { found: !!user, phone: user?.phone });
+                if (user?.phone) phone = user.phone;
+              } catch (uErr) {
+                console.warn('Could not load user for phone extraction from decoded token:', (uErr as any)?.message || uErr);
+              }
+            }
+          } catch (decodeErr) {
+            console.warn('Could not decode token for phone extraction:', (decodeErr as any)?.message || decodeErr);
+          }
+        }
+      }
+    }
+
     if (!phone) {
       return res.status(400).json({
         success: false,
@@ -615,8 +661,49 @@ router.post("/", async (req: Request, res: Response) => {
 // GET /api/ads/my-ads - Get user's own ads by phone number (public, no auth required)
 router.get("/my-ads", async (req: Request, res: Response) => {
   try {
-    const phoneNumber = req.query.phoneNumber as string;
-    
+    let phoneNumber = req.query.phoneNumber as string;
+
+    // If no phoneNumber provided, attempt to extract from Authorization JWT
+    if (!phoneNumber) {
+      const authHeader = req.headers.authorization;
+      const auth = authHeader?.replace(/^Bearer\s+/i, '') || null;
+      console.log('🔎 [my-ads-public] Authorization header present:', !!authHeader);
+      if (auth) {
+        try {
+          const payload: any = jwt.verify(auth, process.env.JWT_SECRET || '');
+          console.log('🔐 [my-ads-public] jwt.verify payload preview:', { sub: payload?.sub, phone: payload?.phone });
+          if (payload?.phone) phoneNumber = payload.phone;
+          else if (payload?.sub) {
+            try {
+              const user = await User.findById(payload.sub).select('phone').lean() as any;
+              console.log('🔍 [my-ads-public] Loaded user for phone extraction:', { found: !!user, phone: user?.phone });
+              if (user?.phone) phoneNumber = user.phone;
+            } catch (uErr) {
+              console.warn('Could not load user for phone extraction from token:', (uErr as any)?.message || uErr);
+            }
+          }
+        } catch (tErr) {
+          console.warn('⚠️ [my-ads-public] jwt.verify failed:', (tErr as any)?.message || tErr);
+          try {
+            const decoded: any = jwt.decode(auth);
+            console.log('🔎 [my-ads-public] jwt.decode fallback payload preview:', { sub: decoded?.sub, phone: decoded?.phone });
+            if (decoded?.phone) phoneNumber = decoded.phone;
+            else if (decoded?.sub) {
+              try {
+                const user = await User.findById(decoded.sub).select('phone').lean() as any;
+                console.log('🔍 [my-ads-public] Loaded user (decode fallback):', { found: !!user, phone: user?.phone });
+                if (user?.phone) phoneNumber = user.phone;
+              } catch (uErr) {
+                console.warn('Could not load user for phone extraction from decoded token:', (uErr as any)?.message || uErr);
+              }
+            }
+          } catch (decodeErr) {
+            console.warn('Could not decode token for phone extraction:', (decodeErr as any)?.message || decodeErr);
+          }
+        }
+      }
+    }
+
     if (!phoneNumber) {
       return res.status(400).json({
         success: false,
@@ -671,6 +758,67 @@ router.get("/my-ads", async (req: Request, res: Response) => {
 
 router.use(requireAdminAuth);
 
+// GET /api/ads/admin/pending - Admin-only endpoint to fetch pending ads (paginated)
+router.get('/admin/pending', async (req: AdminAuthReq, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10), 200);
+    const skip = (page - 1) * limit;
+
+    const filter: any = { status: 'pending' };
+
+    if (req.query.uploadedBy) filter.uploadedBy = String(req.query.uploadedBy);
+    if (req.query.search) {
+      const q = String(req.query.search);
+      filter.$or = [
+        { title: { $regex: q, $options: 'i' } },
+        { description: { $regex: q, $options: 'i' } },
+        { uploadedBy: { $regex: q, $options: 'i' } }
+      ];
+    }
+
+    const [total, ads] = await Promise.all([
+      Ad.countDocuments(filter),
+      Ad.find(filter)
+        .select('-bottomImage -fullscreenImage')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    const base = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+
+    const mapped = ads.map((a: any) => ({
+      _id: a._id.toString(),
+      title: a.title,
+      description: a.description,
+      uploadedBy: a.uploadedBy,
+      uploaderName: a.uploaderName,
+      createdAt: a.createdAt,
+      status: a.status,
+      priority: a.priority,
+      imageUrls: {
+        bottom: a.bottomImageGridFS ? `${base}/api/ads/image/${a._id}/bottom` : null,
+        fullscreen: a.fullscreenImageGridFS ? `${base}/api/ads/image/${a._id}/fullscreen` : null
+      }
+    }));
+
+    res.json({
+      success: true,
+      data: mapped,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('❌ GET ADMIN PENDING ADS ERROR:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch pending ads' });
+  }
+});
 // GET /api/ads/analytics/summary - Get analytics summary (admin)
 // MUST be before /:id route to avoid matching "analytics" as an id
 router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
