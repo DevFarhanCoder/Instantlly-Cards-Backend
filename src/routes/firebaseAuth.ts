@@ -10,7 +10,8 @@ import { sendContactJoinedNotification } from "../services/pushNotifications";
 
 const router = Router();
 
-// Initialize Firebase on route load
+// Initialize Firebase on route load (optional - only used if Firebase auth is needed)
+// Primary authentication uses Fast2SMS OTP
 initializeFirebase();
 
 // Helper function to generate unique referral code

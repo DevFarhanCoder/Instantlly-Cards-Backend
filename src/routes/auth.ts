@@ -8,6 +8,7 @@ import axios from "axios";
 import User from "../models/User";
 import Contact from "../models/Contact";
 import Transaction from "../models/Transaction";
+import Card from "../models/Card";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
 import { otpService } from "../services/otpService";
@@ -183,6 +184,71 @@ router.post("/signup", async (req, res) => {
       balanceAfter: 500000,
       status: 'completed'
     });
+
+    // 🎴 AUTO-CREATE FIRST CARD: Create a default card with name and phone number
+    try {
+      console.log('🎴 Creating default card for new user...');
+      
+      // Extract country code and phone number from fullPhone
+      let personalCountryCode = '';
+      let personalPhone = '';
+      
+      if (cleanPhone.startsWith('+')) {
+        // Extract country code (e.g., +91 from +919876543210)
+        const phoneWithoutPlus = cleanPhone.substring(1);
+        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
+          // Indian number
+          personalCountryCode = '91';
+          personalPhone = phoneWithoutPlus.substring(2);
+        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
+          // US/Canada number
+          personalCountryCode = '1';
+          personalPhone = phoneWithoutPlus.substring(1);
+        } else {
+          // Generic: take first 2-3 digits as country code
+          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
+          if (match) {
+            personalCountryCode = match[1];
+            personalPhone = match[2];
+          }
+        }
+      }
+      
+      const defaultCard = await Card.create({
+        userId: savedUser._id.toString(),
+        name: cleanName,
+        personalCountryCode: personalCountryCode,
+        personalPhone: personalPhone,
+        // All other fields will use default empty values from the schema
+        gender: '',
+        email: '',
+        location: '',
+        mapsLink: '',
+        companyName: '',
+        designation: '',
+        companyCountryCode: '',
+        companyPhone: '',
+        companyEmail: '',
+        companyWebsite: '',
+        companyAddress: '',
+        companyMapsLink: '',
+        message: '',
+        companyPhoto: '',
+        linkedin: '',
+        twitter: '',
+        instagram: '',
+        facebook: '',
+        youtube: '',
+        whatsapp: '',
+        telegram: ''
+      });
+      
+      console.log('✅ Default card created successfully with ID:', defaultCard._id);
+      console.log('📇 Card details - Name:', defaultCard.name, 'Phone:', `+${personalCountryCode}${personalPhone}`);
+    } catch (cardError) {
+      console.error('⚠️ Failed to create default card:', cardError);
+      // Don't fail signup if card creation fails
+    }
 
     // If referred by someone, give referrer 20% bonus (100,000 credits)
     if (referrer) {
