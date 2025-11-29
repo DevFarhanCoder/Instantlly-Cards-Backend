@@ -94,7 +94,7 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     const allCards = await Card.find({
       userId: { $in: allUserIds }
     })
-    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress createdAt updatedAt')
+    .select('_id userId name companyName designation companyPhoto birthdate anniversary email companyEmail personalPhone companyPhone companyPhones location companyAddress createdAt updatedAt')
     .sort({ createdAt: -1 })
     .limit(100)
     .lean()
@@ -810,7 +810,7 @@ r.get("/shared-with/:userId", async (req: AuthReq, res) => {
         { senderId: otherUserId, recipientId: currentUserId }
       ]
     })
-    .populate('cardId', 'companyName name companyPhoto')
+    .populate('cardId', 'companyName name companyPhoto birthdate anniversary')
     .populate('senderId', 'name profilePicture')
     .populate('recipientId', 'name profilePicture')
     .sort({ sentAt: 1 }) // Chronological order for chat timeline
@@ -930,7 +930,7 @@ r.get("/group/:groupId/shared", async (req: AuthReq, res) => {
     
     // Find all cards shared in this group
     const groupSharedCards = await GroupSharedCard.find({ groupId })
-      .populate('cardId', 'companyName name companyPhoto userId')
+      .populate('cardId', 'companyName name companyPhoto birthdate anniversary userId')
       .populate('senderId', 'name profilePicture')
       .sort({ sentAt: -1 })
       .lean();
@@ -987,7 +987,7 @@ r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
         groupId, 
         senderId: currentUserId 
       })
-      .populate('cardId', 'companyName name companyPhoto')
+      .populate('cardId', 'companyName name companyPhoto birthdate anniversary')
       .sort({ sentAt: -1 })
       .lean()
       .exec(),
@@ -997,7 +997,7 @@ r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
         groupId, 
         senderId: { $ne: currentUserId } 
       })
-      .populate('cardId', 'companyName name companyPhoto')
+      .populate('cardId', 'companyName name companyPhoto birthdate anniversary')
       .populate('senderId', 'name profilePicture')
       .sort({ sentAt: -1 })
       .lean()

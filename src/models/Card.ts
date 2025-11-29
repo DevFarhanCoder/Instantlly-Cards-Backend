@@ -8,16 +8,51 @@ const schema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     gender: { type: String, default: "", enum: ["", "Male", "Female"] },
     personalCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
-    personalPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
+    personalPhone: {
+      type: String,
+      default: "",
+      validate: {
+        validator: (v: string) => !v || /^\d{10}$/.test(v),
+        message: "Phone must be 10 digits or empty"
+      }
+    },
     email: { type: String, default: "" },
     location: { type: String, default: "" },
     mapsLink: { type: String, default: "" },
+
+    // Dates
+    birthdate: { type: Date, default: null },
+    anniversary: { type: Date, default: null },
 
     // Business
     companyName: { type: String, default: "" },
     designation: { type: String, default: "" },
     companyCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
-    companyPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
+    companyPhone: {
+      type: String,
+      default: "",
+      validate: {
+        validator: (v: string) => !v || /^\d{10}$/.test(v),
+        message: "Phone must be 10 digits or empty"
+      }
+    },
+    // Support multiple company phone numbers (each with optional country code)
+    companyPhones: {
+      type: [
+        {
+          countryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
+          phone: {
+            type: String,
+            default: "",
+            validate: {
+              validator: (v: string) => !v || /^\d{10}$/.test(v),
+              message: "Phone must be 10 digits or empty"
+            }
+          }
+        }
+      ],
+      default: []
+    },
     companyEmail: { type: String, default: "" },
     companyWebsite: { type: String, default: "" },
     companyAddress: { type: String, default: "" },
