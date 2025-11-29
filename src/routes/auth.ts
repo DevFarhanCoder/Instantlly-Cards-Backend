@@ -586,16 +586,31 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
         return res.status(400).json({ message: "Invalid phone number format" });
       }
       
-      const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
-      
-      // Check if phone number is already taken by another user
-      const existingUser = await User.findOne({ phone: normalizedPhone });
-      
-      if (existingUser && existingUser._id.toString() !== userId) {
-        return res.status(409).json({ message: "Phone number already exists" });
-      }
-      
-      updateData.phone = normalizedPhone;
+        const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+
+        // Build tolerant phone variants (similar to other endpoints) so we
+        // check uniqueness across common stored formats and exclude the
+        // current user from the search.
+        const phoneVariants = [
+          normalizedPhone,
+          // ensure +prefix variant
+          normalizedPhone.startsWith('+') ? normalizedPhone : ('+' + normalizedPhone),
+          // local 10-digit variant (remove +91)
+          normalizedPhone.replace(/^\+91/, '').replace(/^91/, ''),
+          // variant without + if present
+          normalizedPhone.replace(/^\+/, '')
+        ].filter(Boolean);
+
+        const existingUser = await User.findOne({ phone: { $in: phoneVariants }, _id: { $ne: userId } });
+
+        if (existingUser) {
+          return res.status(409).json({ message: "Phone number already exists" });
+        }
+
+        // Persist a canonical phone value with + prefix for consistency
+        let canonicalPhone = normalizedPhone;
+        if (!canonicalPhone.startsWith('+')) canonicalPhone = '+' + canonicalPhone;
+        updateData.phone = canonicalPhone;
     }
 
     const user = await User.findByIdAndUpdate(userId, updateData, { new: true });
