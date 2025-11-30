@@ -3,7 +3,6 @@ import multer from 'multer';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import Ad from '../models/Ad';
-import { authenticateChannelPartner } from '../middleware/channelPartnerAuth';
 import { Readable } from 'stream';
 
 const router = express.Router();
@@ -27,16 +26,14 @@ const upload = multer({
 /**
  * POST /api/channel-partner/ads
  * Upload a new ad (status = 'pending')
- * Requires: Bearer token (channel partner JWT)
+ * NO AUTH REQUIRED - Anyone can create ads, admin will review
  */
 router.post(
   '/',
-  authenticateChannelPartner,
   upload.array('images', 5), // Max 5 images
   async (req: Request, res: Response) => {
     try {
-      console.log('📤 Channel partner ad upload request:', {
-        channelPartnerPhone: req.channelPartnerPhone,
+      console.log('📤 Ad upload request (no auth):', {
         body: req.body,
         filesCount: (req.files as Express.Multer.File[])?.length || 0,
       });
@@ -72,22 +69,8 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // Check user credits and deduct 1020 credits
-      const User = mongoose.model('User');
-      const user = await User.findOne({ phone: req.channelPartnerPhone });
-      
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
-
-      const userCredits = (user as any).credits || 0;
-      const AD_COST = 1020;
-
-      if (userCredits < AD_COST) {
-        return res.status(400).json({ 
-          message: `Insufficient credits. You need ${AD_COST} credits to create an ad. Current balance: ${userCredits}` 
-        });
-      }
+      // NO CREDIT CHECK - Free ad creation for now
+      // Admin will approve/reject
 
       // Upload images to GridFS
       const db = mongoose.connection.db;
@@ -152,28 +135,11 @@ router.post(
 
       await ad.save();
 
-      // Deduct credits from user
-      (user as any).credits = userCredits - AD_COST;
-      await user.save();
-
-      // Create transaction record
-      const Transaction = mongoose.model('Transaction');
-      await Transaction.create({
-        fromUser: user._id,
-        toUser: null,
-        amount: AD_COST,
-        type: 'ad_purchase',
-        description: `Advertisement: ${title}`,
-        status: 'completed'
-      });
-
-      console.log(`✅ Ad created with pending status:`, {
+      console.log(`✅ Ad created with pending status (no credit charge):`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
-        status: ad.status,
-        creditsDeducted: AD_COST,
-        remainingCredits: userCredits - AD_COST
+        status: ad.status
       });
 
       res.status(201).json({
@@ -210,19 +176,21 @@ router.post(
 
 /**
  * GET /api/channel-partner/ads
- * Get all ads uploaded by the authenticated channel partner
+ * Get all ads - NO AUTH REQUIRED
+ * Query param: phone - to filter by uploader phone
  */
-router.get('/', authenticateChannelPartner, async (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
-    console.log('📋 Fetching ads for channel partner:', req.channelPartnerPhone);
+    const { phone } = req.query;
+    
+    console.log('📋 Fetching ads (no auth):', phone ? `for phone ${phone}` : 'all ads');
 
-    const ads = await Ad.find({
-      uploadedBy: req.channelPartnerPhone,
-    })
+    const filter = phone ? { uploadedBy: phone } : {};
+    const ads = await Ad.find(filter)
       .sort({ createdAt: -1 }) // Most recent first
       .select('-__v');
 
-    console.log(`✅ Found ${ads.length} ads for channel partner ${req.channelPartnerPhone}`);
+    console.log(`✅ Found ${ads.length} ads`);
 
     // Transform ads for response
     const adsWithDetails = ads.map((ad) => ({
@@ -258,9 +226,9 @@ router.get('/', authenticateChannelPartner, async (req: Request, res: Response) 
 
 /**
  * DELETE /api/channel-partner/ads/:id
- * Delete own ad (only if status is 'pending')
+ * Delete ad (only if status is 'pending') - NO AUTH REQUIRED
  */
-router.delete('/:id', authenticateChannelPartner, async (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
@@ -272,11 +240,6 @@ router.delete('/:id', authenticateChannelPartner, async (req: Request, res: Resp
 
     if (!ad) {
       return res.status(404).json({ message: 'Ad not found' });
-    }
-
-    // Verify ownership
-    if (ad.uploadedBy !== req.channelPartnerPhone) {
-      return res.status(403).json({ message: 'You can only delete your own ads' });
     }
 
     // Only allow deletion if pending
