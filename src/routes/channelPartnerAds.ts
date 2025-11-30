@@ -72,6 +72,23 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
+      // Check user credits and deduct 1020 credits
+      const User = mongoose.model('User');
+      const user = await User.findOne({ phone: req.channelPartnerPhone });
+      
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      const userCredits = (user as any).credits || 0;
+      const AD_COST = 1020;
+
+      if (userCredits < AD_COST) {
+        return res.status(400).json({ 
+          message: `Insufficient credits. You need ${AD_COST} credits to create an ad. Current balance: ${userCredits}` 
+        });
+      }
+
       // Upload images to GridFS
       const db = mongoose.connection.db;
       if (!db) {
@@ -135,11 +152,28 @@ router.post(
 
       await ad.save();
 
+      // Deduct credits from user
+      (user as any).credits = userCredits - AD_COST;
+      await user.save();
+
+      // Create transaction record
+      const Transaction = mongoose.model('Transaction');
+      await Transaction.create({
+        fromUser: user._id,
+        toUser: null,
+        amount: AD_COST,
+        type: 'ad_purchase',
+        description: `Advertisement: ${title}`,
+        status: 'completed'
+      });
+
       console.log(`✅ Ad created with pending status:`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
         status: ad.status,
+        creditsDeducted: AD_COST,
+        remainingCredits: userCredits - AD_COST
       });
 
       res.status(201).json({
