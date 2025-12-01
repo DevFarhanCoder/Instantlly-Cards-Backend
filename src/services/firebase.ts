@@ -71,8 +71,9 @@ export const initializeFirebase = () => {
       return admin;
     }
 
-    console.error('❌ No Firebase credentials found');
-    console.error('💡 Set FIREBASE_SERVICE_ACCOUNT_BASE64 or individual Firebase env vars');
+    // Firebase is optional - only used for Firebase authentication
+    // Using Fast2SMS for OTP instead
+    console.log('ℹ️  Firebase not configured (optional - using Fast2SMS for OTP)');
     return null;
   } catch (error) {
     console.error('❌ Failed to initialize Firebase Admin SDK:', error);

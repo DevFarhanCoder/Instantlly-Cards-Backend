@@ -45,14 +45,12 @@ const AdSchema = new mongoose.Schema(
     // Scheduling
     startDate: {
       type: Date,
-      required: true,
-      index: true
+      required: true
     },
 
     endDate: {
       type: Date,
-      required: true,
-      index: true
+      required: true
     },
 
     // Analytics
@@ -78,8 +76,7 @@ const AdSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected'],
-      default: 'approved', // Default to approved for backward compatibility with existing ads
-      index: true
+      default: 'approved' // Default to approved for backward compatibility with existing ads
     },
 
     uploadedBy: {
