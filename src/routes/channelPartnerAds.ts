@@ -69,8 +69,76 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // NO CREDIT CHECK - Free ad creation for now
-      // Admin will approve/reject
+      // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
+      // We need to connect to Channel Partner database to check/deduct credits
+      const uploaderPhone = req.body.uploaderPhone || phoneNumber;
+      
+      console.log('🔍 Looking for user with phone:', uploaderPhone);
+      
+      // Connect to Channel Partner database (separate database named 'channelpartner')
+      const channelPartnerDB = mongoose.connection.useDb('channelpartner');
+      const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
+        phone: String,
+        credits: Number,
+        creditsHistory: [{
+          type: String,
+          amount: Number,
+          description: String,
+          date: Date
+        }]
+      }));
+
+      let user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
+      
+      // If not found, try without country code prefix
+      if (!user && uploaderPhone.startsWith('+91')) {
+        const phoneWithoutPrefix = uploaderPhone.substring(3);
+        console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
+        user = await ChannelPartnerUser.findOne({ phone: phoneWithoutPrefix });
+      }
+      
+      // If still not found, try WITH country code prefix
+      if (!user && !uploaderPhone.startsWith('+')) {
+        const phoneWithPrefix = '+91' + uploaderPhone;
+        console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
+        user = await ChannelPartnerUser.findOne({ phone: phoneWithPrefix });
+      }
+      
+      console.log('👤 Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
+      
+      if (!user) {
+        // Try to find any user to see what's in the database
+        const allUsers = await ChannelPartnerUser.find({}).limit(5);
+        console.log('📋 Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
+        return res.status(404).json({ 
+          message: 'User not found. Please ensure you are logged in.',
+          searchedPhone: uploaderPhone,
+          hint: 'Check phone number format (+91XXXXXXXXXX or XXXXXXXXXX)'
+        });
+      }
+
+      const currentCredits = user.credits || 0;
+      
+      if (currentCredits < 1020) {
+        return res.status(400).json({ 
+          message: 'Insufficient credits. You need 1020 credits to create an ad.',
+          currentCredits: currentCredits,
+          required: 1020
+        });
+      }
+
+      // Deduct 1020 credits
+      user.credits = currentCredits - 1020;
+      user.creditsHistory = user.creditsHistory || [];
+      (user.creditsHistory as any).push({
+        type: 'deduction',
+        amount: -1020,
+        description: `Ad creation: ${title}`,
+        date: new Date()
+      });
+      await user.save();
+
+      console.log(`✅ Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
 
       // Upload images to GridFS
       const db = mongoose.connection.db;
@@ -135,15 +203,20 @@ router.post(
 
       await ad.save();
 
-      console.log(`✅ Ad created with pending status (no credit charge):`, {
+      console.log(`✅ Ad created with pending status (1020 credits deducted):`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
-        status: ad.status
+        status: ad.status,
+        creditsDeducted: 1020
       });
 
       res.status(201).json({
-        message: 'Ad uploaded successfully. Awaiting admin approval.',
+        message: 'Ad submitted successfully! 1020 credits deducted. Admin will review your ad. You will need to pay ₹180 after approval.',
+        creditsDeducted: 1020,
+        remainingCredits: user.credits,
+        cashPaymentRequired: 180,
+        totalCost: '1020 credits + ₹180 cash',
         ad: {
           id: ad._id,
           title: ad.title,
