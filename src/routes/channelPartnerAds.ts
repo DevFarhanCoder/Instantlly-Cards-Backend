@@ -73,8 +73,8 @@ router.post(
       // We need to connect to Channel Partner database to check/deduct credits
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
       
-      // Connect to Channel Partner database
-      const channelPartnerDB = mongoose.connection.useDb('instantllycards');
+      // Connect to Channel Partner database (separate database named 'channelpartner')
+      const channelPartnerDB = mongoose.connection.useDb('channelpartner');
       const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
         phone: String,
         credits: Number,
