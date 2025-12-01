@@ -61,8 +61,8 @@ router.get("/my-ads", async (req: Request, res: Response) => {
 
     console.log(`✅ Found ${ads.length} ads for user ${phone}`);
 
-    // Transform ads to include image URLs
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    // Transform ads to include image URLs (AWS Cloud primary)
+    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
     const adsWithUrls = ads.map((ad: any) => ({
       ...ad,
       _id: ad._id.toString(),
@@ -161,7 +161,8 @@ router.get("/active", async (req: Request, res: Response) => {
       hasFullscreenImage: !!ad.fullscreenImageGridFS
     }));
 
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    // AWS Cloud (Primary) - Render backup handled by client
+    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
 
     // 🔍 LOG: Response preparation
     console.log('🔧 [STEP 4] Preparing Response');
@@ -635,8 +636,8 @@ router.get("/my-ads", async (req: Request, res: Response) => {
 
     console.log(`✅ Found ${ads.length} ads for user ${phoneNumber}`);
 
-    // Transform ads to include proper image URLs
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    // Transform ads to include proper image URLs (AWS Cloud primary)
+    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
     const adsWithImageUrls = ads.map((ad: any) => {
       const adId = ad._id.toString();
       return {
@@ -778,8 +779,8 @@ router.get("/", async (req: Request, res: Response) => {
 
     console.log(`✅ Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
 
-    // Transform ads to include proper image URLs for admin dashboard
-    const imageBaseUrl = process.env.API_BASE_URL || "https://instantlly-cards-backend-6ki0.onrender.com";
+    // Transform ads to include proper image URLs for admin dashboard (AWS Cloud primary)
+    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
     const adsWithImageUrls = ads.map((ad: any) => {
       try {
         const adId = ad._id.toString();
