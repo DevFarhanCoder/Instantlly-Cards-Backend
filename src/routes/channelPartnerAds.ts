@@ -88,7 +88,21 @@ router.post(
         }]
       }));
 
-      const user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
+      let user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
+      
+      // If not found, try without country code prefix
+      if (!user && uploaderPhone.startsWith('+91')) {
+        const phoneWithoutPrefix = uploaderPhone.substring(3);
+        console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
+        user = await ChannelPartnerUser.findOne({ phone: phoneWithoutPrefix });
+      }
+      
+      // If still not found, try WITH country code prefix
+      if (!user && !uploaderPhone.startsWith('+')) {
+        const phoneWithPrefix = '+91' + uploaderPhone;
+        console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
+        user = await ChannelPartnerUser.findOne({ phone: phoneWithPrefix });
+      }
       
       console.log('👤 Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
       
@@ -98,7 +112,8 @@ router.post(
         console.log('📋 Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
         return res.status(404).json({ 
           message: 'User not found. Please ensure you are logged in.',
-          searchedPhone: uploaderPhone
+          searchedPhone: uploaderPhone,
+          hint: 'Check phone number format (+91XXXXXXXXXX or XXXXXXXXXX)'
         });
       }
 
