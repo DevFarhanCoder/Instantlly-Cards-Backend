@@ -73,6 +73,8 @@ router.post(
       // We need to connect to Channel Partner database to check/deduct credits
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
       
+      console.log('🔍 Looking for user with phone:', uploaderPhone);
+      
       // Connect to Channel Partner database (separate database named 'channelpartner')
       const channelPartnerDB = mongoose.connection.useDb('channelpartner');
       const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
@@ -88,8 +90,16 @@ router.post(
 
       const user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
       
+      console.log('👤 Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
+      
       if (!user) {
-        return res.status(404).json({ message: 'User not found. Please ensure you are logged in.' });
+        // Try to find any user to see what's in the database
+        const allUsers = await ChannelPartnerUser.find({}).limit(5);
+        console.log('📋 Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
+        return res.status(404).json({ 
+          message: 'User not found. Please ensure you are logged in.',
+          searchedPhone: uploaderPhone
+        });
       }
 
       const currentCredits = user.credits || 0;
