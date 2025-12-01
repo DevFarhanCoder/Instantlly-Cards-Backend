@@ -382,6 +382,41 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
     session.status = "sharing";
     await session.save();
 
+    // ========================================
+    // MAP TEMPORARY USER IDs TO MONGODB _IDs
+    // ========================================
+    // Build a map: tempUserId -> mongoUserId (string)
+    const userIdMap = new Map<string, string>();
+    
+    console.log(`🔄 Mapping ${session.participants.length} participant user IDs to MongoDB _ids...`);
+    
+    for (const participant of session.participants) {
+      const tempUserId = participant.userId;
+      
+      // Check if it's already a valid MongoDB ObjectId
+      if (mongoose.Types.ObjectId.isValid(tempUserId) && tempUserId.length === 24) {
+        userIdMap.set(tempUserId, tempUserId); // Already a real MongoDB ID
+        console.log(`✅ ${participant.userName}: Already using MongoDB _id`);
+      } else {
+        // It's a temporary ID like "user_1764574336254", lookup by phone
+        if (participant.userPhone) {
+          const user = await User.findOne({ phone: participant.userPhone });
+          if (user) {
+            userIdMap.set(tempUserId, user._id.toString());
+            console.log(`✅ ${participant.userName}: Mapped ${tempUserId} → ${user._id}`);
+          } else {
+            console.warn(`⚠️ ${participant.userName}: No MongoDB user found for phone ${participant.userPhone}`);
+            userIdMap.set(tempUserId, tempUserId); // Fallback to temp ID
+          }
+        } else {
+          console.warn(`⚠️ ${participant.userName}: No phone number available for lookup`);
+          userIdMap.set(tempUserId, tempUserId); // Fallback to temp ID
+        }
+      }
+    }
+    
+    console.log(`✅ User ID mapping complete. Mapped ${userIdMap.size} users.`);
+
     // FLOW SPLIT: Create Group vs Quit Sharing
     let group: any = null;
     let groupId: mongoose.Types.ObjectId | null = null;
@@ -525,6 +560,62 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
               groupName: groupName.trim()
             });
 
+            // IMPORTANT: Also add to SharedCard batch for Sent/Received sections
+            // This ensures cards appear in both the group AND in individual Sent/Received tabs
+            for (const toParticipant of recipientsToShareWith) {
+              const toUserId = toParticipant.userId;
+
+              // Skip if it's the same user (sender)
+              if (toUserId === fromUserId) continue;
+
+              // Check for duplicates before adding to tracking
+              const existingShare = await CardShare.findOne({
+                fromUserId,
+                toUserId,
+                cardId
+              });
+
+              if (existingShare) {
+                console.log(`⚠️ Duplicate (group): Card ${cardId} already shared from ${fromUserId} to ${toUserId}`);
+                duplicates.push({
+                  fromUserId: fromUserId,
+                  fromUserName: fromParticipant.userName,
+                  toUserId: toUserId,
+                  toUserName: toParticipant.userName,
+                  cardId: cardId.toString(),
+                  reason: "Already shared previously"
+                });
+                continue;
+              }
+
+              // Add to peer cards batch for Sent/Received visibility
+              // IMPORTANT: Use MongoDB _ids instead of temporary session IDs
+              const mongoSenderId = userIdMap.get(fromUserId) || fromUserId;
+              const mongoRecipientId = userIdMap.get(toUserId) || toUserId;
+              
+              peerCardsBatch.push({
+                cardId,
+                senderId: mongoSenderId,
+                recipientId: mongoRecipientId,
+                message: `Shared in group: ${groupName.trim()}`,
+                status: 'sent',
+                sentAt: new Date(),
+                cardTitle: card.name,
+                senderName: fromParticipant.userName,
+                recipientName: toParticipant.userName,
+                groupId, // Link to group for reference
+                groupName: groupName.trim()
+              });
+
+              // Add to tracking batch
+              cardShareBatch.push({
+                sessionId: session._id,
+                fromUserId,
+                toUserId,
+                cardId
+              });
+            }
+
             results.push({
               fromUserId: fromUserId,
               fromUserName: fromParticipant.userName,
@@ -561,10 +652,14 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
               }
 
               // Add to peer cards batch
+              // IMPORTANT: Use MongoDB _ids instead of temporary session IDs
+              const mongoSenderId = userIdMap.get(fromUserId) || fromUserId;
+              const mongoRecipientId = userIdMap.get(toUserId) || toUserId;
+              
               peerCardsBatch.push({
                 cardId,
-                senderId: fromUserId,
-                recipientId: toUserId,
+                senderId: mongoSenderId,
+                recipientId: mongoRecipientId,
                 message: `Shared via Group Sharing session ${session.code}`,
                 status: 'sent',
                 sentAt: new Date(),

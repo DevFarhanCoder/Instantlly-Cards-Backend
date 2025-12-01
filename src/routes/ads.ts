@@ -864,10 +864,10 @@ router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
   }
 });
 
-// GET /api/ads - Get all ads (admin) with pagination and filtering
-router.get("/", async (req: AdminAuthReq, res: Response) => {
+// GET /api/ads - Get all ads with pagination and filtering (NO AUTH REQUIRED for Channel Partner Admin)
+router.get("/", async (req: Request, res: Response) => {
   try {
-    console.log('📊 Admin GET /api/ads - Request received');
+    console.log('📊 GET /api/ads - Request received (No auth required)');
     
     // SCALABILITY: Pagination parameters
     const page = parseInt(req.query.page as string) || 1;
@@ -977,8 +977,8 @@ router.get("/", async (req: AdminAuthReq, res: Response) => {
   }
 });
 
-// GET /api/ads/:id - Get single ad (admin)
-router.get("/:id", async (req: AdminAuthReq, res: Response) => {
+// GET /api/ads/:id - Get single ad (NO AUTH REQUIRED)
+router.get("/:id", async (req: Request, res: Response) => {
   try {
     const ad = await Ad.findById(req.params.id).lean();
 
