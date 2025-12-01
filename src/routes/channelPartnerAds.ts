@@ -194,7 +194,7 @@ router.post(
         startDate: start,
         endDate: end,
         status: 'pending', // Requires admin approval
-        uploadedBy: req.channelPartnerPhone || 'unknown',
+        uploadedBy: uploaderPhone, // Use actual uploader phone for filtering
         uploaderName: uploaderName || 'Channel Partner',
         priority: priority ? parseInt(priority) : 1, // Lower priority for channel partner ads
         clicks: 0,
