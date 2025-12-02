@@ -21,6 +21,8 @@ const UserSchema = new Schema(
     email: { type: String },
     profilePicture: { type: String, default: "" },
     about: { type: String, default: "Available" },
+    birthdate: { type: Date, default: null },
+    anniversary: { type: Date, default: null },
     pushToken: { type: String },
     platform: { type: String },
     pushTokenUpdatedAt: { type: Date },

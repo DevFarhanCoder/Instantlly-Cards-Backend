@@ -586,6 +586,8 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
       about: (user as any).about || "Available",
+      birthdate: (user as any).birthdate || null,
+      anniversary: (user as any).anniversary || null,
       credits: (user as any).credits || 0,
       creditsExpiryDate: (user as any).creditsExpiryDate,
       referralCode: (user as any).referralCode
@@ -606,7 +608,7 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
 // PUT /api/auth/update-profile - Update user profile (including Base64 profile picture)
 router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { name, phone, about, profilePicture } = req.body;
+    const { name, phone, about, profilePicture, birthdate, anniversary } = req.body;
     const userId = req.userId;
 
     console.log('📝 Update profile request:', {
@@ -615,6 +617,8 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       hasPhone: !!phone,
       hasAbout: !!about,
       hasProfilePicture: !!profilePicture,
+      hasBirthdate: !!birthdate,
+      hasAnniversary: !!anniversary,
       profilePictureLength: profilePicture?.length,
       profilePicturePrefix: profilePicture?.substring(0, 30)
     });
@@ -622,6 +626,8 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (about !== undefined) updateData.about = about;
+    if (birthdate !== undefined) updateData.birthdate = birthdate ? new Date(birthdate) : null;
+    if (anniversary !== undefined) updateData.anniversary = anniversary ? new Date(anniversary) : null;
     
     // Handle Base64 profile picture
     if (profilePicture !== undefined) {
@@ -713,6 +719,8 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       phone: user.phone || "",
       profilePicture: user.profilePicture || "",
       about: (user as any).about || "Available",
+      birthdate: (user as any).birthdate || null,
+      anniversary: (user as any).anniversary || null,
     });
   } catch (error) {
     console.error("UPDATE PROFILE ERROR", error);
@@ -1010,6 +1018,43 @@ router.post("/verify-otp", async (req, res) => {
 });
 
 // POST /api/auth/change-password - Change password for authenticated user
+router.post("/change-password", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body ?? {};
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ message: 'Old password and new password are required' });
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    }
+
+    // Load user with password
+    const user = await User.findById(req.userId).select('+password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (!user.password) {
+      return res.status(400).json({ message: 'No existing password set for this account' });
+    }
+
+    const match = await bcrypt.compare(oldPassword, user.password);
+    if (!match) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 12);
+    user.password = hashed;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('CHANGE PASSWORD ERROR', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Also support POST for backward compatibility
 router.post("/change-password", requireAuth, async (req: AuthReq, res) => {
   try {
     const { oldPassword, newPassword } = req.body ?? {};
