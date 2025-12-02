@@ -588,7 +588,10 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       about: (user as any).about || "Available",
       credits: (user as any).credits || 0,
       creditsExpiryDate: (user as any).creditsExpiryDate,
-      referralCode: (user as any).referralCode
+      referralCode: (user as any).referralCode,
+      gender: (user as any).gender,
+      birthdate: (user as any).birthdate,
+      anniversary: (user as any).anniversary
     };
     
     console.log("Sending profile data:", profileData);
@@ -606,7 +609,7 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
 // PUT /api/auth/update-profile - Update user profile (including Base64 profile picture)
 router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { name, phone, about, profilePicture } = req.body;
+    const { name, phone, about, profilePicture, birthdate, anniversary, gender } = req.body;
     const userId = req.userId;
 
     console.log('📝 Update profile request:', {
@@ -615,6 +618,9 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       hasPhone: !!phone,
       hasAbout: !!about,
       hasProfilePicture: !!profilePicture,
+      hasBirthdate: !!birthdate,
+      hasAnniversary: !!anniversary,
+      hasGender: !!gender,
       profilePictureLength: profilePicture?.length,
       profilePicturePrefix: profilePicture?.substring(0, 30)
     });
@@ -622,6 +628,15 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (about !== undefined) updateData.about = about;
+    if (gender !== undefined) updateData.gender = gender;
+    
+    // Handle date fields
+    if (birthdate !== undefined) {
+      updateData.birthdate = birthdate ? new Date(birthdate) : null;
+    }
+    if (anniversary !== undefined) {
+      updateData.anniversary = anniversary ? new Date(anniversary) : null;
+    }
     
     // Handle Base64 profile picture
     if (profilePicture !== undefined) {
