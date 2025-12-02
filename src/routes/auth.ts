@@ -621,6 +621,9 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       hasBirthdate: !!birthdate,
       hasAnniversary: !!anniversary,
       hasGender: !!gender,
+      birthdateValue: birthdate,
+      anniversaryValue: anniversary,
+      genderValue: gender,
       profilePictureLength: profilePicture?.length,
       profilePicturePrefix: profilePicture?.substring(0, 30)
     });
@@ -632,11 +635,17 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
     
     // Handle date fields
     if (birthdate !== undefined) {
+      console.log('📅 Processing birthdate:', birthdate, 'Type:', typeof birthdate);
       updateData.birthdate = birthdate ? new Date(birthdate) : null;
+      console.log('📅 Converted birthdate to:', updateData.birthdate);
     }
     if (anniversary !== undefined) {
+      console.log('💍 Processing anniversary:', anniversary, 'Type:', typeof anniversary);
       updateData.anniversary = anniversary ? new Date(anniversary) : null;
+      console.log('💍 Converted anniversary to:', updateData.anniversary);
     }
+    
+    console.log('💾 Final updateData:', updateData);
     
     // Handle Base64 profile picture
     if (profilePicture !== undefined) {
