@@ -668,55 +668,6 @@ router.get("/my-ads", async (req: Request, res: Response) => {
   }
 });
 
-// ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
-
-router.use(requireAdminAuth);
-
-// GET /api/ads/analytics/summary - Get analytics summary (admin)
-// MUST be before /:id route to avoid matching "analytics" as an id
-router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
-  try {
-    const totalAds = await Ad.countDocuments();
-    const now = new Date();
-    const activeAds = await Ad.countDocuments({
-      startDate: { $lte: now },
-      endDate: { $gte: now }
-    });
-    
-    const analytics = await Ad.aggregate([
-      {
-        $group: {
-          _id: null,
-          totalImpressions: { $sum: "$impressions" },
-          totalClicks: { $sum: "$clicks" }
-        }
-      }
-    ]);
-
-    const summary = {
-      totalAds,
-      activeAds,
-      expiredAds: totalAds - activeAds,
-      totalImpressions: analytics[0]?.totalImpressions || 0,
-      totalClicks: analytics[0]?.totalClicks || 0,
-      clickThroughRate: analytics[0]?.totalImpressions > 0
-        ? ((analytics[0]?.totalClicks / analytics[0]?.totalImpressions) * 100).toFixed(2)
-        : 0
-    };
-
-    res.json({
-      success: true,
-      data: summary
-    });
-  } catch (error) {
-    console.error("GET ANALYTICS ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch analytics"
-    });
-  }
-});
-
 // GET /api/ads - Get all ads with pagination and filtering (NO AUTH REQUIRED for Channel Partner Admin)
 router.get("/", async (req: Request, res: Response) => {
   try {
@@ -826,6 +777,55 @@ router.get("/", async (req: Request, res: Response) => {
       success: false,
       message: "Failed to fetch ads",
       error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
+
+router.use(requireAdminAuth);
+
+// GET /api/ads/analytics/summary - Get analytics summary (admin)
+// MUST be before /:id route to avoid matching "analytics" as an id
+router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
+  try {
+    const totalAds = await Ad.countDocuments();
+    const now = new Date();
+    const activeAds = await Ad.countDocuments({
+      startDate: { $lte: now },
+      endDate: { $gte: now }
+    });
+    
+    const analytics = await Ad.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalImpressions: { $sum: "$impressions" },
+          totalClicks: { $sum: "$clicks" }
+        }
+      }
+    ]);
+
+    const summary = {
+      totalAds,
+      activeAds,
+      expiredAds: totalAds - activeAds,
+      totalImpressions: analytics[0]?.totalImpressions || 0,
+      totalClicks: analytics[0]?.totalClicks || 0,
+      clickThroughRate: analytics[0]?.totalImpressions > 0
+        ? ((analytics[0]?.totalClicks / analytics[0]?.totalImpressions) * 100).toFixed(2)
+        : 0
+    };
+
+    res.json({
+      success: true,
+      data: summary
+    });
+  } catch (error) {
+    console.error("GET ANALYTICS ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch analytics"
     });
   }
 });
