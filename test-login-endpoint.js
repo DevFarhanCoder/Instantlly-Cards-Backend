@@ -2,7 +2,7 @@
 // Quick test script to verify the login endpoint is working
 // Usage: node test-login-endpoint.js
 
-const BASE_URL = process.env.API_URL || 'https://instantlly-cards-backend-6ki0.onrender.com';
+const BASE_URL = process.env.API_URL || 'https://api.instantllycards.com';
 
 async function testLogin(phone, password) {
   console.log(`\n🧪 Testing login with phone: ${phone}`);

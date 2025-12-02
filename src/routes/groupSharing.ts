@@ -460,6 +460,38 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
     const peerCardsBatch: any[] = []; // For SharedCard.insertMany()
     const cardShareBatch: any[] = []; // For CardShare tracking
 
+    // 🔑 BUILD USER ID MAPPING: Map temporary session IDs to real MongoDB User._id
+    console.log("🔑 Building user ID mapping for SharedCard records...");
+    const userIdMap = new Map<string, string>();
+    
+    for (const participant of session.participants) {
+      const tempUserId = participant.userId;
+      
+      // Check if it's already a valid MongoDB ObjectId
+      if (mongoose.Types.ObjectId.isValid(tempUserId) && tempUserId.length === 24) {
+        userIdMap.set(tempUserId, tempUserId); // Already a real MongoDB ID
+        console.log(`✅ ${participant.userName}: Already real MongoDB ID ${tempUserId}`);
+      } else {
+        // For temporary userIds like "user_1764574336254", lookup User by phone
+        if (participant.userPhone) {
+          const user = await User.findOne({ phone: participant.userPhone });
+          if (user) {
+            userIdMap.set(tempUserId, user._id.toString());
+            console.log(`✅ ${participant.userName}: Mapped ${tempUserId} → ${user._id}`);
+          } else {
+            console.warn(`⚠️ ${participant.userName}: Could not find User for ${tempUserId}, phone: ${participant.userPhone}`);
+            // Fallback: use temporary ID (will cause issues in frontend queries)
+            userIdMap.set(tempUserId, tempUserId);
+          }
+        } else {
+          console.warn(`⚠️ ${participant.userName}: No phone number for mapping ${tempUserId}`);
+          userIdMap.set(tempUserId, tempUserId);
+        }
+      }
+    }
+    
+    console.log(`✅ User ID mapping complete: ${userIdMap.size} users mapped`);
+
     // For each participant
     for (const fromParticipant of session.participants) {
       const fromUserId = fromParticipant.userId;
@@ -514,9 +546,12 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
 
           if (groupId) {
             // FLOW 1: GROUP SHARING - Add to GroupSharedCard batch
+            // 🔑 Map temporary session ID to real MongoDB User._id
+            const mongoSenderId = userIdMap.get(fromUserId) || fromUserId;
+            
             groupCardsBatch.push({
               cardId,
-              senderId: fromUserId,
+              senderId: mongoSenderId,  // ✅ Use real MongoDB User._id
               groupId,
               message: `Shared via Group Sharing session ${session.code}`,
               sentAt: new Date(),
@@ -560,11 +595,15 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
                 continue;
               }
 
+              // 🔑 Map temporary session IDs to real MongoDB User._id for SharedCard
+              const mongoSenderId = userIdMap.get(fromUserId) || fromUserId;
+              const mongoRecipientId = userIdMap.get(toUserId) || toUserId;
+              
               // Add to peer cards batch
               peerCardsBatch.push({
                 cardId,
-                senderId: fromUserId,
-                recipientId: toUserId,
+                senderId: mongoSenderId,        // ✅ Use real MongoDB User._id
+                recipientId: mongoRecipientId,  // ✅ Use real MongoDB User._id
                 message: `Shared via Group Sharing session ${session.code}`,
                 status: 'sent',
                 sentAt: new Date(),
