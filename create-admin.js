@@ -1,7 +1,9 @@
 // Script to create an admin user
 const axios = require('axios');
 
-const API_BASE = process.env.API_BASE || 'https://instantlly-cards-backend-6ki0.onrender.com';
+// AWS Cloud (Primary)
+const API_BASE = process.env.API_BASE || 'https://api.instantllycards.com';
+const BACKUP_API = 'https://instantlly-cards-backend-6ki0.onrender.com';
 
 async function createAdmin() {
   try {

@@ -7,7 +7,7 @@ async function testAdsEndpoint() {
     // First, login as admin to get a valid token
     console.log('🔐 Logging in as admin...');
     const loginResponse = await axios.post(
-      'https://instantlly-cards-backend-6ki0.onrender.com/api/admin-auth/login',
+      'https://api.instantllycards.com/api/admin-auth/login',
       {
         username: 'admin',
         password: process.env.ADMIN_PASSWORD || 'Admin@123'
@@ -21,7 +21,7 @@ async function testAdsEndpoint() {
     // Now test the /api/ads endpoint
     console.log('\n📊 Testing GET /api/ads...');
     const adsResponse = await axios.get(
-      'https://instantlly-cards-backend-6ki0.onrender.com/api/ads',
+      'https://api.instantllycards.com/api/ads',
       {
         headers: {
           'Authorization': `Bearer ${token}`

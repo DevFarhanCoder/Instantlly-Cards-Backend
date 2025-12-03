@@ -5,7 +5,7 @@ async function testLiveAPI() {
     console.log('🌐 TESTING LIVE API ENDPOINTS\n');
     
     // This is likely Rajesh's token from the logs
-    const baseURL = 'https://instantlly-cards-backend-6ki0.onrender.com/api';
+    const baseURL = 'https://api.instantllycards.com/api';
     
     // Test without auth first to see basic connectivity
     console.log('1️⃣ Testing basic connectivity...');
