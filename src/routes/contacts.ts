@@ -6,6 +6,18 @@ import Notification from "../models/Notification";
 
 const router = express.Router();
 
+
+router.get("/count", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    const total = await Contact.countDocuments({ userId });
+    res.status(200).json({ total });
+  } catch (error) {
+    console.error("Error counting contacts:", error);
+    res.status(500).json({ error: "Failed to count contacts" });
+  }
+});
+
 // Helper function to create notifications when a contact joins the app
 const createContactJoinedNotification = async (userId: string, contactName: string, contactUserId: string) => {
   try {
@@ -100,6 +112,9 @@ router.post("/sync", requireAuth, async (req: AuthReq, res) => {
     res.status(500).json({ error: "Failed to sync contacts" });
   }
 });
+
+// Get total number of contacts for the authenticated user
+
 
 // Get app users from synced contacts
 router.get("/app-users", requireAuth, async (req: AuthReq, res) => {
@@ -353,6 +368,8 @@ router.post("/sync-incremental", requireAuth, async (req: AuthReq, res) => {
     res.status(500).json({ error: "Failed to perform incremental sync" });
   }
 });
+
+
 
 // Get all stored contacts for the user (with pagination for large contact lists) - OPTIMIZED WITH CACHING
 router.get("/all", requireAuth, async (req: AuthReq, res) => {
