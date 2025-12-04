@@ -483,7 +483,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     await ad.deleteOne();
 
-    console.log(`✅ Deleted pending ad: ${id} by ${req.channelPartnerPhone}`);
+    console.log(`✅ Deleted pending ad: ${id}`);
+
 
     res.json({ message: 'Ad deleted successfully' });
   } catch (error) {
