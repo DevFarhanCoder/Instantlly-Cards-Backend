@@ -20,11 +20,26 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
     const groups = await Group.find({
       members: new Types.ObjectId(userId)
     }).populate('members', 'name phone profilePicture')
-      .populate('admin', 'name phone');
+      .populate('admin', 'name phone')
+      .populate('adminTransferInfo.previousAdmin', 'name');
+
+    // Add transfer info for new admins
+    const groupsWithTransferInfo = groups.map(group => {
+      const groupObj = group.toObject();
+      
+      // If current user is the admin and there's unseen transfer info
+      if (groupObj.admin._id && groupObj.admin._id.toString() === userId && 
+          groupObj.adminTransferInfo && !groupObj.adminTransferInfo.seen) {
+        groupObj.adminTransferredBy = groupObj.adminTransferInfo.previousAdmin?.name || 'Someone';
+        groupObj.showAdminTransfer = true;
+      }
+      
+      return groupObj;
+    });
 
     res.json({
       success: true,
-      groups
+      groups: groupsWithTransferInfo
     });
   } catch (error) {
     console.error('Get groups error:', error);
@@ -260,7 +275,12 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
       return res.status(400).json({ error: 'New admin must be a member of the group' });
     }
 
-    // Transfer admin rights
+    // Transfer admin rights and store transfer info
+    group.adminTransferInfo = {
+      previousAdmin: new Types.ObjectId(userId),
+      transferredAt: new Date(),
+      seen: false
+    };
     group.admin = new Types.ObjectId(newAdminId);
     group.updatedAt = new Date();
     await group.save();
@@ -305,6 +325,8 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
     res.json({
       success: true,
       message: `Admin rights transferred to ${newAdmin?.name}`,
+      transferredBy: currentAdmin?.name || 'Unknown',
+      isNewAdmin: userId !== newAdminId, // true if the requester is NOT the new admin
       group: await Group.findById(groupId)
         .populate('members', 'name phone profilePicture')
         .populate('admin', 'name phone')
@@ -312,6 +334,35 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
   } catch (error) {
     console.error('Transfer admin error:', error);
     res.status(500).json({ error: 'Failed to transfer admin rights' });
+  }
+});
+
+// PUT /api/groups/:id/mark-transfer-seen - Mark admin transfer notification as seen
+router.put('/:id/mark-transfer-seen', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Only the current admin can mark the transfer as seen
+    if (group.admin.toString() === userId && group.adminTransferInfo) {
+      group.adminTransferInfo.seen = true;
+      await group.save();
+      console.log(`✅ Marked admin transfer as seen for group: ${group.name}`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Mark transfer seen error:', error);
+    res.status(500).json({ error: 'Failed to mark transfer as seen' });
   }
 });
 
