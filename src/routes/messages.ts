@@ -134,7 +134,8 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ error: 'Sender not found' });
     }
 
-    // Store message temporarily for notification delivery tracking
+
+    // Store message in TempMessage for notification delivery tracking
     try {
       await TempMessage.create({
         senderId,
@@ -143,12 +144,32 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
         messageId,
         isDelivered: false
       });
-      
       console.log(`📦 Group message stored temporarily for notification tracking: ${messageId}`);
     } catch (dbError) {
       console.error('Failed to store temp group message:', dbError);
       // Continue with notification even if storage fails
     }
+
+    // Store message in Message collection for chat history
+    try {
+      const Message = require('../models/Message').default;
+      await Message.create({
+        sender: senderId,
+        groupId,
+        content: text.trim(),
+        messageType: 'text',
+        isRead: false,
+        isDelivered: false,
+        isPendingDelivery: false,
+        isDeleted: false,
+        localMessageId: messageId,
+        readBy: []
+      });
+      console.log(`💾 Group message persisted in Message collection: ${messageId}`);
+    } catch (dbError) {
+      console.error('Failed to store group message in Message collection:', dbError);
+    }
+
 
     // Prepare message data for Socket.IO
     const messageData = {
@@ -248,6 +269,41 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
   } catch (error) {
     console.error('Send group message error:', error);
     res.status(500).json({ error: 'Failed to send group message' });
+  }
+});
+
+router.get('/groupmessage/:groupId', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const { groupId } = req.params;
+    const currentUserId = req.userId;
+
+    if (!groupId) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    // Check if user is member of this group
+    const group = await mongoose.model('Group').findById(groupId);
+    if (!group || !group.members.includes(currentUserId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Fetch messages from Message collection
+    const Message = require('../models/Message').default;
+    const messages = await Message.find({
+      groupId: groupId,
+      isDeleted: false
+    })
+      .sort({ createdAt: 1 })
+      .populate('sender', 'name profilePicture email phone');
+
+    res.status(200).json({
+      success: true,
+      groupId,
+      messages
+    });
+  } catch (error) {
+    console.error('Error fetching group chat history:', error);
+    res.status(500).json({ error: 'Failed to fetch group chat history' });
   }
 });
 

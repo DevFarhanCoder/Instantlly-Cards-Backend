@@ -35,7 +35,7 @@ interface MessageData {
   receiverId?: string;
   groupId?: string;
   content: string;
-  messageType: 'text' | 'image' | 'file' | 'location';
+  messageType: 'text' | 'image' | 'file' | 'location' | 'system';
   localMessageId?: string;
   metadata?: {
     fileName?: string;
@@ -67,7 +67,7 @@ export class SocketService {
         });
 
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-        
+
         if (!token) {
           console.error('❌ Socket auth failed: No token provided');
           return next(new Error('Authentication error: No token provided'));
@@ -76,7 +76,7 @@ export class SocketService {
         console.log('🔑 Verifying JWT token for socket connection...');
         const jwtSecret = process.env.JWT_SECRET || 'your-secret-key';
         console.log('🔑 JWT Secret available:', !!jwtSecret, 'Length:', jwtSecret.length);
-        
+
         const decoded = jwt.verify(token, jwtSecret) as any;
         console.log('✅ JWT token decoded successfully:', { sub: decoded.sub, userId: decoded.userId });
 
@@ -108,7 +108,7 @@ export class SocketService {
   private setupSocketEvents() {
     this.io.on('connection', (socket: any) => {
       console.log(`User ${socket.user.name} connected with socket ${socket.id}`);
-      
+
       // Add user to online users
       this.handleUserJoin(socket);
 
@@ -210,7 +210,7 @@ export class SocketService {
     }));
 
     socket.emit('online_users', onlineUsersList);
-    
+
     // Deliver pending messages that were sent while user was offline
     try {
       const pendingMessages = await Message.find({
@@ -218,22 +218,22 @@ export class SocketService {
         isDelivered: false,
         isPendingDelivery: true
       }).populate('sender', 'name profilePicture email').sort({ createdAt: 1 });
-      
+
       console.log(`📬 Found ${pendingMessages.length} pending messages for user ${socket.user.name}`);
-      
+
       for (const message of pendingMessages) {
         // Send message to user
         socket.emit('new_message', {
           ...message.toObject(),
           conversationId: message.conversationId
         });
-        
+
         // Mark as delivered
         message.isDelivered = true;
         message.deliveredAt = new Date();
         message.isPendingDelivery = false;
         await message.save();
-        
+
         // Notify sender about delivery
         const senderId = message.sender && typeof message.sender === 'object' ? message.sender._id : message.sender;
         const senderSocket = this.onlineUsers.get(senderId?.toString() || '');
@@ -245,7 +245,7 @@ export class SocketService {
             deliveredAt: message.deliveredAt
           });
         }
-        
+
         console.log(`✅ Delivered pending message ${message._id} to ${socket.user.name}`);
       }
     } catch (error) {
@@ -261,11 +261,13 @@ export class SocketService {
       }
 
       // Find or create conversation
-      const chat = await Chat.findOrCreateConversation(data.senderId, data.receiverId);
-      
+      const senderId = socket.userId;
+      const receiverId = data.receiverId;
+      const chat = await Chat.findOrCreateConversation(senderId, data.receiverId);
+
       // Create message
       const message = new Message({
-        sender: data.senderId,
+        sender: senderId,
         receiver: data.receiverId,
         content: data.content,
         messageType: data.messageType,
@@ -295,7 +297,7 @@ export class SocketService {
         message.deliveredAt = new Date();
         message.isPendingDelivery = false;
         await message.save();
-        
+
         // Emit delivered status to sender
         this.io.to(socket.id).emit('message_delivered', {
           messageId: message._id?.toString(),
@@ -332,14 +334,22 @@ export class SocketService {
 
       // Verify user is member of group
       const group = await Group.findById(data.groupId);
-      if (!group || !group.members.includes(new mongoose.Types.ObjectId(data.senderId))) {
+      if (!group) {
+        socket.emit('error', { message: 'Group not found' });
+        return;
+      }
+      const senderId = socket.userId;
+      const isMember = Array.isArray(group.members) && group.members.some(
+        (m: any) => m.toString() === senderId
+      );
+      if (!isMember) {
         socket.emit('error', { message: 'You are not a member of this group' });
         return;
       }
 
       // Create message
       const message = new Message({
-        sender: data.senderId,
+        sender: senderId,
         groupId: data.groupId,
         content: data.content,
         messageType: data.messageType,
@@ -348,9 +358,14 @@ export class SocketService {
       });
 
       await message.save();
-      if (group.updateLastMessage) {
-        await group.updateLastMessage(message._id?.toString() || '');
+
+      if ((group as any).updateLastMessage) {
+        await (group as any).updateLastMessage(message._id?.toString() || '');
       }
+      // Agar static hai to aise:
+      // if ((Group as any).updateLastMessage) {
+      //   await (Group as any).updateLastMessage(group._id.toString(), message._id.toString());
+      // }
 
       // Populate sender info
       await message.populate('sender', 'name profilePicture email');
@@ -363,11 +378,10 @@ export class SocketService {
 
       for (const memberId of group.members) {
         const memberIdStr = memberId.toString();
-        if (memberIdStr !== data.senderId) { // Don't send to sender
+        if (memberIdStr !== senderId) { // Don't send to sender
           const memberSocket = this.onlineUsers.get(memberIdStr);
           if (memberSocket) {
             this.io.to(memberSocket.socketId).emit('new_group_message', messageData);
-            this.io.to(memberSocket.socketId).emit('new_message', messageData); // Also emit general message event
           }
         }
       }
@@ -379,10 +393,10 @@ export class SocketService {
       });
 
       // Update group unread counts for offline members
-      const offlineMembers = group.members.filter(memberId => 
-        memberId.toString() !== data.senderId && !this.onlineUsers.has(memberId.toString())
+      const offlineMembers = group.members.filter(memberId =>
+        memberId.toString() !== senderId && !this.onlineUsers.has(memberId.toString())
       );
-      
+
       if (offlineMembers.length > 0) {
         // Increment unread count for offline members
         try {
@@ -531,7 +545,7 @@ export class SocketService {
 
   private handleUserDisconnect(socket: any) {
     console.log(`User ${socket.user?.name} disconnected`);
-    
+
     // Remove from online users
     this.onlineUsers.delete(socket.userId);
 
@@ -550,7 +564,7 @@ export class SocketService {
   }
 
   // Public method to send push notification
-  public async sendPushNotification(userId: string, message: any, type: 'message' | 'group_message') {
+  public async sendPushNotification(userId: string, message: any, type: 'message' | 'new_group_message') {
     // Implementation for push notifications
     // This would integrate with your existing push notification service
     console.log(`Sending push notification to ${userId}:`, { message, type });
@@ -570,7 +584,7 @@ export class SocketService {
   private async handleInitiateGroupCall(socket: any, data: { groupId: string; callType: 'audio' | 'video' }) {
     try {
       console.log(`📞 ${socket.user.name} initiating ${data.callType} call in group ${data.groupId}`);
-      
+
       // Verify user is member of group
       const group = await Group.findById(data.groupId);
       if (!group || !group.members.includes(new mongoose.Types.ObjectId(socket.userId))) {
@@ -635,7 +649,7 @@ export class SocketService {
   private async handleJoinGroupCall(socket: any, data: { groupId: string; callId: string }) {
     try {
       console.log(`📞 ${socket.user.name} joining group call ${data.callId}`);
-      
+
       // Join call room
       socket.join(`call_${data.callId}`);
 
@@ -669,7 +683,7 @@ export class SocketService {
   private async handleLeaveGroupCall(socket: any, data: { groupId: string; callId: string }) {
     try {
       console.log(`📞 ${socket.user.name} leaving group call ${data.callId}`);
-      
+
       // Leave call room
       socket.leave(`call_${data.callId}`);
 
@@ -696,9 +710,9 @@ export class SocketService {
   private async handleEndGroupCall(socket: any, data: { groupId: string; callId: string }) {
     try {
       console.log(`📞 ${socket.user.name} ending group call ${data.callId}`);
-      
+
       // Verify user has permission to end call (admin or initiator check would go here)
-      
+
       // Notify all participants that call is ending
       this.io.to(`call_${data.callId}`).emit('group_call_ended', {
         callId: data.callId,
