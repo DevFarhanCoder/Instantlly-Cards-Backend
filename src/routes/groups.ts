@@ -25,12 +25,13 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
 
     // Add transfer info for new admins
     const groupsWithTransferInfo = groups.map(group => {
-      const groupObj = group.toObject();
+      const groupObj: any = group.toObject();
       
       // If current user is the admin and there's unseen transfer info
-      if (groupObj.admin._id && groupObj.admin._id.toString() === userId && 
+      if (groupObj.admin?._id && groupObj.admin._id.toString() === userId && 
           groupObj.adminTransferInfo && !groupObj.adminTransferInfo.seen) {
-        groupObj.adminTransferredBy = groupObj.adminTransferInfo.previousAdmin?.name || 'Someone';
+        const previousAdmin: any = groupObj.adminTransferInfo.previousAdmin;
+        groupObj.adminTransferredBy = previousAdmin?.name || 'Someone';
         groupObj.showAdminTransfer = true;
       }
       
