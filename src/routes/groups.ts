@@ -271,6 +271,22 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
 
     console.log(`✅ Admin transferred from ${currentAdmin?.name} to ${newAdmin?.name} in group ${group.name}`);
 
+    // Send Socket.IO notification to new admin
+    const io = (req as any).io;
+    if (io && newAdmin && group._id) {
+      const notification = {
+        type: 'admin_transfer',
+        groupId: String(group._id),
+        groupName: group.name,
+        fromUser: currentAdmin?.name || 'Unknown',
+        message: `You are now the admin of "${group.name}"`,
+        timestamp: new Date().toISOString()
+      };
+      
+      io.to(newAdminId).emit('admin_transferred', notification);
+      console.log(`🔔 Sent admin transfer notification to ${newAdmin.name}`);
+    }
+
     res.json({
       success: true,
       message: `Admin rights transferred to ${newAdmin?.name}`,
