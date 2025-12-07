@@ -12,263 +12,32 @@ const router = Router();
 // Simple rate limiting to prevent accidental spam
 const uploadAttempts = new Map<string, { count: number; resetTime: number }>();
 
-});
-
-// Ensure public ad routes are before admin auth middleware
-// GET /api/ads - Get all ads with pagination and filtering (NO AUTH REQUIRED for Channel Partner Admin)
-router.get("/", async (req: Request, res: Response) => {
-  try {
-    console.log('📊 GET /api/ads - Request received (No auth required)');
-    
-    // SCALABILITY: Pagination parameters
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Max 100 per page
-    const skip = (page - 1) * limit;
-    
-    // SCALABILITY: Filtering options
-    const filter: any = {};
-    
-    // IMPORTANT: Only show approved ads by default (for web dashboard)
-    // Admin dashboard can override this by passing approvalStatus=all
-    if (req.query.approvalStatus === 'all') {
-      // Show all ads regardless of approval status (for admin review)
-      // Don't add status filter
-    } else if (req.query.approvalStatus === 'pending') {
-      filter.status = 'pending';
-    } else if (req.query.approvalStatus === 'rejected') {
-      filter.status = 'rejected';
-    } else {
-      // Default: only show approved ads (for public web display)
-      filter.status = 'approved';
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of uploadAttempts.entries()) {
+    if (value.resetTime < now) {
+      uploadAttempts.delete(key);
     }
-    
-    // Filter by status (active/expired/all)
-    if (req.query.status === 'active') {
-      const now = new Date();
-      filter.startDate = { $lte: now };
-      filter.endDate = { $gte: now };
-    } else if (req.query.status === 'expired') {
-      filter.endDate = { $lt: new Date() };
-    } else if (req.query.status === 'upcoming') {
-      filter.startDate = { $gt: new Date() };
-    }
-    
-    // Filter by search term (title or phone)
-    if (req.query.search) {
-      const searchTerm = req.query.search as string;
-      filter.$or = [
-        { title: { $regex: searchTerm, $options: 'i' } },
-        { phoneNumber: { $regex: searchTerm, $options: 'i' } }
-      ];
-    }
-    
-    // PERFORMANCE: Get total count for pagination (with same filters)
-    const totalAds = await Ad.countDocuments(filter);
-    
-    // CRITICAL: Exclude base64 image fields to prevent timeout on large datasets
-    // Only fetch metadata - images are served via GridFS endpoints
-    const ads = await Ad.find(filter)
-      .select('-bottomImage -fullscreenImage') // Exclude large base64 fields
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean()
-      .exec();
-
-    console.log(`✅ Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
-
-    // Transform ads to include proper image URLs for admin dashboard (AWS Cloud primary)
-    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
-    const adsWithImageUrls = ads.map((ad: any) => {
-      try {
-        const adId = ad._id.toString();
-        
-        // ALL ads (both legacy and new) now use GridFS image endpoints
-        // This ensures consistent behavior and avoids sending large base64 in response
-        return {
-          ...ad,
-          _id: adId,
-          // Use GridFS endpoints for images (works for both old and new ads)
-          bottomImage: ad.bottomImageGridFS 
-            ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
-            : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
-          fullscreenImage: ad.fullscreenImageGridFS 
-            ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
-            : "", // No fullscreen if not set
-          bottomImageGridFS: ad.bottomImageGridFS?.toString(),
-          fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
-        };
-      } catch (mapError) {
-        console.error('❌ Error transforming ad:', ad._id, mapError);
-        // Return ad as-is if transformation fails
-        return ad;
-      }
-    });
-
-    console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
-    res.json({
-      success: true,
-      data: adsWithImageUrls,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(totalAds / limit),
-        totalAds: totalAds,
-        adsPerPage: limit,
-        hasNextPage: page < Math.ceil(totalAds / limit),
-        hasPrevPage: page > 1
-      }
-    });
-  } catch (error) {
-    console.error("❌ GET ALL ADS ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch ads",
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
   }
-});
+}, 5 * 60 * 1000);
 
-// GET /api/ads/:id - Get single ad (NO AUTH REQUIRED)
-router.get("/:id", async (req: Request, res: Response) => {
-  try {
-    const ad = await Ad.findById(req.params.id).lean();
-
-    if (!ad) {
-      return res.status(404).json({
-        success: false,
-        message: "Ad not found"
-      });
-    }
-
-    res.json({
-      success: true,
-      data: ad
-    });
-  } catch (error) {
-    console.error("GET AD ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch ad"
-    });
+function checkRateLimit(key: string, maxPerMinute = 60): boolean {
+  const now = Date.now();
+  if (!uploadAttempts.has(key) || uploadAttempts.get(key)!.resetTime < now) {
+    uploadAttempts.set(key, { count: 1, resetTime: now + 60000 });
+    return true;
   }
-});
 
-// ========== ADMIN ROUTES (REQUIRE ADMIN AUTH) ==========
-
-router.use(requireAdminAuth);
-
-// GET /api/ads/admin/pending - Admin-only endpoint to fetch pending ads (paginated)
-router.get('/admin/pending', async (req: AdminAuthReq, res: Response) => {
-  try {
-    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
-    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10), 200);
-    const skip = (page - 1) * limit;
-
-    const filter: any = { status: 'pending' };
-
-    if (req.query.uploadedBy) filter.uploadedBy = String(req.query.uploadedBy);
-    if (req.query.search) {
-      const q = String(req.query.search);
-      filter.$or = [
-        { title: { $regex: q, $options: 'i' } },
-        { description: { $regex: q, $options: 'i' } },
-        { uploadedBy: { $regex: q, $options: 'i' } }
-      ];
-    }
-
-    const [total, ads] = await Promise.all([
-      Ad.countDocuments(filter),
-      Ad.find(filter)
-        .select('-bottomImage -fullscreenImage')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean()
-    ]);
-
-    const base = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
-
-    const mapped = ads.map((a: any) => ({
-      _id: a._id.toString(),
-      title: a.title,
-      description: a.description,
-      uploadedBy: a.uploadedBy,
-      uploaderName: a.uploaderName,
-      createdAt: a.createdAt,
-      status: a.status,
-      priority: a.priority,
-      imageUrls: {
-        bottom: a.bottomImageGridFS ? `${base}/api/ads/image/${a._id}/bottom` : null,
-        fullscreen: a.fullscreenImageGridFS ? `${base}/api/ads/image/${a._id}/fullscreen` : null
-      }
-    }));
-
-    res.json({
-      success: true,
-      data: mapped,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
-    });
-  } catch (error) {
-    console.error('❌ GET ADMIN PENDING ADS ERROR:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch pending ads' });
+  const attempt = uploadAttempts.get(key)!;
+  if (attempt.count >= maxPerMinute) {
+    return false; // Rate limit exceeded
   }
-});
-// GET /api/ads/analytics/summary - Get analytics summary (admin)
-// MUST be before /:id route to avoid matching "analytics" as an id
-router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
-  try {
-    const totalAds = await Ad.countDocuments();
-    const now = new Date();
-    const activeAds = await Ad.countDocuments({
-      startDate: { $lte: now },
-      endDate: { $gte: now }
-    });
-    
-    const analytics = await Ad.aggregate([
-      {
-        $group: {
-          _id: null,
-          totalImpressions: { $sum: "$impressions" },
-          totalClicks: { $sum: "$clicks" }
-        }
-      }
-    ]);
+  attempt.count++;
+  return true;
+}
 
-    const summary = {
-      totalAds,
-      activeAds,
-      expiredAds: totalAds - activeAds,
-      totalImpressions: analytics[0]?.totalImpressions || 0,
-      totalClicks: analytics[0]?.totalClicks || 0,
-      clickThroughRate: analytics[0]?.totalImpressions > 0
-        ? ((analytics[0]?.totalClicks / analytics[0]?.totalImpressions) * 100).toFixed(2)
-        : 0
-    };
-
-    res.json({
-      success: true,
-      data: summary
-    });
-  } catch (error) {
-    console.error("GET ANALYTICS ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch analytics"
-    });
-  }
-});
-    console.error('❌ Error fetching user ads:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch ads'
-    });
-  }
-});
+// (Removed an incomplete/duplicated public/admin block here so routes below are canonical)
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
 // ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS

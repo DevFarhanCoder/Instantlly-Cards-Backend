@@ -229,6 +229,61 @@ router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
   }
 });
 
+// PUT /api/groups/:id/transfer-admin - Transfer admin rights to another member
+router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { newAdminId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!newAdminId) {
+      return res.status(400).json({ error: 'New admin ID is required' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Check if current user is the admin
+    if (group.admin.toString() !== userId) {
+      return res.status(403).json({ error: 'Only group admin can transfer admin rights' });
+    }
+
+    // Check if new admin is a member of the group
+    const isMember = group.members.some(memberId => memberId.toString() === newAdminId);
+    if (!isMember) {
+      return res.status(400).json({ error: 'New admin must be a member of the group' });
+    }
+
+    // Transfer admin rights
+    group.admin = new Types.ObjectId(newAdminId);
+    group.updatedAt = new Date();
+    await group.save();
+
+    // Get user details for notification
+    const newAdmin = await User.findById(newAdminId).select('name');
+    const currentAdmin = await User.findById(userId).select('name');
+
+    console.log(`✅ Admin transferred from ${currentAdmin?.name} to ${newAdmin?.name} in group ${group.name}`);
+
+    res.json({
+      success: true,
+      message: `Admin rights transferred to ${newAdmin?.name}`,
+      group: await Group.findById(groupId)
+        .populate('members', 'name phone profilePicture')
+        .populate('admin', 'name phone')
+    });
+  } catch (error) {
+    console.error('Transfer admin error:', error);
+    res.status(500).json({ error: 'Failed to transfer admin rights' });
+  }
+});
+
 // DELETE /api/groups/:id - Delete or leave a group
 router.delete('/:id', requireAuth, async (req: AuthReq, res: Response) => {
   try {
