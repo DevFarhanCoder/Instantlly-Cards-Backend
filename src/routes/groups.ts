@@ -273,6 +273,9 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
 
     // Send Socket.IO notification to new admin
     const io = (req as any).io;
+    console.log('🔌 Socket.IO instance available:', !!io);
+    console.log('📤 Attempting to send notification to user ID:', newAdminId);
+    
     if (io && newAdmin && group._id) {
       const notification = {
         type: 'admin_transfer',
@@ -283,8 +286,20 @@ router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Respons
         timestamp: new Date().toISOString()
       };
       
+      // Send to specific user room
       io.to(newAdminId).emit('admin_transferred', notification);
-      console.log(`🔔 Sent admin transfer notification to ${newAdmin.name}`);
+      console.log(`🔔 Sent admin_transferred event to room: ${newAdminId}`);
+      console.log(`📋 Notification payload:`, notification);
+      
+      // Also broadcast to all connected clients for debugging
+      io.emit('admin_transferred_debug', { ...notification, targetUserId: newAdminId });
+      console.log(`🔔 Also sent broadcast for debugging`);
+    } else {
+      console.warn('⚠️ Cannot send notification - missing requirements:', {
+        hasIo: !!io,
+        hasNewAdmin: !!newAdmin,
+        hasGroupId: !!group._id
+      });
     }
 
     res.json({
