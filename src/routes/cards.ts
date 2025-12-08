@@ -207,9 +207,11 @@ r.post("/", async (req: AuthReq, res) => {
 // LIST own cards (OPTIMIZED WITH PROPER CACHING AND LOGGING)
 r.get("/", async (req: AuthReq, res) => {
   try {
+    const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || 'no-req-id';
     const userId = req.userId!;
     const startTime = Date.now();
-    
+
+    console.log(`🔖 [REQ:${reqId}] GET /api/cards called - auth header present? ${!!req.header('authorization')} - resolved userId: ${userId}`);
     console.log(`📇 [${userId}] Fetching user's own cards...`);
     
     // Get user's cards with proper error handling

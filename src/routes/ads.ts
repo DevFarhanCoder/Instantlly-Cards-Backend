@@ -4,6 +4,8 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
 import { imageCache } from "../services/imageCache";
+import User from "../models/User";
+const jwt = require('jsonwebtoken');
 
 const router = Router();
 
@@ -20,73 +22,22 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
-function checkRateLimit(adminId: string, maxPerMinute: number = 60): boolean {
+function checkRateLimit(key: string, maxPerMinute = 60): boolean {
   const now = Date.now();
-  const key = adminId;
-  
   if (!uploadAttempts.has(key) || uploadAttempts.get(key)!.resetTime < now) {
     uploadAttempts.set(key, { count: 1, resetTime: now + 60000 });
     return true;
   }
-  
+
   const attempt = uploadAttempts.get(key)!;
   if (attempt.count >= maxPerMinute) {
     return false; // Rate limit exceeded
   }
-  
   attempt.count++;
   return true;
 }
 
-// GET /api/ads/my-ads - Get user's own ads by phone number (all statuses)
-router.get("/my-ads", async (req: Request, res: Response) => {
-  try {
-    const { phone } = req.query;
-    
-    if (!phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number is required'
-      });
-    }
-
-    console.log(`📱 Fetching ads for user: ${phone}`);
-
-    // Find all ads uploaded by this phone number (all statuses: pending, approved, rejected)
-    const ads = await Ad.find({ uploadedBy: phone })
-      .select('-__v')
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
-
-    console.log(`✅ Found ${ads.length} ads for user ${phone}`);
-
-    // Transform ads to include image URLs (AWS Cloud primary)
-    const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
-    const adsWithUrls = ads.map((ad: any) => ({
-      ...ad,
-      _id: ad._id.toString(),
-      bottomImage: ad.bottomImageGridFS 
-        ? `${imageBaseUrl}/api/ads/image/${ad._id}/bottom`
-        : "",
-      fullscreenImage: ad.fullscreenImageGridFS 
-        ? `${imageBaseUrl}/api/ads/image/${ad._id}/fullscreen`
-        : "",
-    }));
-
-    res.json({
-      success: true,
-      data: adsWithUrls,
-      count: adsWithUrls.length
-    });
-  } catch (error) {
-    console.error('❌ Error fetching user ads:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch ads'
-    });
-  }
-});
+// (Removed an incomplete/duplicated public/admin block here so routes below are canonical)
 
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
 // ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
@@ -616,8 +567,49 @@ router.post("/", async (req: Request, res: Response) => {
 // GET /api/ads/my-ads - Get user's own ads by phone number (public, no auth required)
 router.get("/my-ads", async (req: Request, res: Response) => {
   try {
-    const phoneNumber = req.query.phoneNumber as string;
-    
+    let phoneNumber = req.query.phoneNumber as string;
+
+    // If no phoneNumber provided, attempt to extract from Authorization JWT
+    if (!phoneNumber) {
+      const authHeader = req.headers.authorization;
+      const auth = authHeader?.replace(/^Bearer\s+/i, '') || null;
+      console.log('🔎 [my-ads-public] Authorization header present:', !!authHeader);
+      if (auth) {
+        try {
+          const payload: any = jwt.verify(auth, process.env.JWT_SECRET || '');
+          console.log('🔐 [my-ads-public] jwt.verify payload preview:', { sub: payload?.sub, phone: payload?.phone });
+          if (payload?.phone) phoneNumber = payload.phone;
+          else if (payload?.sub) {
+            try {
+              const user = await User.findById(payload.sub).select('phone').lean() as any;
+              console.log('🔍 [my-ads-public] Loaded user for phone extraction:', { found: !!user, phone: user?.phone });
+              if (user?.phone) phoneNumber = user.phone;
+            } catch (uErr) {
+              console.warn('Could not load user for phone extraction from token:', (uErr as any)?.message || uErr);
+            }
+          }
+        } catch (tErr) {
+          console.warn('⚠️ [my-ads-public] jwt.verify failed:', (tErr as any)?.message || tErr);
+          try {
+            const decoded: any = jwt.decode(auth);
+            console.log('🔎 [my-ads-public] jwt.decode fallback payload preview:', { sub: decoded?.sub, phone: decoded?.phone });
+            if (decoded?.phone) phoneNumber = decoded.phone;
+            else if (decoded?.sub) {
+              try {
+                const user = await User.findById(decoded.sub).select('phone').lean() as any;
+                console.log('🔍 [my-ads-public] Loaded user (decode fallback):', { found: !!user, phone: user?.phone });
+                if (user?.phone) phoneNumber = user.phone;
+              } catch (uErr) {
+                console.warn('Could not load user for phone extraction from decoded token:', (uErr as any)?.message || uErr);
+              }
+            }
+          } catch (decodeErr) {
+            console.warn('Could not decode token for phone extraction:', (decodeErr as any)?.message || decodeErr);
+          }
+        }
+      }
+    }
+
     if (!phoneNumber) {
       return res.status(400).json({
         success: false,

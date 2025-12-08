@@ -4,7 +4,6 @@ import GroupSession, { IParticipant } from "../models/GroupSession";
 import CardShare from "../models/CardShare";
 import SharedCard from "../models/SharedCard";
 import GroupSharedCard from "../models/GroupSharedCard";
-import Group from "../models/Group";
 import User from "../models/User";
 import Card from "../models/Card";
 import { requireAuth, AuthReq } from "../middleware/auth";
@@ -390,43 +389,32 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
     if (groupName && groupName.trim()) {
       // FLOW 1: CREATE GROUP - Store in GroupSharedCard
       console.log("📁 Creating permanent group:", groupName);
-      
       try {
+        // Dynamically import Group model
+        const { GroupModel } = await import("../models/Group.js");
         // Extract all unique member IDs from session and convert to ObjectId
-        // For temporary userIds (user_timestamp), we'll try to find their actual User document
         const memberObjectIds: mongoose.Types.ObjectId[] = [];
-        
         for (const participant of session.participants) {
           const userId = participant.userId;
-          
-          // Check if it's a valid ObjectId
           if (mongoose.Types.ObjectId.isValid(userId) && userId.length === 24) {
             memberObjectIds.push(new mongoose.Types.ObjectId(userId));
-          } else {
-            // For temporary userIds like "user_1762425364619", try to find by phone
-            if (participant.userPhone) {
-              const user = await User.findOne({ phone: participant.userPhone });
-              if (user) {
-                memberObjectIds.push(user._id);
-              } else {
-                console.warn(`⚠️ Could not find User for temporary userId ${userId}, phone: ${participant.userPhone}`);
-                // Skip this user or create a new User document
-                // For now, we'll skip to avoid creating invalid groups
-              }
+          } else if (participant.userPhone) {
+            const user = await User.findOne({ phone: participant.userPhone });
+            if (user) {
+              memberObjectIds.push(user._id);
+            } else {
+              console.warn(`⚠️ Could not find User for temporary userId ${userId}, phone: ${participant.userPhone}`);
             }
           }
         }
-        
         if (memberObjectIds.length === 0) {
           throw new Error("No valid user IDs found for group creation");
         }
-        
         // Determine admin ObjectId
         let adminObjectId: mongoose.Types.ObjectId;
         if (mongoose.Types.ObjectId.isValid(session.adminId) && session.adminId.length === 24) {
           adminObjectId = new mongoose.Types.ObjectId(session.adminId);
         } else {
-          // Find admin by phone
           const adminParticipant = session.participants.find(p => p.userId === session.adminId);
           if (adminParticipant?.userPhone) {
             const adminUser = await User.findOne({ phone: adminParticipant.userPhone });
@@ -438,12 +426,10 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
             throw new Error("Admin user not found. Cannot create permanent group.");
           }
         }
-        
         // Create group document with generated joinCode
-        const joinCode = await Group.generateInviteCode();
+        const joinCode = await GroupModel.generateInviteCode();
         console.log(`🔑 Generated joinCode: ${joinCode}`);
-        
-        group = await Group.create({
+        group = await GroupModel.create({
           name: groupName.trim(),
           admin: adminObjectId,
           members: memberObjectIds,
@@ -451,10 +437,8 @@ router.post("/execute/:sessionId", requireAuth, async (req: Request, res: Respon
           isActive: true,
           lastMessageTime: new Date()
         });
-        
         groupId = group._id;
         console.log(`✅ Group created with ID: ${groupId}, joinCode: ${group.joinCode}`);
-        
       } catch (groupError: any) {
         console.error("❌ Failed to create group:", groupError);
         return res.status(500).json({
@@ -854,7 +838,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
     }
 
     // Import Group model dynamically to avoid circular dependencies
-    const Group = (await import("../models/Group")).default;
+    const { GroupModel } = await import("../models/Group.js");
 
     // Extract participant user IDs (exclude admin as they'll be added separately)
     const memberIds = session.participants
@@ -874,7 +858,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
     // Generate unique invite code
     let joinCode;
     try {
-      joinCode = await Group.generateInviteCode();
+      joinCode = await GroupModel.generateInviteCode();
       console.log('✅ Generated invite code:', joinCode);
     } catch (error) {
       // Fallback code generation
@@ -884,7 +868,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
     }
 
     // Create the messaging group
-    const group = await Group.create({
+    const group = await GroupModel.create({
       name: finalGroupName,
       description: groupDescription || `Group created from sharing session ${session.code}`,
       icon: groupIcon || '',
@@ -898,7 +882,7 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
     console.log("✅ Messaging group created successfully:", group._id);
 
     // Populate the group data
-    const populatedGroup = await Group.findById(group._id)
+    const populatedGroup = await GroupModel.findById(group._id)
       .populate('members', 'name phone profilePicture')
       .populate('admin', 'name phone');
 
@@ -908,8 +892,8 @@ router.post("/create-messaging-group/:sessionId", requireAuth, async (req: Reque
         const admin = await User.findById(adminId);
         const adminName = admin?.name || 'Someone';
         
-        // Import notification service
-        const { sendGroupInviteNotification } = await import('../services/pushNotifications');
+        // Import notification service (explicit .js extension required for ESM resolution)
+        const { sendGroupInviteNotification } = await import('../services/pushNotifications.js');
         
         for (const memberId of memberIds) {
           try {

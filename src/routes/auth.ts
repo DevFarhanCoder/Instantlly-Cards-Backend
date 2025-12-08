@@ -25,6 +25,18 @@ function generateReferralCode(): string {
   return code;
 }
 
+// Normalize phone into a canonical stored form: '+<countrycode><number>' (no spaces)
+function canonicalPhone(phone: string): string {
+  if (!phone) return phone;
+  let p = phone.toString().trim();
+  // remove spaces, dashes, parentheses
+  p = p.replace(/[\s\-\(\)]/g, '');
+  if (!p.startsWith('+')) {
+    p = '+' + p;
+  }
+  return p;
+}
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -51,11 +63,12 @@ const upload = multer({
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
-    console.log('🚀 Starting simple signup process...');
+    const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || 'no-req-id';
+    console.log(`🔖 [REQ:${reqId}] 🚀 Starting simple signup process...`);
     
     const { name, phone, password, referralCode } = req.body;
     
-    console.log('📝 Raw signup data received:', {
+    console.log(`🔖 [REQ:${reqId}] 📝 Raw signup data received:`, {
       name: name || 'undefined',
       phone: phone || 'undefined', 
       password: password ? '***' + password.slice(-2) : 'undefined',
@@ -173,6 +186,51 @@ router.post("/signup", async (req, res) => {
     const savedUser = await user.save();
 
     console.log('✅ User created successfully with ID:', savedUser._id);
+
+    // Create a single idempotent default card for the new user (use name + phone)
+    // Robust behavior:
+    // - Search by both ObjectId and string forms of userId (some records store string)
+    // - Save userId as string when creating the card to avoid mismatches
+    // - If card creation fails, return a fallback defaultCard object so client can
+    //   immediately show a card UI with name + phone while background repairs occur
+    let defaultCard = null;
+    try {
+      const userIdCandidates = [savedUser._id, savedUser._id.toString()];
+      const existingCard = await Card.findOne({ userId: { $in: userIdCandidates } }).lean();
+      if (existingCard) {
+        console.log(`🔖 [REQ:${reqId}] ℹ️ Default card already exists for user, skipping creation:`, savedUser._id);
+        defaultCard = existingCard;
+      } else {
+        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+        const cardData: any = {
+          userId: savedUser._id.toString(),
+          name: savedUser.name || cleanName,
+          personalPhone: phoneDigits,
+        };
+
+        // Create card; ensure created object is converted to plain object for response
+        const createdCard = await Card.create(cardData);
+        defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
+        console.log(`🔖 [REQ:${reqId}] 🆕 Default card created for user:`, savedUser._id, 'phone:', phoneDigits);
+      }
+    } catch (cardError) {
+      console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
+      // Fallback: construct a minimal defaultCard object so frontend can display
+      try {
+        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+        defaultCard = {
+          _id: null,
+          userId: savedUser._id.toString(),
+          name: savedUser.name || cleanName,
+          personalPhone: phoneDigits,
+          isFallback: true
+        };
+        console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
+      } catch (fallbackError) {
+        console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
+        defaultCard = null;
+      }
+    }
 
     // Create signup bonus transaction
     await Transaction.create({
@@ -319,7 +377,7 @@ router.post("/signup", async (req, res) => {
     // Generate JWT token
     const token = jwt.sign(
       { 
-        sub: savedUser._id, 
+        sub: savedUser._id.toString(), 
         phone: savedUser.phone,
         name: savedUser.name 
       },
@@ -339,12 +397,15 @@ router.post("/signup", async (req, res) => {
       referralCode: savedUser.referralCode
     };
 
-    console.log('🎉 Signup successful for phone:', cleanPhone);
+    console.log(`🔖 [REQ:${reqId}] 🎉 Signup successful for phone:`, cleanPhone);
 
+    // Return token, user and default card info to help client show cards immediately
     res.status(201).json({
       token,
-      user: userResponse
+      user: userResponse,
+      defaultCard: defaultCard || null
     });
+    console.log(`🔖 [REQ:${reqId}] ✅ Response sent for signup - defaultCard present:`, !!defaultCard);
 
   } catch (error: any) {
     console.error('💥 Signup error:', error);
@@ -441,9 +502,19 @@ router.post("/login", async (req, res) => {
     }
     console.log("Looking for user with normalized phone:", normalizedPhone);
 
-    const user = await User.findOne({ phone: normalizedPhone }).select('+password');
+    // Try several phone formats to be tolerant of how phone was stored in DB
+    const phoneVariants = [
+      normalizedPhone, // +911234567890
+      normalizedPhone.replace(/^\+/, ''), // 911234567890
+      normalizedPhone.replace(/^\+91/, ''), // local 10-digit (9123456789)
+      (normalizedPhone.startsWith('+') ? normalizedPhone : '+' + normalizedPhone)
+    ].filter(Boolean).map(p => p.toString());
+
+    console.log('Login - phone variants to try:', phoneVariants);
+
+    const user = await User.findOne({ phone: { $in: phoneVariants } }).select('+password');
     if (!user) {
-      console.log("User not found for phone:", normalizedPhone);
+      console.log("User not found for any variant of phone:", phoneVariants);
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -517,7 +588,10 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
       about: (user as any).about || "Available",
       credits: (user as any).credits || 0,
       creditsExpiryDate: (user as any).creditsExpiryDate,
-      referralCode: (user as any).referralCode
+      referralCode: (user as any).referralCode,
+      gender: (user as any).gender,
+      birthdate: (user as any).birthdate,
+      anniversary: (user as any).anniversary
     };
     
     console.log("Sending profile data:", profileData);
@@ -535,7 +609,7 @@ router.get("/profile", requireAuth, async (req: AuthReq, res) => {
 // PUT /api/auth/update-profile - Update user profile (including Base64 profile picture)
 router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { name, phone, about, profilePicture } = req.body;
+    const { name, phone, about, profilePicture, birthdate, anniversary, gender } = req.body;
     const userId = req.userId;
 
     console.log('📝 Update profile request:', {
@@ -544,6 +618,12 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       hasPhone: !!phone,
       hasAbout: !!about,
       hasProfilePicture: !!profilePicture,
+      hasBirthdate: !!birthdate,
+      hasAnniversary: !!anniversary,
+      hasGender: !!gender,
+      birthdateValue: birthdate,
+      anniversaryValue: anniversary,
+      genderValue: gender,
       profilePictureLength: profilePicture?.length,
       profilePicturePrefix: profilePicture?.substring(0, 30)
     });
@@ -551,6 +631,21 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (about !== undefined) updateData.about = about;
+    if (gender !== undefined) updateData.gender = gender;
+    
+    // Handle date fields
+    if (birthdate !== undefined) {
+      console.log('📅 Processing birthdate:', birthdate, 'Type:', typeof birthdate);
+      updateData.birthdate = birthdate ? new Date(birthdate) : null;
+      console.log('📅 Converted birthdate to:', updateData.birthdate);
+    }
+    if (anniversary !== undefined) {
+      console.log('💍 Processing anniversary:', anniversary, 'Type:', typeof anniversary);
+      updateData.anniversary = anniversary ? new Date(anniversary) : null;
+      console.log('💍 Converted anniversary to:', updateData.anniversary);
+    }
+    
+    console.log('💾 Final updateData:', updateData);
     
     // Handle Base64 profile picture
     if (profilePicture !== undefined) {
@@ -875,6 +970,89 @@ ${finalAppHash}`;
   }
 });
 
+// POST /api/auth/send-reset-otp - Send OTP for password reset if phone is registered
+router.post("/send-reset-otp", async (req, res) => {
+  try {
+    const { phone } = req.body ?? {};
+    if (!phone) {
+      return res.status(400).json({ message: 'Phone number is required' });
+    }
+
+    // Normalize phone number to canonical form for storage and lookup
+    const normalizedPhone = canonicalPhone(phone);
+
+    // Try to find user by several phone variants (tolerant lookup)
+    const phoneVariants = [
+      normalizedPhone, // +911234567890
+      normalizedPhone.replace(/^\+/, ''), // 911234567890
+      normalizedPhone.replace(/^\+91/, ''), // local 10-digit 1234567890
+      normalizedPhone.replace(/^\+/, '')?.replace(/^91/, '') // fallback
+    ].filter(Boolean);
+
+    const user = await User.findOne({ phone: { $in: phoneVariants } });
+
+    if (!user) {
+      // Phone not registered
+      return res.status(404).json({ message: 'Phone number is not registered / account not created' });
+    }
+
+    // At this point user exists - generate and send OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Store OTP in cache (expires in 5 minutes) under canonical phone
+    otpService.storeOTP(normalizedPhone, otp);
+
+    const fast2smsApiKey = process.env.FAST2SMS_API_KEY;
+
+    // Prepare 10-digit number for Fast2SMS (remove +91 if present)
+    const cleanPhone = normalizedPhone.replace(/^\+91/, '').replace(/\D/g, '');
+    console.log('[SEND-RESET-OTP] Final number sent to Fast2SMS (10-digit):', cleanPhone);
+    if (cleanPhone.length !== 10) {
+      console.warn('[SEND-RESET-OTP] Non-Indian number, but OTP stored in cache for normalized phone');
+    }
+
+    const message = `${otp} is your password reset code for Instantlly Cards. Valid for 5 minutes. Do not share with anyone.`;
+
+    // If Fast2SMS API key is not configured, fallback to development mode: store OTP and
+    // return success with debug info so local testing can continue without SMS provider.
+    if (!fast2smsApiKey) {
+      console.warn('[SEND-RESET-OTP] FAST2SMS_API_KEY not set - running in dev fallback (OTP stored, no SMS will be sent)');
+      return res.json({ otpSent: true, message: 'OTP stored (no SMS sent)', _debug: process.env.NODE_ENV === 'development' ? { otp } : undefined });
+    }
+
+    try {
+      const fast2smsPayload = new URLSearchParams({
+        authorization: fast2smsApiKey,
+        sender_id: 'FSTSMS',
+        message,
+        language: 'english',
+        route: 'q',
+        numbers: cleanPhone
+      });
+
+      const fast2smsResponse = await axios.get(
+        `https://www.fast2sms.com/dev/bulkV2?${fast2smsPayload.toString()}`,
+        { headers: { 'Cache-Control': 'no-cache' }, timeout: 10000 }
+      );
+
+      console.log('[SEND-RESET-OTP] Fast2SMS response:', fast2smsResponse.data);
+      if (!fast2smsResponse.data?.return) {
+        console.error('[SEND-RESET-OTP] Fast2SMS error:', fast2smsResponse.data);
+        // still return success since OTP is stored for testing
+        return res.json({ otpSent: true, message: 'OTP sent (stored) but SMS provider returned an error' });
+      }
+
+      return res.json({ otpSent: true, message: 'OTP sent successfully' });
+    } catch (fastErr: any) {
+      console.error('[SEND-RESET-OTP] Fast2SMS request failed:', fastErr?.message || fastErr);
+      // Return success with debug in dev to allow testing
+      return res.json({ otpSent: true, message: 'OTP sent (stored)', _debug: process.env.NODE_ENV === 'development' ? { otp } : undefined });
+    }
+  } catch (error) {
+    console.error('SEND-RESET-OTP ERROR', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // POST /api/auth/verify-otp - Verify OTP sent to phone number
 router.post("/verify-otp", async (req, res) => {
   try {
@@ -889,10 +1067,10 @@ router.post("/verify-otp", async (req, res) => {
       });
     }
 
-    // Normalize phone number
-    const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
+    // Normalize phone to canonical form for verification
+    const normalizedPhone = canonicalPhone(phone);
 
-    // Verify OTP using otpService
+    // Verify OTP using otpService (stored under canonical phone)
     const isValid = otpService.verifyOTP(normalizedPhone, otp);
 
     if (!isValid) {
@@ -905,11 +1083,24 @@ router.post("/verify-otp", async (req, res) => {
 
     console.log(`[VERIFY-OTP] ✅ OTP verified successfully for ${normalizedPhone}`);
 
+    // Generate a short-lived reset token so frontend can call reset-password securely
+    if (!process.env.JWT_SECRET) {
+      console.error('[VERIFY-OTP] JWT_SECRET not configured - cannot generate reset token');
+      return res.status(500).json({ success: true, message: 'OTP verified', verified: true, phone: normalizedPhone });
+    }
+
+    const resetToken = jwt.sign(
+      { phone: normalizedPhone, purpose: 'reset' },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '15m' }
+    );
+
     return res.json({
       success: true,
       message: 'OTP verified successfully',
       verified: true,
-      phone: normalizedPhone
+      phone: normalizedPhone,
+      resetToken
     });
 
   } catch (error) {
@@ -918,6 +1109,97 @@ router.post("/verify-otp", async (req, res) => {
       success: false,
       message: 'Server error'
     });
+  }
+});
+
+// POST /api/auth/change-password - Change password for authenticated user
+router.post("/change-password", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body ?? {};
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ message: 'Old password and new password are required' });
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    }
+
+    // Load user with password
+    const user = await User.findById(req.userId).select('+password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (!user.password) {
+      return res.status(400).json({ message: 'No existing password set for this account' });
+    }
+
+    const match = await bcrypt.compare(oldPassword, user.password);
+    if (!match) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 12);
+    user.password = hashed;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('CHANGE PASSWORD ERROR', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/auth/reset-password - Reset password using a short-lived reset token
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body ?? {};
+
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({ message: 'Reset token and new password are required' });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      console.error('[RESET-PASSWORD] JWT_SECRET not configured');
+      return res.status(500).json({ message: 'Server configuration error' });
+    }
+
+    let payload: any;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET as string) as any;
+    } catch (err: any) {
+      console.error('[RESET-PASSWORD] Invalid or expired reset token', err?.message || err);
+      return res.status(400).json({ message: 'Invalid or expired reset token' });
+    }
+
+    if (!payload?.phone || payload?.purpose !== 'reset') {
+      return res.status(400).json({ message: 'Invalid reset token payload' });
+    }
+
+    const normalizedPhone = payload.phone;
+
+    // Find user by phone (tolerant variants)
+    const phoneVariants = [
+      normalizedPhone,
+      normalizedPhone.replace(/^\+/, ''),
+      normalizedPhone.replace(/^\+91/, ''),
+      normalizedPhone.replace(/^\+/, '')?.replace(/^91/, '')
+    ].filter(Boolean);
+
+    const user = await User.findOne({ phone: { $in: phoneVariants } }).select('+password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 12);
+    user.password = hashed;
+    await user.save();
+
+    return res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('[RESET-PASSWORD] ERROR', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

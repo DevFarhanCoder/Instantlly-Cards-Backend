@@ -5,12 +5,17 @@
     "dev": "nodemon src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "check-user": "ts-node src/scripts/check-user.ts",
+    "reset-password": "ts-node src/scripts/reset-password.ts",
     "migrate:gridfs": "ts-node src/scripts/migrate-ads-to-gridfs.ts",
     "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup",
-    "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts"
+    "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@types/multer": "^2.0.0",
+    "@types/node-cache": "^4.1.3",
     "@types/socket.io": "^3.0.1",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
@@ -19,6 +24,7 @@
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "expo": "^54.0.25",
     "expo-server-sdk": "^4.0.0",
     "express": "^4.19.2",
     "firebase-admin": "^12.7.0",
@@ -26,6 +32,9 @@
     "mongoose": "^8.5.1",
     "multer": "^2.0.2",
     "node-cache": "^5.1.2",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-webrtc": "^124.0.7",
     "socket.io": "^4.8.1",
     "uuid": "^13.0.0",
     "ws": "^8.18.3"

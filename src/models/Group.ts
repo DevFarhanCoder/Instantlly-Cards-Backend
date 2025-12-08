@@ -13,6 +13,11 @@ export interface IGroup extends Document {
   mutedBy: mongoose.Types.ObjectId[];
   memberRoles: Map<string, 'admin' | 'member'>;
   chatId?: mongoose.Types.ObjectId; // Reference to chat document
+  adminTransferInfo?: {
+    previousAdmin: mongoose.Types.ObjectId;
+    transferredAt: Date;
+    seen: boolean;
+  };
   createdAt: Date;
   updatedAt: Date;
   addMember(userId: string): Promise<IGroup>;
@@ -85,6 +90,19 @@ const GroupSchema = new Schema<IGroup, IGroupModel>({
   chatId: {
     type: Schema.Types.ObjectId,
     ref: "Chat"
+  },
+  adminTransferInfo: {
+    previousAdmin: {
+      type: Schema.Types.ObjectId,
+      ref: "User"
+    },
+    transferredAt: {
+      type: Date
+    },
+    seen: {
+      type: Boolean,
+      default: false
+    }
   }
 }, {
   timestamps: true
@@ -210,4 +228,6 @@ GroupSchema.methods.updateLastMessage = function(messageId: string) {
   return this.save();
 };
 
-export default mongoose.model<IGroup, IGroupModel>("Group", GroupSchema);
+const GroupModel = mongoose.model<IGroup, IGroupModel>("Group", GroupSchema);
+export default GroupModel;
+export { GroupModel };

@@ -20,11 +20,62 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
     const groups = await Group.find({
       members: new Types.ObjectId(userId)
     }).populate('members', 'name phone profilePicture')
-      .populate('admin', 'name phone');
+      .populate('admin', 'name phone')
+      .populate('adminTransferInfo.previousAdmin', 'name');
+
+    console.log(`\n📊 Found ${groups.length} groups for user ${userId}`);
+
+    // Add transfer info for new admins
+    const groupsWithTransferInfo = groups.map(group => {
+      const groupObj: any = group.toObject();
+      
+      console.log(`\n🔍 Processing group: "${groupObj.name}"`);
+      console.log(`   Current admin ID: ${groupObj.admin?._id}`);
+      console.log(`   Current user ID: ${userId}`);
+      console.log(`   Has adminTransferInfo: ${!!groupObj.adminTransferInfo}`);
+      
+      // ONLY show transfer message if:
+      // 1. Current user is the admin
+      // 2. There's transfer info with a previous admin
+      // 3. The transfer hasn't been seen yet
+      // 4. The previous admin is DIFFERENT from current admin (means it was actually transferred, not created)
+      if (groupObj.admin?._id && 
+          groupObj.admin._id.toString() === userId && 
+          groupObj.adminTransferInfo && 
+          groupObj.adminTransferInfo.previousAdmin &&
+          !groupObj.adminTransferInfo.seen) {
+        
+        const previousAdmin: any = groupObj.adminTransferInfo.previousAdmin;
+        const previousAdminId = previousAdmin._id || previousAdmin;
+        
+        console.log(`   ✅ User IS the admin and has transfer info`);
+        console.log(`   Previous admin ID: ${previousAdminId.toString()}`);
+        console.log(`   Previous admin name: ${previousAdmin?.name}`);
+        console.log(`   Transfer seen: ${groupObj.adminTransferInfo.seen}`);
+        console.log(`   Transferred at: ${groupObj.adminTransferInfo.transferredAt}`);
+        
+        // Only show if previous admin is different from current admin (actual transfer happened)
+        if (previousAdmin?.name && previousAdminId.toString() !== userId) {
+          groupObj.adminTransferredBy = previousAdmin.name;
+          groupObj.showAdminTransfer = true;
+          console.log(`   ✅✅✅ WILL SHOW MESSAGE: "${previousAdmin.name} made you admin"`);
+        } else {
+          console.log(`   ⏭️ SKIP: Previous admin (${previousAdminId.toString()}) same as current (${userId})`);
+        }
+      } else {
+        console.log(`   ⏭️ SKIP: Not showing transfer message because:`);
+        console.log(`      - User is admin: ${groupObj.admin?._id?.toString() === userId}`);
+        console.log(`      - Has transfer info: ${!!groupObj.adminTransferInfo}`);
+        console.log(`      - Has previous admin: ${!!groupObj.adminTransferInfo?.previousAdmin}`);
+        console.log(`      - Transfer not seen: ${!groupObj.adminTransferInfo?.seen}`);
+      }
+      
+      return groupObj;
+    });
 
     res.json({
       success: true,
-      groups
+      groups: groupsWithTransferInfo
     });
   } catch (error) {
     console.error('Get groups error:', error);
@@ -226,6 +277,128 @@ router.post('/join', requireAuth, async (req: AuthReq, res: Response) => {
   } catch (error) {
     console.error('Join group error:', error);
     res.status(500).json({ error: 'Failed to join group' });
+  }
+});
+
+// PUT /api/groups/:id/transfer-admin - Transfer admin rights to another member
+router.put('/:id/transfer-admin', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { newAdminId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!newAdminId) {
+      return res.status(400).json({ error: 'New admin ID is required' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Check if current user is the admin
+    if (group.admin.toString() !== userId) {
+      return res.status(403).json({ error: 'Only group admin can transfer admin rights' });
+    }
+
+    // Check if new admin is a member of the group
+    const isMember = group.members.some(memberId => memberId.toString() === newAdminId);
+    if (!isMember) {
+      return res.status(400).json({ error: 'New admin must be a member of the group' });
+    }
+
+    // Transfer admin rights and store transfer info
+    group.adminTransferInfo = {
+      previousAdmin: new Types.ObjectId(userId),
+      transferredAt: new Date(),
+      seen: false
+    };
+    group.admin = new Types.ObjectId(newAdminId);
+    group.updatedAt = new Date();
+    await group.save();
+
+    // Get user details for notification
+    const newAdmin = await User.findById(newAdminId).select('name');
+    const currentAdmin = await User.findById(userId).select('name');
+
+    console.log(`✅ Admin transferred from ${currentAdmin?.name} to ${newAdmin?.name} in group ${group.name}`);
+
+    // Send Socket.IO notification to new admin
+    const io = (req as any).io;
+    console.log('🔌 Socket.IO instance available:', !!io);
+    console.log('📤 Attempting to send notification to user ID:', newAdminId);
+    
+    if (io && newAdmin && group._id) {
+      const notification = {
+        type: 'admin_transfer',
+        groupId: String(group._id),
+        groupName: group.name,
+        fromUser: currentAdmin?.name || 'Unknown',
+        message: `You are now the admin of "${group.name}"`,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Send to specific user room
+      io.to(newAdminId).emit('admin_transferred', notification);
+      console.log(`🔔 Sent admin_transferred event to room: ${newAdminId}`);
+      console.log(`📋 Notification payload:`, notification);
+      
+      // Also broadcast to all connected clients for debugging
+      io.emit('admin_transferred_debug', { ...notification, targetUserId: newAdminId });
+      console.log(`🔔 Also sent broadcast for debugging`);
+    } else {
+      console.warn('⚠️ Cannot send notification - missing requirements:', {
+        hasIo: !!io,
+        hasNewAdmin: !!newAdmin,
+        hasGroupId: !!group._id
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Admin rights transferred to ${newAdmin?.name}`,
+      transferredBy: currentAdmin?.name || 'Unknown',
+      isNewAdmin: userId !== newAdminId, // true if the requester is NOT the new admin
+      group: await Group.findById(groupId)
+        .populate('members', 'name phone profilePicture')
+        .populate('admin', 'name phone')
+    });
+  } catch (error) {
+    console.error('Transfer admin error:', error);
+    res.status(500).json({ error: 'Failed to transfer admin rights' });
+  }
+});
+
+// PUT /api/groups/:id/mark-transfer-seen - Mark admin transfer notification as seen
+router.put('/:id/mark-transfer-seen', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Only the current admin can mark the transfer as seen
+    if (group.admin.toString() === userId && group.adminTransferInfo) {
+      group.adminTransferInfo.seen = true;
+      await group.save();
+      console.log(`✅ Marked admin transfer as seen for group: ${group.name}`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Mark transfer seen error:', error);
+    res.status(500).json({ error: 'Failed to mark transfer as seen' });
   }
 });
 

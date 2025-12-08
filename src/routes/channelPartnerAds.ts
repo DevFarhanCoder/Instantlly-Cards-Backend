@@ -485,7 +485,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     console.log(`✅ Deleted pending ad: ${id}`);
 
-
     res.json({ message: 'Ad deleted successfully' });
   } catch (error) {
     console.error('❌ Error deleting ad:', error);
