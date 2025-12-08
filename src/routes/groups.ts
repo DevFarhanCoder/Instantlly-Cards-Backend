@@ -23,33 +23,55 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('admin', 'name phone')
       .populate('adminTransferInfo.previousAdmin', 'name');
 
+    console.log(`\n📊 Found ${groups.length} groups for user ${userId}`);
+
     // Add transfer info for new admins
-    const groupsWithTransferInfo = await Promise.all(groups.map(async group => {
+    const groupsWithTransferInfo = groups.map(group => {
       const groupObj: any = group.toObject();
       
-      // If current user is the admin and there's unseen transfer info
-      if (groupObj.admin?._id && groupObj.admin._id.toString() === userId && 
-          groupObj.adminTransferInfo && !groupObj.adminTransferInfo.seen) {
+      console.log(`\n🔍 Processing group: "${groupObj.name}"`);
+      console.log(`   Current admin ID: ${groupObj.admin?._id}`);
+      console.log(`   Current user ID: ${userId}`);
+      console.log(`   Has adminTransferInfo: ${!!groupObj.adminTransferInfo}`);
+      
+      // ONLY show transfer message if:
+      // 1. Current user is the admin
+      // 2. There's transfer info with a previous admin
+      // 3. The transfer hasn't been seen yet
+      // 4. The previous admin is DIFFERENT from current admin (means it was actually transferred, not created)
+      if (groupObj.admin?._id && 
+          groupObj.admin._id.toString() === userId && 
+          groupObj.adminTransferInfo && 
+          groupObj.adminTransferInfo.previousAdmin &&
+          !groupObj.adminTransferInfo.seen) {
         
-        // Manually fetch the previous admin's name if populate didn't work
-        let previousAdminName = 'Someone';
-        if (groupObj.adminTransferInfo.previousAdmin) {
-          if (typeof groupObj.adminTransferInfo.previousAdmin === 'object' && groupObj.adminTransferInfo.previousAdmin.name) {
-            // Already populated
-            previousAdminName = groupObj.adminTransferInfo.previousAdmin.name;
-          } else {
-            // Not populated, fetch manually
-            const prevAdmin = await User.findById(groupObj.adminTransferInfo.previousAdmin).select('name');
-            previousAdminName = prevAdmin?.name || 'Someone';
-          }
+        const previousAdmin: any = groupObj.adminTransferInfo.previousAdmin;
+        const previousAdminId = previousAdmin._id || previousAdmin;
+        
+        console.log(`   ✅ User IS the admin and has transfer info`);
+        console.log(`   Previous admin ID: ${previousAdminId.toString()}`);
+        console.log(`   Previous admin name: ${previousAdmin?.name}`);
+        console.log(`   Transfer seen: ${groupObj.adminTransferInfo.seen}`);
+        console.log(`   Transferred at: ${groupObj.adminTransferInfo.transferredAt}`);
+        
+        // Only show if previous admin is different from current admin (actual transfer happened)
+        if (previousAdmin?.name && previousAdminId.toString() !== userId) {
+          groupObj.adminTransferredBy = previousAdmin.name;
+          groupObj.showAdminTransfer = true;
+          console.log(`   ✅✅✅ WILL SHOW MESSAGE: "${previousAdmin.name} made you admin"`);
+        } else {
+          console.log(`   ⏭️ SKIP: Previous admin (${previousAdminId.toString()}) same as current (${userId})`);
         }
-        
-        groupObj.adminTransferredBy = previousAdminName;
-        groupObj.showAdminTransfer = true;
+      } else {
+        console.log(`   ⏭️ SKIP: Not showing transfer message because:`);
+        console.log(`      - User is admin: ${groupObj.admin?._id?.toString() === userId}`);
+        console.log(`      - Has transfer info: ${!!groupObj.adminTransferInfo}`);
+        console.log(`      - Has previous admin: ${!!groupObj.adminTransferInfo?.previousAdmin}`);
+        console.log(`      - Transfer not seen: ${!groupObj.adminTransferInfo?.seen}`);
       }
       
       return groupObj;
-    }));
+    });
 
     res.json({
       success: true,
