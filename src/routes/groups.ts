@@ -24,19 +24,32 @@ router.get('/', requireAuth, async (req: AuthReq, res: Response) => {
       .populate('adminTransferInfo.previousAdmin', 'name');
 
     // Add transfer info for new admins
-    const groupsWithTransferInfo = groups.map(group => {
+    const groupsWithTransferInfo = await Promise.all(groups.map(async group => {
       const groupObj: any = group.toObject();
       
       // If current user is the admin and there's unseen transfer info
       if (groupObj.admin?._id && groupObj.admin._id.toString() === userId && 
           groupObj.adminTransferInfo && !groupObj.adminTransferInfo.seen) {
-        const previousAdmin: any = groupObj.adminTransferInfo.previousAdmin;
-        groupObj.adminTransferredBy = previousAdmin?.name || 'Someone';
+        
+        // Manually fetch the previous admin's name if populate didn't work
+        let previousAdminName = 'Someone';
+        if (groupObj.adminTransferInfo.previousAdmin) {
+          if (typeof groupObj.adminTransferInfo.previousAdmin === 'object' && groupObj.adminTransferInfo.previousAdmin.name) {
+            // Already populated
+            previousAdminName = groupObj.adminTransferInfo.previousAdmin.name;
+          } else {
+            // Not populated, fetch manually
+            const prevAdmin = await User.findById(groupObj.adminTransferInfo.previousAdmin).select('name');
+            previousAdminName = prevAdmin?.name || 'Someone';
+          }
+        }
+        
+        groupObj.adminTransferredBy = previousAdminName;
         groupObj.showAdminTransfer = true;
       }
       
       return groupObj;
-    });
+    }));
 
     res.json({
       success: true,
