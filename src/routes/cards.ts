@@ -214,7 +214,7 @@ r.get("/", async (req: AuthReq, res) => {
     console.log(`🔖 [REQ:${reqId}] GET /api/cards called - auth header present? ${!!req.header('authorization')} - resolved userId: ${userId}`);
     console.log(`📇 [${userId}] Fetching user's own cards...`);
     
-    // Get user's cards with proper error handling
+    // Get user's cards sorted by creation date (descending)
     const items = await Card.find({ userId })
       .sort({ createdAt: -1 })
       .lean()
@@ -222,6 +222,9 @@ r.get("/", async (req: AuthReq, res) => {
     
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
+    items.forEach((card, i) => {
+      console.log(`   Card ${i + 1}: "${card.name}"`);
+    });
     
     // Generate ETag for proper caching
     const etag = `"own-cards-${userId}-${items.length}-${items[0]?.updatedAt || 'empty'}"`;
