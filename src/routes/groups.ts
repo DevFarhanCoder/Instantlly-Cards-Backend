@@ -424,6 +424,10 @@ router.put('/:id/remove-member', requireAuth, async (req: AuthReq, res: Response
       return res.status(404).json({ error: 'Group not found' });
     }
 
+    console.log(`🔍 Group found: ${group.name}`);
+    console.log(`🔍 Group members:`, group.members.map(m => m.toString()));
+    console.log(`🔍 Group admin: ${group.admin.toString()}`);
+
     // Check if current user is the admin
     if (group.admin.toString() !== userId) {
       console.log(`❌ Permission denied - User ${userId} is not admin of group ${groupId}`);
@@ -436,10 +440,17 @@ router.put('/:id/remove-member', requireAuth, async (req: AuthReq, res: Response
       return res.status(400).json({ error: 'Cannot remove yourself. Use leave group instead.' });
     }
 
-    // Check if member exists in the group
-    const isMember = group.members.some(m => m.toString() === memberId);
-    if (!isMember) {
+    // Check if member exists in the group (compare as strings)
+    console.log(`🔍 Checking if member ${memberId} exists in group...`);
+    const memberExists = group.members.some(m => {
+      const memberIdStr = m.toString();
+      console.log(`   Comparing: ${memberIdStr} === ${memberId} ? ${memberIdStr === memberId}`);
+      return memberIdStr === memberId;
+    });
+    
+    if (!memberExists) {
       console.log(`❌ Member ${memberId} not found in group ${groupId}`);
+      console.log(`❌ Available members:`, group.members.map(m => m.toString()));
       return res.status(404).json({ error: 'Member not found in this group' });
     }
 
