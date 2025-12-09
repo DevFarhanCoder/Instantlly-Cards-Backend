@@ -402,6 +402,82 @@ router.put('/:id/mark-transfer-seen', requireAuth, async (req: AuthReq, res: Res
   }
 });
 
+// PUT /api/groups/:id/remove-member - Remove a member from the group (admin only)
+router.put('/:id/remove-member', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const groupId = req.params.id;
+    const userId = req.userId;
+    const { memberId } = req.body;
+
+    console.log(`\n🔍 Remove member request - Group: ${groupId}, Admin: ${userId}, Member to remove: ${memberId}`);
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    if (!memberId) {
+      return res.status(400).json({ error: 'Member ID is required' });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    console.log(`🔍 Group found: ${group.name}`);
+    console.log(`🔍 Group members:`, group.members.map(m => m.toString()));
+    console.log(`🔍 Group admin: ${group.admin.toString()}`);
+
+    // Check if current user is the admin
+    if (group.admin.toString() !== userId) {
+      console.log(`❌ Permission denied - User ${userId} is not admin of group ${groupId}`);
+      return res.status(403).json({ error: 'Only group admin can remove members' });
+    }
+
+    // Check if trying to remove self
+    if (memberId === userId) {
+      console.log(`❌ Cannot remove self - Use leave group instead`);
+      return res.status(400).json({ error: 'Cannot remove yourself. Use leave group instead.' });
+    }
+
+    // Check if member exists in the group (compare as strings)
+    console.log(`🔍 Checking if member ${memberId} exists in group...`);
+    const memberExists = group.members.some(m => {
+      const memberIdStr = m.toString();
+      console.log(`   Comparing: ${memberIdStr} === ${memberId} ? ${memberIdStr === memberId}`);
+      return memberIdStr === memberId;
+    });
+    
+    if (!memberExists) {
+      console.log(`❌ Member ${memberId} not found in group ${groupId}`);
+      console.log(`❌ Available members:`, group.members.map(m => m.toString()));
+      return res.status(404).json({ error: 'Member not found in this group' });
+    }
+
+    // Remove the member from the group
+    await Group.findByIdAndUpdate(groupId, {
+      $pull: { members: new Types.ObjectId(memberId) },
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ Member ${memberId} removed from group ${groupId}`);
+
+    // Get updated group with populated members
+    const updatedGroup = await Group.findById(groupId)
+      .populate('members', 'name phone profilePicture')
+      .populate('admin', 'name phone');
+
+    res.json({
+      success: true,
+      message: 'Member removed successfully',
+      group: updatedGroup
+    });
+  } catch (error) {
+    console.error('Remove member error:', error);
+    res.status(500).json({ error: 'Failed to remove member' });
+  }
+});
+
 // DELETE /api/groups/:id - Delete or leave a group
 router.delete('/:id', requireAuth, async (req: AuthReq, res: Response) => {
   try {

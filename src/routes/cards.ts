@@ -439,15 +439,16 @@ r.get("/sent", async (req: AuthReq, res) => {
     console.log(`✅ [${senderId}] Sent cards loaded in ${elapsed}ms - ${items.length} cards${hasMore ? ' (more available)' : ' (last page)'}`);
 
     // Generate ETag for HTTP caching
-    const etag = `"sent-${senderId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}"`;
+    const etag = `"sent-${senderId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
     
-    if (req.headers['if-none-match'] === etag) {
-      console.log(`💾 [${senderId}] Client cache hit - returning 304`);
-      return res.status(304).end();
-    }
+    // Disable ETag checking to avoid stale data
+    // if (req.headers['if-none-match'] === etag) {
+    //   console.log(`💾 [${senderId}] Client cache hit - returning 304`);
+    //   return res.status(304).end();
+    // }
     
     res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'private, max-age=30');
+    res.setHeader('Cache-Control', 'private, no-cache, must-revalidate');
 
     res.json({
       success: true,
@@ -586,16 +587,17 @@ r.get("/received", async (req: AuthReq, res) => {
     }
 
     // Generate ETag for HTTP caching (disable caching for search queries)
-    const etag = search ? null : `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}"`;
+    const etag = search ? null : `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
     
-    if (etag && req.headers['if-none-match'] === etag) {
-      console.log(`💾 [${recipientId}] Client cache hit - returning 304`);
-      return res.status(304).end();
-    }
+    // Don't use if-none-match for now to avoid stale data issues
+    // if (etag && req.headers['if-none-match'] === etag) {
+    //   console.log(`💾 [${recipientId}] Client cache hit - returning 304`);
+    //   return res.status(304).end();
+    // }
     
     if (etag) {
       res.setHeader('ETag', etag);
-      res.setHeader('Cache-Control', 'private, max-age=30');
+      res.setHeader('Cache-Control', 'private, no-cache, must-revalidate'); // Changed to no-cache
     } else {
       // Don't cache search results
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
