@@ -1349,7 +1349,12 @@ router.get("/version-check", async (req, res) => {
   try {
     const { version, platform } = req.query;
     
-    console.log(`📱 Version check request - Version: ${version}, Platform: ${platform}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`📱 [VERSION-CHECK] Request received`);
+    console.log(`   Version: ${version}`);
+    console.log(`   Platform: ${platform}`);
+    console.log(`   User-Agent: ${req.get('user-agent')}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // ⚠️ FORCE UPDATE POLICY: Everyone must have the LATEST version
     // Simply update these versions when you publish to app stores
@@ -1362,6 +1367,7 @@ router.get("/version-check", async (req, res) => {
     const APP_STORE_URL = "https://apps.apple.com/app/YOUR_APP_ID"; // Update with your iOS app ID
 
     if (!version || !platform) {
+      console.log('❌ [VERSION-CHECK] Missing version or platform');
       return res.status(400).json({
         success: false,
         message: "Version and platform are required"
@@ -1373,6 +1379,7 @@ router.get("/version-check", async (req, res) => {
     const latestVersion = LATEST_VERSIONS[requestedPlatform as keyof typeof LATEST_VERSIONS];
 
     if (!latestVersion) {
+      console.log('⚠️ [VERSION-CHECK] Platform not configured:', requestedPlatform);
       return res.json({
         success: true,
         updateRequired: false,
@@ -1384,10 +1391,11 @@ router.get("/version-check", async (req, res) => {
     // Even 1.0.23 will be forced to update to 1.0.24
     const isUpdateRequired = compareVersions(requestedVersion, latestVersion) < 0;
 
-    console.log(`🔍 Version comparison: ${requestedVersion} vs ${latestVersion} (latest)`);
-    console.log(`⚠️ Update required: ${isUpdateRequired} - Policy: Must have latest version`);
+    console.log(`🔍 [VERSION-CHECK] Comparison: ${requestedVersion} vs ${latestVersion} (latest)`);
+    console.log(`⚠️ [VERSION-CHECK] Update required: ${isUpdateRequired}`);
+    console.log(`📋 [VERSION-CHECK] Policy: Must have latest version`);
 
-    res.json({
+    const responseData = {
       success: true,
       updateRequired: isUpdateRequired,
       currentVersion: requestedVersion,
@@ -1397,9 +1405,14 @@ router.get("/version-check", async (req, res) => {
       message: isUpdateRequired 
         ? `Please update to version ${latestVersion} to continue using the app`
         : "You are using the latest version"
-    });
+    };
+
+    console.log('📤 [VERSION-CHECK] Response:', JSON.stringify(responseData, null, 2));
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    res.json(responseData);
   } catch (error) {
-    console.error("VERSION CHECK ERROR", error);
+    console.error("❌ [VERSION-CHECK] ERROR", error);
     res.status(500).json({
       success: false,
       updateRequired: false, // Don't block users on error
