@@ -92,7 +92,10 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     
     // Get cards from contacts ONLY (excluding user's own cards)
     const allCards = await Card.find({
-      userId: { $in: safeContactIds }
+      $and: [
+        { userId: { $in: safeContactIds } },
+        { userId: { $ne: userId } }  // Additional safety: Explicitly exclude user's own userId
+      ]
     })
     .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress birthdate anniversary createdAt updatedAt')
     .sort({ createdAt: -1 })
@@ -100,11 +103,16 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     .lean()
     .exec();
     
+    // Final safety check: Filter out any cards that might have slipped through
+    const filteredCards = allCards.filter((card: any) => 
+      card.userId && card.userId.toString() !== userId.toString()
+    );
+    
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${allCards.length} cards from contacts (user's own cards excluded)`);
+    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${filteredCards.length} cards from contacts (user's own cards excluded)`);
     
     // Generate ETag based on card IDs and update times for browser caching
-    const etag = `"${allCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
+    const etag = `"${filteredCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
     
     // Check if client has cached version
     if (req.headers['if-none-match'] === etag) {
@@ -118,11 +126,11 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     
     res.json({ 
       success: true,
-      data: allCards,
+      data: filteredCards,
       meta: {
         totalContacts: contactUserIds.length,
-        totalCards: allCards.length,
-        contactCards: allCards.length,
+        totalCards: filteredCards.length,
+        contactCards: filteredCards.length,
         loadTimeMs: elapsed
       }
     });

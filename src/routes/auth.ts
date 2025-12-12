@@ -681,7 +681,17 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       const existingUser = await User.findOne({ phone: normalizedPhone });
       
       if (existingUser && existingUser._id.toString() !== userId) {
-        return res.status(409).json({ message: "Phone number already exists" });
+        console.error('❌ Phone number conflict:', {
+          attemptedPhone: normalizedPhone,
+          requestingUserId: userId,
+          existingUserId: existingUser._id.toString(),
+          existingUserName: existingUser.name
+        });
+        return res.status(409).json({ 
+          message: "Phone number already exists",
+          error: "PHONE_EXISTS",
+          details: `This phone number is already registered to another account`
+        });
       }
       
       updateData.phone = normalizedPhone;
