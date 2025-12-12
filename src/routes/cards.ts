@@ -294,7 +294,7 @@ r.put("/:id", async (req: AuthReq, res) => {
       { new: true }
     );
     if (!doc) return res.status(404).json({ message: "Not found" });
-    console.log('✅ [UPDATE CARD] Saved to DB:', JSON.stringify({ birthdate: doc.birthdate, anniversary: doc.anniversary }, null, 2));
+    console.log('✅ [UPDATE CARD] Saved to DB:', JSON.stringify({ birthdate: (doc as any).birthdate, anniversary: (doc as any).anniversary }, null, 2));
     res.json({ data: doc });
   } catch (err) {
     console.error("UPDATE CARD ERROR", err);
