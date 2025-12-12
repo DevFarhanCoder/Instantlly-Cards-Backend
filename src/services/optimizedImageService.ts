@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
-import { GridFSBucket, ObjectId } from "mongodb";
 import { Readable } from "stream";
+
+// Use mongoose.mongo for type compatibility
+const { GridFSBucket, ObjectId } = mongoose.mongo;
 
 /**
  * Optimized Image Service

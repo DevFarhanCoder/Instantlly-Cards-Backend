@@ -3,6 +3,7 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import Contact from "../models/Contact";
 import Notification from "../models/Notification";
+import mongoose from "mongoose";
 
 const router = express.Router();
 
@@ -10,7 +11,7 @@ const router = express.Router();
 router.get("/count", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId;
-    const total = await Contact.countDocuments({ userId });
+    const total = await Contact.countDocuments({ userId: new mongoose.Types.ObjectId(userId) });
     res.status(200).json({ total });
   } catch (error) {
     console.error("Error counting contacts:", error);
@@ -212,7 +213,7 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
       const appUser = phoneToUserMap.get(contact.phoneNumber);
       return {
         updateOne: {
-          filter: { userId, phoneNumber: contact.phoneNumber },
+          filter: { userId: new mongoose.Types.ObjectId(userId), phoneNumber: contact.phoneNumber },
           update: {
             $set: {
               name: contact.name,
@@ -222,7 +223,7 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
               lastSynced: new Date()
             },
             $setOnInsert: {
-              userId,
+              userId: new mongoose.Types.ObjectId(userId),
               createdAt: new Date()
             }
           },
@@ -269,7 +270,7 @@ router.post("/sync-incremental", requireAuth, async (req: AuthReq, res) => {
     console.log(`🔄 [${userId}] Incremental contact sync started`);
     
     // Get all existing contacts for this user
-    const existingContacts = await Contact.find({ userId })
+    const existingContacts = await Contact.find({ userId: new mongoose.Types.ObjectId(userId) })
       .select('phoneNumber isAppUser appUserId')
       .lean()
       .exec();
@@ -332,7 +333,7 @@ router.post("/sync-incremental", requireAuth, async (req: AuthReq, res) => {
         const appUser = phoneToUserMap.get(contact.phoneNumber);
         return {
           updateOne: {
-            filter: { userId, phoneNumber: contact.phoneNumber },
+            filter: { userId: new mongoose.Types.ObjectId(userId), phoneNumber: contact.phoneNumber },
             update: {
               $set: {
                 isAppUser: true,
@@ -462,7 +463,7 @@ router.post("/refresh-app-status", requireAuth, async (req: AuthReq, res) => {
     }
     
     // Get all contacts for this user
-    const contacts = await Contact.find({ userId });
+    const contacts = await Contact.find({ userId: new mongoose.Types.ObjectId(userId) });
     
     if (contacts.length === 0) {
       return res.json({ success: true, message: "No contacts to refresh", updated: 0 });
@@ -572,7 +573,7 @@ router.get("/categorized", requireAuth, async (req: AuthReq, res) => {
       return res.status(401).json({ error: "Unauthorized" });
     }
     
-    const contacts = await Contact.find({ userId })
+    const contacts = await Contact.find({ userId: new mongoose.Types.ObjectId(userId) })
       .populate({ path: 'appUserId', select: 'name phone profilePicture about', model: User })
       .sort({ name: 1 })
       .lean();
@@ -641,7 +642,7 @@ router.post("/smart-sync", requireAuth, async (req: AuthReq, res) => {
     }));
 
     // Get existing contact phone numbers for this user
-    const existingContacts = await Contact.find({ userId }).select('phoneNumber').lean();
+    const existingContacts = await Contact.find({ userId: new mongoose.Types.ObjectId(userId) }).select('phoneNumber').lean();
     const existingPhoneNumbers = new Set(existingContacts.map(c => c.phoneNumber));
 
     // Filter to only NEW contacts (not already in database)
