@@ -1,6 +1,5 @@
 // src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
-import mongoose from "mongoose";
 import User from "../models/User";
 import Card from "../models/Card";
 import Message from "../models/Message";
@@ -282,7 +281,7 @@ router.get("/users/:userId/contacts/export", adminAuth, async (req: Request, res
     }
 
     // Get all contacts for this user
-    const contacts = await Contact.find({ userId: new mongoose.Types.ObjectId(userId) })
+    const contacts = await Contact.find({ userId })
       .sort({ name: 1 });
 
     // Create CSV content

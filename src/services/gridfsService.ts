@@ -1,8 +1,6 @@
 import mongoose from "mongoose";
+import { GridFSBucket, ObjectId } from "mongodb";
 import { Readable } from "stream";
-
-// Use mongoose.mongo for type compatibility
-const { GridFSBucket, ObjectId } = mongoose.mongo;
 
 class GridFSService {
   private bucket: GridFSBucket | null = null;
