@@ -65,13 +65,13 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
-// CONTACTS FEED - Get cards from my contacts AND my own cards (OPTIMIZED WITH CACHING)
+// CONTACTS FEED - Get cards from OTHER contacts only (NOT user's own cards)
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     const startTime = Date.now();
     
-    console.log(`📱 [${userId}] Fetching contacts feed...`);
+    console.log(`📱 [${userId}] Fetching contacts feed (other members only)...`);
     
     // Get all contacts who are app users (optimized query with select)
     const myContacts = await Contact.find({ 
@@ -85,27 +85,20 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
-    // Add current user's ID to see their own cards too
-    const allUserIds = [userId, ...contactUserIds];
-    
     console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app`);
     
-    // Get cards from contacts AND own cards (optimized with lean and select)
+    // Get cards from contacts ONLY (excluding user's own cards)
     const allCards = await Card.find({
-      userId: { $in: allUserIds }
+      userId: { $in: contactUserIds }
     })
-    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress createdAt updatedAt')
+    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress birthdate anniversary createdAt updatedAt')
     .sort({ createdAt: -1 })
     .limit(100)
     .lean()
     .exec();
     
-    // Separate own cards and contact cards for metadata
-    const ownCards = allCards.filter((card: any) => card.userId.toString() === userId);
-    const contactCards = allCards.filter((card: any) => card.userId.toString() !== userId);
-    
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${ownCards.length} own + ${contactCards.length} from contacts = ${allCards.length} total`);
+    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${allCards.length} cards from contacts (user's own cards excluded)`);
     
     // Generate ETag based on card IDs and update times for browser caching
     const etag = `"${allCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
@@ -126,8 +119,7 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
       meta: {
         totalContacts: contactUserIds.length,
         totalCards: allCards.length,
-        ownCards: ownCards.length,
-        contactCards: contactCards.length,
+        contactCards: allCards.length,
         loadTimeMs: elapsed
       }
     });
@@ -262,6 +254,7 @@ r.put("/:id", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let updateData = { ...req.body };
+    console.log('📝 [UPDATE CARD] Received data:', JSON.stringify({ birthdate: updateData.birthdate, anniversary: updateData.anniversary }, null, 2));
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
@@ -301,6 +294,7 @@ r.put("/:id", async (req: AuthReq, res) => {
       { new: true }
     );
     if (!doc) return res.status(404).json({ message: "Not found" });
+    console.log('✅ [UPDATE CARD] Saved to DB:', JSON.stringify({ birthdate: doc.birthdate, anniversary: doc.anniversary }, null, 2));
     res.json({ data: doc });
   } catch (err) {
     console.error("UPDATE CARD ERROR", err);
@@ -347,6 +341,20 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     const sender = await User.findById(senderId);
     if (!sender) {
       return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Check for duplicate - prevent sharing same card to same person twice
+    const existingShare = await SharedCard.findOne({
+      cardId,
+      senderId,
+      recipientId
+    });
+
+    if (existingShare) {
+      return res.status(409).json({ 
+        message: "Card already shared",
+        error: "You have already sent this card to this person. You can only send a card once to each user."
+      });
     }
 
     // PERFORMANCE OPTIMIZATION: Store all data in shared card (ultra denormalization)
@@ -884,6 +892,20 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     const sender = await User.findById(senderId);
     if (!sender) {
       return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Check for duplicate - prevent sharing same card to same group twice
+    const existingGroupShare = await GroupSharedCard.findOne({
+      cardId,
+      senderId,
+      groupId
+    });
+
+    if (existingGroupShare) {
+      return res.status(409).json({ 
+        message: "Card already shared to group",
+        error: "You have already sent this card to this group. You can only send a card once to each group."
+      });
     }
 
     // Create group shared card record
