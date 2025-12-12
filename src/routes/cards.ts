@@ -85,11 +85,14 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
-    console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app`);
+    // CRITICAL: Explicitly exclude user's own ID (in case they added themselves as a contact)
+    const safeContactIds = contactUserIds.filter((id: any) => id.toString() !== userId.toString());
+    
+    console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app (${safeContactIds.length} after self-exclusion)`);
     
     // Get cards from contacts ONLY (excluding user's own cards)
     const allCards = await Card.find({
-      userId: { $in: contactUserIds }
+      userId: { $in: safeContactIds }
     })
     .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress birthdate anniversary createdAt updatedAt')
     .sort({ createdAt: -1 })
@@ -138,6 +141,13 @@ r.post("/", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let cardData = { ...req.body, userId };
+    console.log('📝 [CREATE CARD] Received data:', JSON.stringify({ 
+      name: cardData.name,
+      birthdate: cardData.birthdate, 
+      anniversary: cardData.anniversary,
+      email: cardData.email,
+      location: cardData.location
+    }, null, 2));
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (cardData.companyPhoto && cardData.companyPhoto.startsWith('data:image/')) {
@@ -154,6 +164,14 @@ r.post("/", async (req: AuthReq, res) => {
     }
 
     const doc = await Card.create(cardData);
+    console.log('✅ [CREATE CARD] Saved to DB:', JSON.stringify({ 
+      _id: doc._id,
+      name: doc.name,
+      birthdate: (doc as any).birthdate, 
+      anniversary: (doc as any).anniversary,
+      email: doc.email,
+      location: doc.location
+    }, null, 2));
     
     // Send notifications to contacts who have this user in their contacts
     try {
