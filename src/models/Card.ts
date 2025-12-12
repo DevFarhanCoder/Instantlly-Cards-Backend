@@ -7,6 +7,8 @@ const schema = new mongoose.Schema(
     // Personal
     name: { type: String, required: true, trim: true },
     gender: { type: String, default: "", enum: ["", "Male", "Female"] },
+    birthdate: { type: String, default: "" }, // ISO date string format: YYYY-MM-DDTHH:mm:ss.sssZ
+    anniversary: { type: String, default: "" }, // ISO date string format: YYYY-MM-DDTHH:mm:ss.sssZ
     personalCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     personalPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     email: { type: String, default: "" },

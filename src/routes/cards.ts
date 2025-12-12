@@ -215,7 +215,7 @@ r.get("/", async (req: AuthReq, res) => {
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
     items.forEach((card, i) => {
-      console.log(`   Card ${i + 1}: "${card.name}"`);
+      console.log(`   Card ${i + 1}: "${card.name}" - birthdate: ${(card as any).birthdate}, anniversary: ${(card as any).anniversary}`);
     });
     
     // Generate ETag for proper caching
