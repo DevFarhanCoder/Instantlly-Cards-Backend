@@ -149,7 +149,7 @@ class OptimizedImageService {
             console.log(`📦 Batch ${currentBatch}/${batches} - ${((chunks.length / batches) * 100).toFixed(1)}%`);
           }
         })
-        .on("error", (err) => {
+        .on("error", (err: Error) => {
           reject(err);
         })
         .on("end", () => {
@@ -189,8 +189,8 @@ class OptimizedImageService {
       const chunks: Buffer[] = [];
 
       downloadStream
-        .on("data", (chunk) => chunks.push(chunk))
-        .on("error", (err) => {
+        .on("data", (chunk: Buffer) => chunks.push(chunk))
+        .on("error", (err: Error) => {
           reject(err);
         })
         .on("end", () => {
