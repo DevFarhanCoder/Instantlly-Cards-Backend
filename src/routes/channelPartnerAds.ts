@@ -4,8 +4,11 @@ import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import Ad from '../models/Ad';
 import { Readable } from 'stream';
+import { v4 as uuid } from 'uuid';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const router = express.Router();
+
 
 // Configure multer for memory storage
 const upload = multer({
@@ -23,6 +26,33 @@ const upload = multer({
   },
 });
 
+/* ------------------ S3 ------------------ */
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
+async function uploadToS3(
+  buffer: Buffer,
+  mimetype: string,
+  folder: string
+) {
+  const key = `${folder}/${uuid()}`;
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET!,
+      Key: key,
+      Body: buffer,
+      ContentType: mimetype,
+    })
+  );
+
+  return `${process.env.CLOUDFRONT_HOST}/${key}`;
+}
+
 /**
  * POST /api/channel-partner/ads
  * Upload a new ad (status = 'pending')
@@ -30,7 +60,7 @@ const upload = multer({
  */
 router.post(
   '/',
-  upload.array('images', 5), // Max 5 images
+  upload.any(), // Max 5 images
   async (req: Request, res: Response) => {
     try {
       console.log('📤 Ad upload request (no auth):', {
@@ -38,7 +68,8 @@ router.post(
         filesCount: (req.files as Express.Multer.File[])?.length || 0,
       });
 
-      const { title, phoneNumber, startDate, endDate, uploaderName, priority } = req.body;
+      const { title, phoneNumber, startDate, endDate, uploaderName, priority = 1, bottomMediaType = 'image',
+        fullscreenMediaType = 'image', } = req.body;
       const files = req.files as Express.Multer.File[];
 
       // Validation
@@ -49,13 +80,6 @@ router.post(
         });
       }
 
-      if (!files || files.length === 0) {
-        return res.status(400).json({ message: 'At least one image is required (bottom image)' });
-      }
-
-      if (files.length > 2) {
-        return res.status(400).json({ message: 'Maximum 2 images allowed (bottom image and optional fullscreen)' });
-      }
 
       // Validate dates
       const start = new Date(startDate);
@@ -69,12 +93,25 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
+      // 🔍 Pick files by fieldname (IMPORTANT)
+      const bottomImage = files.find(f => f.fieldname === 'bottomImage');
+      const fullscreenImage = files.find(f => f.fieldname === 'fullscreenImage');
+      const bottomVideo = files.find(f => f.fieldname === 'bottomVideo');
+      const fullscreenVideo = files.find(f => f.fieldname === 'fullscreenVideo');
+
+      if (bottomMediaType === 'image' && !bottomImage) {
+        return res.status(400).json({ message: 'Bottom image required' });
+      }
+      if (bottomMediaType === 'video' && !bottomVideo) {
+        return res.status(400).json({ message: 'Bottom video required' });
+      }
+      
       // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
       // We need to connect to Channel Partner database to check/deduct credits
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
-      
+
       console.log('🔍 Looking for user with phone:', uploaderPhone);
-      
+
       // Connect to Channel Partner database (separate database named 'channelpartner')
       const channelPartnerDB = mongoose.connection.useDb('channelpartner');
       const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
@@ -89,28 +126,28 @@ router.post(
       }));
 
       let user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
-      
+
       // If not found, try without country code prefix
       if (!user && uploaderPhone.startsWith('+91')) {
         const phoneWithoutPrefix = uploaderPhone.substring(3);
         console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
         user = await ChannelPartnerUser.findOne({ phone: phoneWithoutPrefix });
       }
-      
+
       // If still not found, try WITH country code prefix
       if (!user && !uploaderPhone.startsWith('+')) {
         const phoneWithPrefix = '+91' + uploaderPhone;
         console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
         user = await ChannelPartnerUser.findOne({ phone: phoneWithPrefix });
       }
-      
+
       console.log('👤 Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
-      
+
       if (!user) {
         // Try to find any user to see what's in the database
         const allUsers = await ChannelPartnerUser.find({}).limit(5);
         console.log('📋 Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
-        return res.status(404).json({ 
+        return res.status(404).json({
           message: 'User not found. Please ensure you are logged in.',
           searchedPhone: uploaderPhone,
           hint: 'Check phone number format (+91XXXXXXXXXX or XXXXXXXXXX)'
@@ -118,9 +155,9 @@ router.post(
       }
 
       const currentCredits = user.credits || 0;
-      
+
       if (currentCredits < 1020) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: 'Insufficient credits. You need 1020 credits to create an ad.',
           currentCredits: currentCredits,
           required: 1020
@@ -147,7 +184,7 @@ router.post(
       }
 
       const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
-      
+
       // Upload bottom image (required)
       const bottomImageFile = files[0];
       const bottomImageStream = bucket.openUploadStream(bottomImageFile.originalname, {
@@ -255,7 +292,7 @@ router.post(
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { phone } = req.query;
-    
+
     console.log('📋 Fetching ads (no auth):', phone ? `for phone ${phone}` : 'all ads');
 
     const filter = phone ? { uploadedBy: phone } : {};
@@ -326,14 +363,14 @@ router.put(
       if (title) ad.title = title;
       if (phoneNumber) ad.phoneNumber = phoneNumber;
       if (uploaderName) ad.uploaderName = uploaderName;
-      
+
       if (startDate) {
         const start = new Date(startDate);
         if (!isNaN(start.getTime())) {
           ad.startDate = start;
         }
       }
-      
+
       if (endDate) {
         const end = new Date(endDate);
         if (!isNaN(end.getTime())) {
@@ -464,7 +501,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     if (db) {
       const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
       const imageIdsToDelete: ObjectId[] = [];
-      
+
       if (ad.bottomImageGridFS) {
         imageIdsToDelete.push(ad.bottomImageGridFS as ObjectId);
       }

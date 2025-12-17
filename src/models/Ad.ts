@@ -102,11 +102,34 @@ const AdSchema = new mongoose.Schema(
     rejectionReason: {
       type: String,
       default: null
-    }
+    },
+    // 🔥 NEW FIELDS FOR VIDEO SUPPORT
+    bottomMediaType: {
+      type: String,
+      enum: ['image', 'video'],
+      default: 'image',
+    },
+
+    bottomVideoUrl: {
+      type: String,
+      default: null,
+    },
+
+    fullscreenMediaType: {
+      type: String,
+      enum: ['image', 'video'],
+      default: 'image',
+    },
+
+    fullscreenVideoUrl: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true
-  }
+  },
+
 );
 
 // Compound index for active ads within date range
