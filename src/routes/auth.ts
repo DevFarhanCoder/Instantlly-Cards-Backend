@@ -9,6 +9,8 @@ import User from "../models/User";
 import Contact from "../models/Contact";
 import Transaction from "../models/Transaction";
 import Card from "../models/Card";
+import CreditConfig from "../models/CreditConfig";
+// Force language server refresh
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
 import { otpService } from "../services/otpService";
@@ -159,12 +161,24 @@ router.post("/signup", async (req, res) => {
     const creditsExpiryDate = new Date();
     creditsExpiryDate.setMonth(creditsExpiryDate.getMonth() + 1);
 
-    // Create user data object with 500,000 credits valid for 1 month
+    // Get credit amounts from config
+    let creditConfig = await CreditConfig.findOne();
+    if (!creditConfig) {
+      creditConfig = await CreditConfig.create({
+        signupBonus: 200,
+        referralReward: 300,
+        lastUpdatedBy: 'system',
+        lastUpdatedAt: new Date()
+      });
+    }
+    const signupCredits = creditConfig.signupBonus;
+
+    // Create user data object with dynamic credits valid for 1 month
     const userData: any = {
       name: cleanName,
       phone: cleanPhone,
       password: hashedPassword,
-      credits: 500000, // 5 lac credits
+      credits: signupCredits,
       creditsExpiryDate: creditsExpiryDate, // Expire after 1 month
       referralCode: newReferralCode
     };
@@ -188,47 +202,55 @@ router.post("/signup", async (req, res) => {
     console.log('✅ User created successfully with ID:', savedUser._id);
 
     // Create a single idempotent default card for the new user (use name + phone)
-    // Robust behavior:
-    // - Search by both ObjectId and string forms of userId (some records store string)
-    // - Save userId as string when creating the card to avoid mismatches
-    // - If card creation fails, return a fallback defaultCard object so client can
-    //   immediately show a card UI with name + phone while background repairs occur
+    // Use isDefault flag with unique index to prevent race condition duplicates
     let defaultCard = null;
     try {
-      const userIdCandidates = [savedUser._id, savedUser._id.toString()];
-      const existingCard = await Card.findOne({ userId: { $in: userIdCandidates } }).lean();
-      if (existingCard) {
-        console.log(`🔖 [REQ:${reqId}] ℹ️ Default card already exists for user, skipping creation:`, savedUser._id);
-        defaultCard = existingCard;
-      } else {
-        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
-        const cardData: any = {
-          userId: savedUser._id.toString(),
-          name: savedUser.name || cleanName,
-          personalPhone: phoneDigits,
-        };
+      const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+      const cardData: any = {
+        userId: savedUser._id.toString(),
+        name: savedUser.name || cleanName,
+        personalPhone: phoneDigits,
+        isDefault: true, // Mark as default card
+      };
 
-        // Create card; ensure created object is converted to plain object for response
-        const createdCard = await Card.create(cardData);
-        defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
-        console.log(`🔖 [REQ:${reqId}] 🆕 Default card created for user:`, savedUser._id, 'phone:', phoneDigits);
-      }
-    } catch (cardError) {
-      console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
-      // Fallback: construct a minimal defaultCard object so frontend can display
-      try {
-        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
-        defaultCard = {
-          _id: null,
-          userId: savedUser._id.toString(),
-          name: savedUser.name || cleanName,
-          personalPhone: phoneDigits,
-          isFallback: true
-        };
-        console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
-      } catch (fallbackError) {
-        console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
-        defaultCard = null;
+      // Use findOneAndUpdate with upsert to prevent race condition
+      // The unique index on {userId, isDefault: true} prevents duplicates at DB level
+      const createdCard = await Card.findOneAndUpdate(
+        { userId: savedUser._id.toString(), isDefault: true }, // Find default card for user
+        { $setOnInsert: cardData }, // Only set these fields if creating new doc
+        { upsert: true, new: true } // Create if doesn't exist, return the doc
+      );
+      
+      defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
+      console.log(`🔖 [REQ:${reqId}] ✅ Default card ensured for user:`, savedUser._id, 'phone:', phoneDigits);
+    } catch (cardError: any) {
+      // Handle duplicate key error gracefully (E11000 = duplicate key)
+      if (cardError.code === 11000) {
+        console.log(`🔖 [REQ:${reqId}] ℹ️ Default card already exists (caught duplicate key error)`);
+        // Fetch existing default card
+        try {
+          const existing = await Card.findOne({ userId: savedUser._id.toString(), isDefault: true }).lean();
+          defaultCard = existing;
+        } catch (fetchError) {
+          console.error(`🔖 [REQ:${reqId}] ❌ Failed to fetch existing default card:`, fetchError);
+        }
+      } else {
+        console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
+        // Fallback: construct a minimal defaultCard object so frontend can display
+        try {
+          const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+          defaultCard = {
+            _id: null,
+            userId: savedUser._id.toString(),
+            name: savedUser.name || cleanName,
+            personalPhone: phoneDigits,
+            isFallback: true
+          };
+          console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
+        } catch (fallbackError) {
+          console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
+          defaultCard = null;
+        }
       }
     }
 
@@ -236,81 +258,16 @@ router.post("/signup", async (req, res) => {
     await Transaction.create({
       type: 'signup_bonus',
       toUser: savedUser._id,
-      amount: 500000,
-      description: 'Signup bonus - 5 lac credits',
+      amount: signupCredits,
+      description: `Signup bonus - ${signupCredits} credits`,
       balanceBefore: 0,
-      balanceAfter: 500000,
+      balanceAfter: signupCredits,
       status: 'completed'
     });
 
-    // 🎴 AUTO-CREATE FIRST CARD: Create a default card with name and phone number
-    try {
-      console.log('🎴 Creating default card for new user...');
-      
-      // Extract country code and phone number from fullPhone
-      let personalCountryCode = '';
-      let personalPhone = '';
-      
-      if (cleanPhone.startsWith('+')) {
-        // Extract country code (e.g., +91 from +919876543210)
-        const phoneWithoutPlus = cleanPhone.substring(1);
-        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-          // Indian number
-          personalCountryCode = '91';
-          personalPhone = phoneWithoutPlus.substring(2);
-        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-          // US/Canada number
-          personalCountryCode = '1';
-          personalPhone = phoneWithoutPlus.substring(1);
-        } else {
-          // Generic: take first 2-3 digits as country code
-          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
-          if (match) {
-            personalCountryCode = match[1];
-            personalPhone = match[2];
-          }
-        }
-      }
-      
-      const defaultCard = await Card.create({
-        userId: savedUser._id.toString(),
-        name: cleanName,
-        personalCountryCode: personalCountryCode,
-        personalPhone: personalPhone,
-        // All other fields will use default empty values from the schema
-        gender: '',
-        email: '',
-        location: '',
-        mapsLink: '',
-        companyName: '',
-        designation: '',
-        companyCountryCode: '',
-        companyPhone: '',
-        companyEmail: '',
-        companyWebsite: '',
-        companyAddress: '',
-        companyMapsLink: '',
-        message: '',
-        companyPhoto: '',
-        linkedin: '',
-        twitter: '',
-        instagram: '',
-        facebook: '',
-        youtube: '',
-        whatsapp: '',
-        telegram: ''
-      });
-      
-      console.log('✅ Default card created successfully with ID:', defaultCard._id);
-      console.log('📇 Card details - Name:', defaultCard.name, 'Phone:', `+${personalCountryCode}${personalPhone}`);
-    } catch (cardError) {
-      console.error('⚠️ Failed to create default card:', cardError);
-      // Don't fail signup if card creation fails
-    }
-
-    // If referred by someone, give referrer 20% bonus (100,000 credits)
+    // If referred by someone, give referrer the configured bonus
     if (referrer) {
-      const referralBonus = 100000; // 20% of 500,000
+      const referralBonus = creditConfig.referralReward;
       referrer.credits = (referrer.credits || 0) + referralBonus;
       await referrer.save();
 
@@ -677,21 +634,32 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
       
       const normalizedPhone = phone.replace(/[\s\-\(\)]/g, '');
       
-      // Check if phone number is already taken by another user
-      const existingUser = await User.findOne({ phone: normalizedPhone });
+      // Get current user to check if phone is unchanged
+      const currentUser = await User.findById(userId);
+      if (!currentUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
       
-      if (existingUser && existingUser._id.toString() !== userId) {
-        console.error('❌ Phone number conflict:', {
-          attemptedPhone: normalizedPhone,
-          requestingUserId: userId,
-          existingUserId: existingUser._id.toString(),
-          existingUserName: existingUser.name
-        });
-        return res.status(409).json({ 
-          message: "Phone number already exists",
-          error: "PHONE_EXISTS",
-          details: `This phone number is already registered to another account`
-        });
+      // Only check for duplicates if the phone number is actually changing
+      if (currentUser.phone !== normalizedPhone) {
+        // Check if phone number is already taken by another user
+        const existingUser = await User.findOne({ phone: normalizedPhone });
+        
+        if (existingUser && existingUser._id.toString() !== userId) {
+          console.error('❌ Phone number conflict:', {
+            attemptedPhone: normalizedPhone,
+            requestingUserId: userId,
+            existingUserId: existingUser._id.toString(),
+            existingUserName: existingUser.name
+          });
+          return res.status(409).json({ 
+            message: "Phone number already exists",
+            error: "PHONE_EXISTS",
+            details: `This phone number is already registered to another account`
+          });
+        }
+      } else {
+        console.log('📱 Phone unchanged, skipping duplicate check');
       }
       
       updateData.phone = normalizedPhone;
@@ -937,7 +905,8 @@ router.post("/check-phone", async (req, res) => {
     console.log(`[CHECK-PHONE] 🔑 Generated OTP: ${otp} for ${cleanPhone}`);
 
     try {
-      const message = `<#> ${otp} is your verification code for Instantlly Cards.
+      // Android SMS Retriever format: <#> OTP_CODE message<newline>HASH
+      const message = `<#> ${otp} is your OTP for Instantlly Cards
 ${finalAppHash}`;
 
       const fast2smsPayload = new URLSearchParams({
@@ -983,7 +952,7 @@ ${finalAppHash}`;
 // POST /api/auth/send-reset-otp - Send OTP for password reset if phone is registered
 router.post("/send-reset-otp", async (req, res) => {
   try {
-    const { phone } = req.body ?? {};
+    const { phone, appHash } = req.body ?? {};
     if (!phone) {
       return res.status(400).json({ message: 'Phone number is required' });
     }
@@ -1020,7 +989,13 @@ router.post("/send-reset-otp", async (req, res) => {
       console.warn('[SEND-RESET-OTP] Non-Indian number, but OTP stored in cache for normalized phone');
     }
 
-    const message = `${otp} is your password reset code for Instantlly Cards. Valid for 5 minutes. Do not share with anyone.`;
+    const finalAppHash = (appHash || "").trim();
+    console.log("[SEND-RESET-OTP] 📩 Received appHash:", finalAppHash);
+
+    // Android SMS Retriever format for auto-fill
+    const message = finalAppHash 
+      ? `<#> ${otp} is your password reset code for Instantlly Cards\n${finalAppHash}`
+      : `${otp} is your password reset code for Instantlly Cards`;
 
     // If Fast2SMS API key is not configured, fallback to development mode: store OTP and
     // return success with debug info so local testing can continue without SMS provider.

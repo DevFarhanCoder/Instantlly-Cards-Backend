@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const schema = new mongoose.Schema(
   {
     userId: { type: String, index: true, required: true },
+    isDefault: { type: Boolean, default: false }, // Flag for default card (only 1 per user)
 
     // Personal
     name: { type: String, required: true, trim: true },
@@ -20,6 +21,13 @@ const schema = new mongoose.Schema(
     designation: { type: String, default: "" },
     companyCountryCode: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
     companyPhone: { type: String, default: "", match: [/^\d*$/, "Digits only"] },
+    companyPhones: { 
+      type: [{ 
+        countryCode: { type: String, default: "91" }, 
+        phone: { type: String, default: "" } 
+      }], 
+      default: [] 
+    },
     companyEmail: { type: String, default: "" },
     companyWebsite: { type: String, default: "" },
     companyAddress: { type: String, default: "" },
@@ -35,6 +43,9 @@ const schema = new mongoose.Schema(
     youtube: { type: String, default: "" },
     whatsapp: { type: String, default: "" },
     telegram: { type: String, default: "" },
+
+    // Search
+    keywords: { type: String, default: "" },
   },
   { timestamps: true }
 );
@@ -43,5 +54,6 @@ const schema = new mongoose.Schema(
 schema.index({ userId: 1, createdAt: -1 }); // Composite index for user's cards sorted by date
 schema.index({ createdAt: -1 }); // Index for sorting by creation date
 schema.index({ companyName: 'text', name: 'text' }); // Text search index
+schema.index({ userId: 1, isDefault: 1 }, { unique: true, partialFilterExpression: { isDefault: true } }); // Unique default card per user
 
 export default mongoose.model("Card", schema);

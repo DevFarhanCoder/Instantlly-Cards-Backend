@@ -1,11 +1,12 @@
 // index.ts
 import dotenv from "dotenv";
-dotenv.config();
+import path from "path";
+// Load .env from the project root
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
 import compression from "compression";
-import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
 import { createServer } from "http";
@@ -242,6 +243,7 @@ async function startServer() {
     app.use("/api/groups", groupsRouter);    
     app.use("/api/chats", chatsRouter);
     app.use("/api/admin", adminRouter);
+    console.log("✅ Mounted /api/admin routes (dashboard stats, user management)");
     app.use("/api/admin-auth", adminAuthRouter);
     console.log("✅ Mounted /api/admin-auth routes (admin login/verification)");
     app.use("/api/group-sharing", groupSharingRouter);

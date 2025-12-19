@@ -280,32 +280,31 @@ r.put("/:id", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let updateData = { ...req.body };
-    console.log('📝 [UPDATE CARD] Received data:', JSON.stringify({ birthdate: updateData.birthdate, anniversary: updateData.anniversary }, null, 2));
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
-      console.log('🖼️ Processing Base64 image for card update...');
       try {
-        // Get existing card to potentially delete old image
-        const existingCard = await Card.findOne({ _id: req.params.id, userId });
-        
         const imagePath = await saveBase64Image(updateData.companyPhoto, userId);
+        
+        // Get old image path before update (only if we're changing the image)
+        const existingCard = await Card.findOne({ _id: req.params.id, userId }).select('companyPhoto').lean();
+        const oldImagePath: string | undefined = existingCard?.companyPhoto;
+        
         updateData.companyPhoto = imagePath;
-        console.log('✅ Image updated successfully:', imagePath);
-
-        // Clean up old image file if it exists and is different
-        if (existingCard?.companyPhoto && 
-            existingCard.companyPhoto !== imagePath && 
-            existingCard.companyPhoto.startsWith('/uploads/')) {
-          try {
-            const oldPath = path.join(process.cwd(), existingCard.companyPhoto);
-            if (fs.existsSync(oldPath)) {
-              fs.unlinkSync(oldPath);
-              console.log('🗑️ Deleted old image:', existingCard.companyPhoto);
+        
+        // Clean up old image in background (non-blocking)
+        if (oldImagePath && typeof oldImagePath === 'string' && oldImagePath !== imagePath && oldImagePath.startsWith('/uploads/')) {
+          const pathToDelete = oldImagePath; // Capture in closure
+          setImmediate(() => {
+            try {
+              const oldPath = path.join(process.cwd(), pathToDelete);
+              if (fs.existsSync(oldPath)) {
+                fs.unlinkSync(oldPath);
+              }
+            } catch (deleteError) {
+              console.error('Warning: Failed to delete old image:', deleteError);
             }
-          } catch (deleteError) {
-            console.error('Warning: Failed to delete old image:', deleteError);
-          }
+          });
         }
       } catch (imageError) {
         console.error('❌ Failed to process image:', imageError);
@@ -314,13 +313,15 @@ r.put("/:id", async (req: AuthReq, res) => {
       }
     }
 
+    // Single database query for update
     const doc = await Card.findOneAndUpdate(
       { _id: req.params.id, userId },
       updateData,
       { new: true }
     );
+    
     if (!doc) return res.status(404).json({ message: "Not found" });
-    console.log('✅ [UPDATE CARD] Saved to DB:', JSON.stringify({ birthdate: (doc as any).birthdate, anniversary: (doc as any).anniversary }, null, 2));
+
     res.json({ data: doc });
   } catch (err) {
     console.error("UPDATE CARD ERROR", err);
@@ -331,8 +332,29 @@ r.put("/:id", async (req: AuthReq, res) => {
 // DELETE
 r.delete("/:id", async (req: AuthReq, res) => {
   try {
-    const doc = await Card.findOneAndDelete({ _id: req.params.id, userId: req.userId! });
-    if (!doc) return res.status(404).json({ message: "Not found" });
+    const cardId = req.params.id;
+    const userId = req.userId!;
+    
+    console.log(`🗑️ DELETE card request - CardID: ${cardId}, UserID: ${userId}`);
+    
+    // First check if card exists at all (for debugging)
+    const existingCard = await Card.findById(cardId);
+    if (!existingCard) {
+      console.log(`❌ Card ${cardId} does not exist in database`);
+      return res.status(404).json({ message: "Card not found - it may have already been deleted" });
+    }
+    
+    console.log(`📋 Card found - Owner: ${existingCard.userId}, Requester: ${userId}`);
+    
+    // Check if user owns the card
+    if (existingCard.userId.toString() !== userId.toString()) {
+      console.log(`❌ Permission denied - Card ${cardId} belongs to ${existingCard.userId}, not ${userId}`);
+      return res.status(403).json({ message: "You don't have permission to delete this card" });
+    }
+    
+    // Delete the card
+    await Card.findByIdAndDelete(cardId);
+    console.log(`✅ Card ${cardId} deleted successfully by user ${userId}`);
     res.json({ ok: true });
   } catch (err) {
     console.error("DELETE CARD ERROR", err);
@@ -529,8 +551,22 @@ r.get("/received", async (req: AuthReq, res) => {
     
     console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit}, search: "${search || 'none'}", fuzzy: ${fuzzy})...`);
     
-    // Build query with cursor for pagination
-    const query: any = { recipientId };
+    // STEP 1: Find all senders who sent cards to this recipient
+    const receivedFromSenders = await SharedCard.find({ recipientId }).distinct('senderId');
+    
+    // STEP 2: Find which of these senders the recipient has ALSO sent cards to (mutual exchange)
+    const mutualSenders = await SharedCard.find({
+      senderId: recipientId,
+      recipientId: { $in: receivedFromSenders }
+    }).distinct('recipientId');
+    
+    console.log(`🔄 [${recipientId}] Received from ${receivedFromSenders.length} users, mutual exchange with ${mutualSenders.length} users`);
+    
+    // Build query with cursor for pagination - ONLY show cards from mutual exchanges
+    const query: any = { 
+      recipientId,
+      senderId: { $in: mutualSenders } // Only show if recipient has also sent card back
+    };
     if (cursor) {
       query._id = { $lt: cursor };
     }
