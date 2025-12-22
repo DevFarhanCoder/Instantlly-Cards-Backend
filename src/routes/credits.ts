@@ -7,6 +7,60 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 
 const router = Router();
 
+// GET /api/credits/referral-stats - Get user's referral statistics
+router.get("/referral-stats", requireAuth, async (req: AuthReq, res) => {
+  try {
+    // Get current user with referral code
+    const currentUser = await User.findById(req.userId).select('referralCode');
+    
+    if (!currentUser) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    // Find all users who were referred by this user
+    const referredUsers = await User.find({ 
+      referredBy: req.userId 
+    })
+    .select('name phone createdAt')
+    .sort({ createdAt: -1 })
+    .limit(50);
+
+    // Calculate total credits earned from referrals
+    const referralTransactions = await Transaction.find({
+      toUser: req.userId,
+      type: 'referral_bonus'
+    });
+
+    const totalCreditsEarned = referralTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+
+    // Format recent referrals
+    const recentReferrals = referredUsers.map(user => ({
+      name: user.name,
+      phone: user.phone,
+      createdAt: user.createdAt,
+      status: 'completed',
+      creditsEarned: 300 // Default referral reward
+    }));
+
+    res.json({
+      success: true,
+      referralCode: (currentUser as any).referralCode || 'N/A',
+      totalReferrals: referredUsers.length,
+      totalCreditsEarned,
+      recentReferrals
+    });
+  } catch (error) {
+    console.error("GET REFERRAL STATS ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
 // GET /api/credits/balance - Get current credits balance
 router.get("/balance", requireAuth, async (req: AuthReq, res) => {
   try {
