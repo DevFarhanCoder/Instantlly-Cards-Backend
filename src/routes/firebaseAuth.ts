@@ -4,6 +4,8 @@ import jwt from "jsonwebtoken";
 import User from "../models/User";
 import Contact from "../models/Contact";
 import Transaction from "../models/Transaction";
+import CreditConfig from "../models/CreditConfig";
+// Force language server refresh
 import { initializeFirebase } from "../services/firebase";
 import admin from "firebase-admin";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
@@ -149,12 +151,24 @@ router.post("/firebase-auth", async (req, res) => {
     const creditsExpiryDate = new Date();
     creditsExpiryDate.setMonth(creditsExpiryDate.getMonth() + 1);
 
+    // Get credit amounts from config
+    let creditConfig = await CreditConfig.findOne();
+    if (!creditConfig) {
+      creditConfig = await CreditConfig.create({
+        signupBonus: 200,
+        referralReward: 300,
+        lastUpdatedBy: 'system',
+        lastUpdatedAt: new Date()
+      });
+    }
+    const signupCredits = creditConfig.signupBonus;
+
     // Create user data object
     const userData: any = {
       name: cleanName,
       phone: phoneNumber,
       firebaseUid: firebaseUid,
-      credits: 500000, // 5 lac credits
+      credits: signupCredits,
       creditsExpiryDate: creditsExpiryDate,
       referralCode: newReferralCode
     };
@@ -179,16 +193,16 @@ router.post("/firebase-auth", async (req, res) => {
     await Transaction.create({
       type: 'signup_bonus',
       toUser: savedUser._id,
-      amount: 500000,
-      description: 'Signup bonus - 5 lac credits',
+      amount: signupCredits,
+      description: `Signup bonus - ${signupCredits} credits`,
       balanceBefore: 0,
-      balanceAfter: 500000,
+      balanceAfter: signupCredits,
       status: 'completed'
     });
 
-    // If referred by someone, give referrer 20% bonus (100,000 credits)
+    // If referred by someone, give referrer the configured bonus
     if (referrer) {
-      const referralBonus = 100000;
+      const referralBonus = creditConfig.referralReward;
       referrer.credits = (referrer.credits || 0) + referralBonus;
       await referrer.save();
 

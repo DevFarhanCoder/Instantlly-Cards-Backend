@@ -92,7 +92,7 @@ class OptimizedImageService {
     let totalBytes = 0;
     let chunkCount = 0;
 
-    downloadStream.on('data', (chunk) => {
+    downloadStream.on('data', (chunk: Buffer) => {
       totalBytes += chunk.length;
       chunkCount++;
     });
@@ -101,7 +101,7 @@ class OptimizedImageService {
       console.log(`✅ Stream complete - ${chunkCount} chunks, ${(totalBytes / 1024).toFixed(2)}KB`);
     });
 
-    downloadStream.on('error', (err) => {
+    downloadStream.on('error', (err: Error) => {
       console.error(`❌ Stream error after ${chunkCount} chunks:`, err.message);
     });
 
@@ -149,7 +149,7 @@ class OptimizedImageService {
             console.log(`📦 Batch ${currentBatch}/${batches} - ${((chunks.length / batches) * 100).toFixed(1)}%`);
           }
         })
-        .on("error", (err) => {
+        .on("error", (err: Error) => {
           reject(err);
         })
         .on("end", () => {
@@ -189,8 +189,8 @@ class OptimizedImageService {
       const chunks: Buffer[] = [];
 
       downloadStream
-        .on("data", (chunk) => chunks.push(chunk))
-        .on("error", (err) => {
+        .on("data", (chunk: Buffer) => chunks.push(chunk))
+        .on("error", (err: Error) => {
           reject(err);
         })
         .on("end", () => {

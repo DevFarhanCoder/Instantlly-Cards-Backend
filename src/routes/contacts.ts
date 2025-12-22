@@ -188,6 +188,20 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
     .lean()
     .exec();
 
+    console.log(`🔍 [${userId}] SYNC - Found ${appUsers.length} app users in database`);
+    
+    // Check if Shalini exists in app users
+    const shaliniUser = appUsers.find((u: any) => u.name && u.name.toLowerCase().includes('shalini'));
+    if (shaliniUser) {
+      console.log(`✅ [${userId}] SHALINI FOUND IN USERS DB:`, { 
+        name: shaliniUser.name, 
+        phone: shaliniUser.phone,
+        _id: shaliniUser._id 
+      });
+    } else {
+      console.log(`❌ [${userId}] Shalini NOT in app users database`);
+    }
+
     // Create a map of phone numbers to users (normalize for comparison)
     const phoneToUserMap = new Map();
     appUsers.forEach(user => {
@@ -202,10 +216,17 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
               normalizedUserPhone === '91' + normalizedContactPhone ||
               normalizedUserPhone === normalizedContactPhone.substring(2)) { // Remove country code
             phoneToUserMap.set(contactPhone, user);
+            
+            // Log Shalini match
+            if (user.name && user.name.toLowerCase().includes('shalini')) {
+              console.log(`✅ [${userId}] SHALINI PHONE MATCHED! Contact: "${contactPhone}" → User: "${user.name}" (${user.phone})`);
+            }
           }
         });
       }
     });
+    
+    console.log(`📊 [${userId}] Mapped ${phoneToUserMap.size} contacts to app users`);
 
     // Prepare contacts for bulk upsert
     const contactsToSave = normalizedContacts.map(contact => {
@@ -233,7 +254,25 @@ router.post("/sync-all", requireAuth, async (req: AuthReq, res) => {
 
     // Bulk upsert contacts - OPTIMIZED
     if (contactsToSave.length > 0) {
-      await Contact.bulkWrite(contactsToSave, { ordered: false });
+      const writeResult = await Contact.bulkWrite(contactsToSave, { ordered: false });
+      console.log(`💾 [${userId}] Bulk write: ${writeResult.upsertedCount} inserted, ${writeResult.modifiedCount} modified`);
+    }
+
+    // Verify Shalini was saved correctly
+    const shaliniContact = await Contact.findOne({ 
+      userId, 
+      name: { $regex: /shalini/i } 
+    }).lean();
+    
+    if (shaliniContact) {
+      console.log(`🔍 [${userId}] SHALINI IN DATABASE AFTER SYNC:`, {
+        name: shaliniContact.name,
+        phone: shaliniContact.phoneNumber,
+        isAppUser: shaliniContact.isAppUser,
+        appUserId: shaliniContact.appUserId
+      });
+    } else {
+      console.log(`❌ [${userId}] Shalini contact NOT in database after sync`);
     }
 
     // Return summary
@@ -423,7 +462,22 @@ router.get("/all", requireAuth, async (req: AuthReq, res) => {
     }));
 
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [${userId}] Fetched ${formattedContacts.length} contacts in ${elapsed}ms`);
+    
+    // Check for Shalini in the response
+    const shaliniInResponse = formattedContacts.find((c: any) => c.name && c.name.toLowerCase().includes('shalini'));
+    if (shaliniInResponse) {
+      console.log(`✅ [${userId}] SHALINI IN /contacts/all RESPONSE:`, {
+        name: shaliniInResponse.name,
+        phone: shaliniInResponse.phoneNumber,
+        isAppUser: shaliniInResponse.isAppUser,
+        appUserId: shaliniInResponse.appUserId
+      });
+    } else {
+      console.log(`❌ [${userId}] Shalini NOT in /contacts/all response`);
+    }
+    
+    const appUsersCount = formattedContacts.filter((c: any) => c.isAppUser).length;
+    console.log(`✅ [${userId}] Fetched ${formattedContacts.length} contacts in ${elapsed}ms (${appUsersCount} app users)`);
     
     // Add ETag for caching
     const etag = `"contacts-${userId}-${page}-${formattedContacts.length}-${totalContacts}"`;
