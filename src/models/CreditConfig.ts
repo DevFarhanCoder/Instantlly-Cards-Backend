@@ -38,7 +38,4 @@ const CreditConfigSchema = new Schema(
   }
 );
 
-// Ensure only one config document exists
-CreditConfigSchema.index({ _id: 1 }, { unique: true });
-
 export default models.CreditConfig || model("CreditConfig", CreditConfigSchema);
