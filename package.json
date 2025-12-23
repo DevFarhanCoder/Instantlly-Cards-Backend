@@ -7,6 +7,7 @@
     "start": "node dist/index.js",
     "check-user": "ts-node src/scripts/check-user.ts",
     "reset-password": "ts-node src/scripts/reset-password.ts",
+    "migrate:credits": "ts-node src/scripts/migrate-credits.ts",
     "migrate:gridfs": "ts-node src/scripts/migrate-ads-to-gridfs.ts",
     "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup",
     "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts",

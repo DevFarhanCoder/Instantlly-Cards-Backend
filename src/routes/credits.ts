@@ -497,4 +497,191 @@ router.put("/config", async (req, res) => {
   }
 });
 
+// POST /api/credits/admin/reset-user-credits - Reset a user's credits to default (Admin Only)
+router.post("/admin/reset-user-credits", async (req, res) => {
+  try {
+    console.log("📝 Admin reset user credits request");
+    
+    // Simple admin authentication
+    const adminKey = req.headers['x-admin-key'] as string;
+    
+    if (adminKey !== process.env.ADMIN_SECRET_KEY && adminKey !== 'your-secure-admin-key-here') {
+      return res.status(401).json({ 
+        success: false,
+        message: "Unauthorized - Admin access required" 
+      });
+    }
+
+    const { userId, phone, resetToDefault } = req.body;
+
+    // Find user by ID or phone
+    let user;
+    if (userId) {
+      user = await User.findById(userId);
+    } else if (phone) {
+      user = await User.findOne({ phone });
+    } else {
+      return res.status(400).json({ 
+        success: false,
+        message: "Either userId or phone is required" 
+      });
+    }
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    // Get current credit config
+    let creditConfig = await CreditConfig.findOne();
+    if (!creditConfig) {
+      creditConfig = await CreditConfig.create({
+        signupBonus: 200,
+        referralReward: 300,
+        lastUpdatedBy: 'system',
+        lastUpdatedAt: new Date()
+      });
+    }
+
+    const oldCredits = (user as any).credits;
+    
+    // Reset credits to signup bonus (default for regular users)
+    (user as any).credits = resetToDefault ? creditConfig.signupBonus : 200;
+    
+    // Extend credits expiry by 1 month from now
+    const newExpiryDate = new Date();
+    newExpiryDate.setMonth(newExpiryDate.getMonth() + 1);
+    (user as any).creditsExpiryDate = newExpiryDate;
+    
+    await user.save();
+
+    console.log(`✅ Reset credits for user ${user._id}: ${oldCredits} → ${(user as any).credits}`);
+
+    res.json({
+      success: true,
+      message: "User credits reset successfully",
+      data: {
+        userId: user._id,
+        phone: user.phone,
+        name: user.name,
+        oldCredits,
+        newCredits: (user as any).credits,
+        expiryDate: (user as any).creditsExpiryDate
+      }
+    });
+  } catch (error) {
+    console.error("RESET USER CREDITS ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
+// POST /api/credits/admin/migrate-all-users - Migrate all existing users to new credit system (Admin Only)
+router.post("/admin/migrate-all-users", async (req, res) => {
+  try {
+    console.log("🚀 Admin migration request - migrating all users to new credit system");
+    
+    // Simple admin authentication
+    const adminKey = req.headers['x-admin-key'] as string;
+    
+    if (adminKey !== process.env.ADMIN_SECRET_KEY && adminKey !== 'your-secure-admin-key-here') {
+      return res.status(401).json({ 
+        success: false,
+        message: "Unauthorized - Admin access required" 
+      });
+    }
+
+    // Get credit config
+    let creditConfig = await CreditConfig.findOne();
+    if (!creditConfig) {
+      creditConfig = await CreditConfig.create({
+        signupBonus: 200,
+        referralReward: 300,
+        lastUpdatedBy: 'system',
+        lastUpdatedAt: new Date()
+      });
+    }
+
+    const targetCredits = creditConfig.signupBonus;
+
+    // Calculate new expiry date (30 days from now)
+    const newExpiryDate = new Date();
+    newExpiryDate.setMonth(newExpiryDate.getMonth() + 1);
+
+    // Find all users who don't have the target credit amount
+    const allUsers = await User.find({});
+    const usersToMigrate = allUsers.filter(user => {
+      const userCredits = (user as any).credits;
+      // Migrate if credits is null, undefined, or not equal to target
+      return userCredits === null || userCredits === undefined || userCredits !== targetCredits;
+    });
+
+    console.log(`📊 Migration stats: ${usersToMigrate.length} users out of ${allUsers.length} need migration`);
+
+    if (usersToMigrate.length === 0) {
+      return res.json({
+        success: true,
+        message: "All users already have correct credits",
+        stats: {
+          totalUsers: allUsers.length,
+          migratedUsers: 0,
+          targetCredits,
+          expiryDate: newExpiryDate
+        }
+      });
+    }
+
+    // Migrate users
+    let migratedCount = 0;
+    const migrations = [];
+
+    for (const user of usersToMigrate) {
+      const oldCredits = (user as any).credits || 0;
+      
+      (user as any).credits = targetCredits;
+      (user as any).creditsExpiryDate = newExpiryDate;
+      
+      await user.save();
+      migratedCount++;
+
+      migrations.push({
+        userId: user._id,
+        phone: user.phone,
+        name: user.name,
+        oldCredits,
+        newCredits: targetCredits
+      });
+
+      // Log every 100 users
+      if (migratedCount % 100 === 0) {
+        console.log(`✅ Migrated ${migratedCount}/${usersToMigrate.length} users...`);
+      }
+    }
+
+    console.log(`✅ Migration complete! ${migratedCount} users migrated to ${targetCredits} credits`);
+
+    res.json({
+      success: true,
+      message: `Successfully migrated ${migratedCount} users to new credit system`,
+      stats: {
+        totalUsers: allUsers.length,
+        migratedUsers: migratedCount,
+        targetCredits,
+        expiryDate: newExpiryDate
+      },
+      sample: migrations.slice(0, 10) // Show first 10 as sample
+    });
+  } catch (error) {
+    console.error("MIGRATION ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Migration failed" 
+    });
+  }
+});
+
 export default router;
