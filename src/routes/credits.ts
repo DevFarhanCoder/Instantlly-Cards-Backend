@@ -7,59 +7,15 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 
 const router = Router();
 
-// GET /api/credits/referral-stats - Get user's referral statistics
-router.get("/referral-stats", requireAuth, async (req: AuthReq, res) => {
-  try {
-    // Get current user with referral code
-    const currentUser = await User.findById(req.userId).select('referralCode');
-    
-    if (!currentUser) {
-      return res.status(404).json({ 
-        success: false,
-        message: "User not found" 
-      });
-    }
-
-    // Find all users who were referred by this user
-    const referredUsers = await User.find({ 
-      referredBy: req.userId 
-    })
-    .select('name phone createdAt')
-    .sort({ createdAt: -1 })
-    .limit(50);
-
-    // Calculate total credits earned from referrals
-    const referralTransactions = await Transaction.find({
-      toUser: req.userId,
-      type: 'referral_bonus'
-    });
-
-    const totalCreditsEarned = referralTransactions.reduce((sum, tx) => sum + tx.amount, 0);
-
-    // Format recent referrals
-    const recentReferrals = referredUsers.map(user => ({
-      name: user.name,
-      phone: user.phone,
-      createdAt: user.createdAt,
-      status: 'completed',
-      creditsEarned: 300 // Default referral reward
-    }));
-
-    res.json({
-      success: true,
-      referralCode: (currentUser as any).referralCode || 'N/A',
-      totalReferrals: referredUsers.length,
-      totalCreditsEarned,
-      recentReferrals
-    });
-  } catch (error) {
-    console.error("GET REFERRAL STATS ERROR", error);
-    res.status(500).json({ 
-      success: false,
-      message: "Server error" 
-    });
+// Helper function to generate referral code
+function generateReferralCode(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-});
+  return code;
+}
 
 // GET /api/credits/balance - Get current credits balance
 router.get("/balance", requireAuth, async (req: AuthReq, res) => {
@@ -361,13 +317,31 @@ router.get("/config", async (req, res) => {
 router.get("/referral-stats", requireAuth, async (req: AuthReq, res) => {
   try {
     // Get current user
-    const user = await User.findById(req.userId).select('name referralCode');
+    let user = await User.findById(req.userId).select('name referralCode');
     
     if (!user) {
       return res.status(404).json({ 
         success: false,
         message: "User not found" 
       });
+    }
+
+    // If user doesn't have a referral code, generate one now
+    if (!(user as any).referralCode) {
+      console.log('⚠️ User missing referral code, generating now...');
+      let newReferralCode = generateReferralCode();
+      let codeExists = await User.findOne({ referralCode: newReferralCode });
+      
+      // Ensure uniqueness
+      while (codeExists) {
+        newReferralCode = generateReferralCode();
+        codeExists = await User.findOne({ referralCode: newReferralCode });
+      }
+      
+      // Update user with new referral code
+      (user as any).referralCode = newReferralCode;
+      await user.save();
+      console.log(`✅ Generated referral code for user ${req.userId}: ${newReferralCode}`);
     }
 
     // Count total referrals (users who used this user's referral code)
@@ -404,16 +378,10 @@ router.get("/referral-stats", requireAuth, async (req: AuthReq, res) => {
 
     res.json({
       success: true,
-      data: {
-        referralCode: (user as any).referralCode,
-        referralCount,
-        totalCreditsEarned: totalReferralCredits,
-        referralHistory,
-        referredUsers: referredUsers.map(u => ({
-          name: u.name,
-          joinedDate: u.createdAt
-        }))
-      }
+      referralCode: (user as any).referralCode,
+      totalReferrals: referralCount,
+      totalCreditsEarned: totalReferralCredits,
+      recentReferrals: referralHistory
     });
   } catch (error) {
     console.error("GET REFERRAL STATS ERROR", error);
