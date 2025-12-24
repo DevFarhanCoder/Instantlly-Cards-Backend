@@ -86,10 +86,29 @@ app.use(cors({
 
 app.use(compression()); // Enable gzip compression for faster responses
 
-// Parse JSON bodies - with type checking for various content-types
+// Parse JSON bodies - with strict type checking
 app.use(express.json({ 
   limit: "10mb",
-  type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
+  type: ['application/json', 'application/*+json'],
+  verify: (req: any, res, buf, encoding) => {
+    try {
+      // Log suspicious requests
+      const bodyStr = buf.toString(encoding || 'utf8');
+      if (bodyStr.trim().startsWith('<') || bodyStr.includes('<?php')) {
+        console.error('⚠️ Received non-JSON content:', {
+          path: req.path,
+          method: req.method,
+          contentType: req.get('content-type'),
+          userAgent: req.get('user-agent'),
+          body: bodyStr.substring(0, 100)
+        });
+        throw new Error('Invalid content type - expected JSON');
+      }
+    } catch (err) {
+      // If it's already our error, rethrow
+      if (err instanceof Error && err.message.includes('Invalid content type')) throw err;
+    }
+  }
 })); 
 
 // Parse URL-encoded bodies (for form submissions)
