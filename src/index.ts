@@ -158,6 +158,24 @@ app.get('/favicon.ico', (_req: Request, res: Response) => {
   res.status(204).end(); // No content
 });
 
+// Global error handler for body parser errors (catches PHP/HTML content)
+app.use((err: any, req: Request, res: Response, next: any) => {
+  if (err instanceof SyntaxError && 'body' in err) {
+    console.error('❌ Body parser error - Invalid JSON received:', {
+      path: req.path,
+      method: req.method,
+      contentType: req.get('content-type'),
+      userAgent: req.get('user-agent'),
+      error: err.message
+    });
+    return res.status(400).json({ 
+      error: 'Invalid JSON format',
+      message: 'Request body must be valid JSON'
+    });
+  }
+  next();
+});
+
 // Root health check for Render's health probe (responds to GET / or /health)
 app.get("/", (_req: Request, res: Response) => {
   res.status(200).json({ 

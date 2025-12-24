@@ -38,7 +38,7 @@ const CreditConfigSchema = new Schema(
   }
 );
 
-// Ensure only one config document exists
-CreditConfigSchema.index({ _id: 1 }, { unique: true });
+// MongoDB already creates a unique index on _id by default
+// No need to explicitly define it
 
 export default models.CreditConfig || model("CreditConfig", CreditConfigSchema);
