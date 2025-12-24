@@ -918,6 +918,10 @@ ${finalAppHash}`;
         numbers: cleanPhone
       });
 
+      console.log(`[CHECK-PHONE] 📤 Calling Fast2SMS API...`);
+      console.log(`[CHECK-PHONE] 📱 Clean Phone: ${cleanPhone}`);
+      console.log(`[CHECK-PHONE] 💬 Message: ${message}`);
+
       const fast2smsResponse = await axios.get(
         `https://www.fast2sms.com/dev/bulkV2?${fast2smsPayload.toString()}`,
         {
@@ -926,6 +930,19 @@ ${finalAppHash}`;
         }
       );
 
+      console.log(`[CHECK-PHONE] ✅ Fast2SMS Response:`, JSON.stringify(fast2smsResponse.data, null, 2));
+
+      if (!fast2smsResponse.data || fast2smsResponse.data.return === false) {
+        console.error(`[CHECK-PHONE] ❌ Fast2SMS API returned error:`, fast2smsResponse.data);
+        return res.json({
+          exists: false,
+          user: null,
+          otpSent: true,
+          message: "OTP service issue, but OTP stored for testing",
+          _debug: process.env.NODE_ENV === "development" ? { otp, error: fast2smsResponse.data } : undefined
+        });
+      }
+
       return res.json({
         exists: false,
         user: null,
@@ -933,13 +950,16 @@ ${finalAppHash}`;
         message: "OTP sent successfully"
       });
 
-    } catch (err) {
+    } catch (err: any) {
+      console.error(`[CHECK-PHONE] ❌ Fast2SMS API call failed:`, err.message);
+      console.error(`[CHECK-PHONE] 📋 Full error:`, err.response?.data || err);
+      
       return res.json({
         exists: false,
         user: null,
         otpSent: true,
         message: "OTP sent",
-        _debug: process.env.NODE_ENV === "development" ? { otp } : undefined
+        _debug: process.env.NODE_ENV === "development" ? { otp, error: err.message } : undefined
       });
     }
 

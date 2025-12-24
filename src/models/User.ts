@@ -43,6 +43,7 @@ const UserSchema = new Schema(
         default: {}
       }, // Map of questionKey -> answer
       creditsEarned: { type: Number, default: 0 },
+      creditsRecordedInTransactions: { type: Number, default: 0 }, // Credits already saved in transactions
       startedAt: { type: Date },
       completedAt: { type: Date }
     }
