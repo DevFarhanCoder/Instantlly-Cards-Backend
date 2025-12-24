@@ -93,7 +93,7 @@ app.use(express.json({
   verify: (req: any, res, buf, encoding) => {
     try {
       // Log suspicious requests
-      const bodyStr = buf.toString(encoding || 'utf8');
+      const bodyStr = buf.toString((encoding as BufferEncoding) || 'utf8');
       if (bodyStr.trim().startsWith('<') || bodyStr.includes('<?php')) {
         console.error('⚠️ Received non-JSON content:', {
           path: req.path,
