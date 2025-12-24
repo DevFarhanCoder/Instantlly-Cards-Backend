@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import User from '../models/User';
+import Transaction from '../models/Transaction';
 import { requireAuth, AuthReq } from '../middleware/auth';
 
 const router = Router();
@@ -88,8 +89,10 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
     
     // Award credits (10 per question)
     const CREDITS_PER_QUESTION = 10;
+    const balanceBefore = user.credits;
     user.quizProgress.creditsEarned += CREDITS_PER_QUESTION;
     user.credits += CREDITS_PER_QUESTION;
+    const balanceAfter = user.credits;
 
     // Update current question index
     if (questionIndex !== undefined) {
@@ -97,12 +100,24 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
     }
 
     // Check if all 10 questions are answered
-    if (user.quizProgress.answeredQuestions.length >= 10) {
+    const isCompleted = user.quizProgress.answeredQuestions.length >= 10;
+    if (isCompleted) {
       user.quizProgress.completed = true;
       user.quizProgress.completedAt = new Date();
     }
 
     await user.save();
+
+    // Create transaction record
+    await Transaction.create({
+      type: 'quiz_bonus',
+      toUser: userId,
+      amount: CREDITS_PER_QUESTION,
+      description: isCompleted ? 'Quiz completion bonus' : `Quiz answer bonus - Question ${user.quizProgress.answeredQuestions.length}`,
+      balanceBefore,
+      balanceAfter,
+      status: 'completed'
+    });
 
     res.json({
       success: true,

@@ -102,6 +102,106 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// GET /api/credits/history - Get detailed credits history with breakdown
+router.get("/history", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { limit = 100, skip = 0 } = req.query;
+    
+    // Get user's balance
+    const user = await User.findById(req.userId).select('credits');
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    // Get all transactions
+    const transactions = await Transaction.find({
+      $or: [
+        { fromUser: req.userId },
+        { toUser: req.userId }
+      ]
+    })
+    .populate('fromUser', 'name phone')
+    .populate('toUser', 'name phone')
+    .sort({ createdAt: -1 })
+    .limit(Number(limit))
+    .skip(Number(skip));
+
+    // Calculate breakdown by type
+    const breakdown = {
+      quizCredits: 0,
+      referralCredits: 0,
+      signupBonus: 0,
+      selfDownloadCredits: 0,
+      transferReceived: 0,
+      transferSent: 0,
+      adDeductions: 0,
+    };
+
+    const allTransactions = await Transaction.find({
+      $or: [
+        { fromUser: req.userId },
+        { toUser: req.userId }
+      ]
+    });
+
+    allTransactions.forEach((txn: any) => {
+      switch (txn.type) {
+        case 'quiz_bonus':
+          breakdown.quizCredits += txn.amount;
+          break;
+        case 'referral_bonus':
+          breakdown.referralCredits += txn.amount;
+          break;
+        case 'signup_bonus':
+          breakdown.signupBonus += txn.amount;
+          break;
+        case 'self_download_bonus':
+          breakdown.selfDownloadCredits += txn.amount;
+          break;
+        case 'transfer_received':
+          if (txn.toUser?.toString() === req.userId) {
+            breakdown.transferReceived += txn.amount;
+          }
+          break;
+        case 'transfer_sent':
+          if (txn.fromUser?.toString() === req.userId) {
+            breakdown.transferSent += Math.abs(txn.amount);
+          }
+          break;
+        case 'ad_deduction':
+          breakdown.adDeductions += Math.abs(txn.amount);
+          break;
+      }
+    });
+
+    const total = await Transaction.countDocuments({
+      $or: [
+        { fromUser: req.userId },
+        { toUser: req.userId }
+      ]
+    });
+
+    res.json({
+      success: true,
+      totalCredits: (user as any).credits || 0,
+      breakdown,
+      transactions,
+      total,
+      limit: Number(limit),
+      skip: Number(skip)
+    });
+  } catch (error) {
+    console.error("GET CREDITS HISTORY ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
 // POST /api/credits/search-users - Search users by phone number (starting with 88)
 router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
   try {
