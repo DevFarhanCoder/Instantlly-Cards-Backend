@@ -28,6 +28,7 @@ import adsRouter from "./routes/ads";
 import channelPartnerAdsRouter from "./routes/channelPartnerAds";
 import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
+import quizRouter from "./routes/quiz";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -256,6 +257,8 @@ async function startServer() {
     console.log("✅ Mounted /api/credits routes (credits system - balance, transfer, transactions)");
     app.use("/api/feedback", feedbackRouter);
     console.log("✅ Mounted /api/feedback routes (user feedback system)");
+    app.use("/api/quiz", quizRouter);
+    console.log("✅ Mounted /api/quiz routes (quiz progress, answer submission)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);

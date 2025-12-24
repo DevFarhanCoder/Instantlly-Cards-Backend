@@ -32,6 +32,20 @@ const UserSchema = new Schema(
     creditsExpiryDate: { type: Date }, // Credits expire 1 month after signup
     referralCode: { type: String, unique: true, sparse: true, index: true },
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    // Quiz progress tracking
+    quizProgress: {
+      completed: { type: Boolean, default: false },
+      currentQuestionIndex: { type: Number, default: 0 },
+      answeredQuestions: [{ type: String }], // Array of question keys (e.g., ['married', 'haveBike'])
+      answers: {
+        type: Map,
+        of: String,
+        default: {}
+      }, // Map of questionKey -> answer
+      creditsEarned: { type: Number, default: 0 },
+      startedAt: { type: Date },
+      completedAt: { type: Date }
+    }
   },
   { timestamps: true }
 );
