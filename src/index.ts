@@ -283,7 +283,6 @@ async function startServer() {
     }
 
     // Start the server
-  const port = process.env.PORT || 3001;
     server.listen(port, () => {
       console.log(`🚀 API server listening on 0.0.0.0:${port}`);
       console.log(`📡 Health check: http://0.0.0.0:${port}/api/health`);
