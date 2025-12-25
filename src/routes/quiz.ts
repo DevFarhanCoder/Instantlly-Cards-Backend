@@ -162,13 +162,13 @@ router.post('/save-progress', requireAuth, async (req: AuthReq, res: Response) =
     // Create transaction for this session's credits
     const balanceBefore = user.credits - creditsToRecord;
     const balanceAfter = user.credits;
-    const questionsAnswered = user.quizProgress.answeredQuestions.length;
+    const questionsInThisSession = creditsToRecord / 10; // Each question is worth 10 credits
 
     await Transaction.create({
       type: 'quiz_bonus',
       toUser: userId,
       amount: creditsToRecord,
-      description: `Quiz bonus - ${questionsAnswered} question${questionsAnswered > 1 ? 's' : ''} answered (+${creditsToRecord} credits)`,
+      description: `Quiz bonus - ${questionsInThisSession} question${questionsInThisSession > 1 ? 's' : ''} answered (+${creditsToRecord} credits)`,
       balanceBefore,
       balanceAfter,
       status: 'completed'
