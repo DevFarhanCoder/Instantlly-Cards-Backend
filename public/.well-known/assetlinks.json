@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.instantllycards.www.twa",
+    "sha256_cert_fingerprints": [
+      "5B:8E:A0:6F:65:E0:38:F7:22:EF:38:E1:0E:D7:B3:0D:FD:7D:60:7F:EA:26:2E:B7:4B:2B:55:3D:D9:65:C9:9A"
+    ]
+  }
+}]
