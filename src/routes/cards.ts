@@ -241,7 +241,7 @@ r.get("/", async (req: AuthReq, res) => {
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
     items.forEach((card, i) => {
-      console.log(`   Card ${i + 1}: "${card.name}" - birthdate: ${(card as any).birthdate}, anniversary: ${(card as any).anniversary}`);
+      console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${(card as any).businessHours}", servicesOffered="${(card as any).servicesOffered}", establishedYear="${(card as any).establishedYear}", aboutBusiness="${(card as any).aboutBusiness}"`);
     });
     
     // Generate ETag for proper caching
@@ -280,6 +280,14 @@ r.put("/:id", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let updateData = { ...req.body };
+    
+    console.log('🔧 UPDATE CARD REQUEST RECEIVED - Card ID:', req.params.id);
+    console.log('📦 NEW FIELDS in request:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
@@ -314,6 +322,13 @@ r.put("/:id", async (req: AuthReq, res) => {
     }
 
     // Single database query for update
+    console.log('🔧 UPDATE: Received data for new fields:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
+    
     const doc = await Card.findOneAndUpdate(
       { _id: req.params.id, userId },
       updateData,
@@ -321,6 +336,13 @@ r.put("/:id", async (req: AuthReq, res) => {
     );
     
     if (!doc) return res.status(404).json({ message: "Not found" });
+
+    console.log('✅ UPDATE: Saved doc has new fields:', {
+      businessHours: doc.businessHours,
+      servicesOffered: doc.servicesOffered,
+      establishedYear: doc.establishedYear,
+      aboutBusiness: doc.aboutBusiness
+    });
 
     res.json({ data: doc });
   } catch (err) {

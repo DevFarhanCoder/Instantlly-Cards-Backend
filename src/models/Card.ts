@@ -34,6 +34,10 @@ const schema = new mongoose.Schema(
     companyMapsLink: { type: String, default: "" },
     message: { type: String, default: "" },
     companyPhoto: { type: String, default: "" }, // data URI or CDN URL
+    businessHours: { type: String, default: "" },
+    servicesOffered: { type: String, default: "" },
+    establishedYear: { type: String, default: "" },
+    aboutBusiness: { type: String, default: "" },
 
     // Social
     linkedin: { type: String, default: "" },
