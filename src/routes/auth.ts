@@ -528,6 +528,9 @@ router.post("/login", async (req, res) => {
     }
 
     const ok = await bcrypt.compare(password, user.password);
+    console.log("[LOGIN] Password comparison result:", ok);
+    console.log("[LOGIN] Input password length:", password.length);
+    console.log("[LOGIN] Input password (first 2 chars):", password.substring(0, 2));
     if (!ok) {
       console.log("Password mismatch for user:", user.name);
       return res.status(401).json({ message: "Invalid credentials" });
@@ -1154,6 +1157,10 @@ router.post("/reset-password", async (req, res) => {
   try {
     const { resetToken, newPassword } = req.body ?? {};
 
+    console.log('[RESET-PASSWORD] 🔐 Password reset request');
+    console.log('[RESET-PASSWORD] New password length:', newPassword?.length);
+    console.log('[RESET-PASSWORD] New password (first 2 chars):', newPassword?.substring(0, 2));
+
     if (!resetToken || !newPassword) {
       return res.status(400).json({ message: 'Reset token and new password are required' });
     }
@@ -1176,6 +1183,7 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const normalizedPhone = payload.phone;
+    console.log('[RESET-PASSWORD] Phone from token:', normalizedPhone);
 
     // Find user by phone (tolerant variants)
     const phoneVariants = [
@@ -1185,16 +1193,26 @@ router.post("/reset-password", async (req, res) => {
       normalizedPhone.replace(/^\+/, '')?.replace(/^91/, '')
     ].filter(Boolean);
 
+    console.log('[RESET-PASSWORD] Searching for user with phone variants:', phoneVariants);
+
     const user = await User.findOne({ phone: { $in: phoneVariants } }).select('+password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) {
+      console.log('[RESET-PASSWORD] ❌ User not found for any phone variant');
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    console.log('[RESET-PASSWORD] ✅ User found:', user.name, 'Phone in DB:', user.phone);
 
     if (typeof newPassword !== 'string' || newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters long' });
     }
 
+    console.log('[RESET-PASSWORD] Hashing new password...');
     const hashed = await bcrypt.hash(newPassword, 12);
+    console.log('[RESET-PASSWORD] Password hashed successfully');
     user.password = hashed;
     await user.save();
+    console.log('[RESET-PASSWORD] ✅ Password saved to database successfully');
 
     return res.json({ message: 'Password reset successfully' });
   } catch (error) {
@@ -1359,8 +1377,8 @@ router.get("/version-check", async (req, res) => {
     // ⚠️ FORCE UPDATE POLICY: Everyone must have the LATEST version
     // Simply update these versions when you publish to app stores
     const LATEST_VERSIONS = {
-      android: "1.0.41",  // ← Update this when publishing new version to Play Store
-      ios: "1.0.41"    // ← Update this when publishing new version to App Store
+      android: "1.0.54",  // ← Update this when publishing new version to Play Store
+      ios: "1.0.54"    // ← Update this when publishing new version to App Store
     };
 
     const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.instantllycards.www.twa";
