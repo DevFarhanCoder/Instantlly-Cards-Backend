@@ -1367,6 +1367,55 @@ router.get("/users/:userIdOrPhone", async (req, res) => {
   }
 });
 
+// POST /api/auth/update-service-type - Update user's service type selection
+router.post("/update-service-type", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { serviceType } = req.body;
+    
+    console.log(`📝 [UPDATE-SERVICE-TYPE] Request received for user: ${req.userId}`);
+    console.log(`📋 [UPDATE-SERVICE-TYPE] Service type: ${serviceType}`);
+
+    // Validate serviceType
+    if (!serviceType || !['home-based', 'business-visiting'].includes(serviceType)) {
+      console.log(`❌ [UPDATE-SERVICE-TYPE] Invalid service type: ${serviceType}`);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid service type. Must be "home-based" or "business-visiting"' 
+      });
+    }
+
+    // Find and update user
+    const user = await User.findById(req.userId);
+    if (!user) {
+      console.log(`❌ [UPDATE-SERVICE-TYPE] User not found: ${req.userId}`);
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+
+    // Update service type
+    user.serviceType = serviceType;
+    await user.save();
+
+    console.log(`✅ [UPDATE-SERVICE-TYPE] Service type updated successfully for user: ${req.userId}`);
+    console.log(`📋 [UPDATE-SERVICE-TYPE] Service type set to: ${serviceType}`);
+
+    res.json({ 
+      success: true,
+      message: 'Service type updated successfully',
+      serviceType: user.serviceType
+    });
+
+  } catch (error) {
+    console.error('❌ [UPDATE-SERVICE-TYPE] ERROR', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error while updating service type' 
+    });
+  }
+});
+
 // GET /api/users/version-check - Check if app version is supported
 router.get("/version-check", async (req, res) => {
   try {

@@ -32,6 +32,12 @@ const UserSchema = new Schema(
     creditsExpiryDate: { type: Date }, // Credits expire 1 month after signup
     referralCode: { type: String, unique: true, sparse: true, index: true },
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    // Service type - Selected during first-time account setup
+    serviceType: { 
+      type: String, 
+      enum: ['home-based', 'business-visiting'],
+      default: null 
+    },
     // Quiz progress tracking
     quizProgress: {
       completed: { type: Boolean, default: false },
