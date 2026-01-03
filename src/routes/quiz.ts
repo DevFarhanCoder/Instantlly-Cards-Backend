@@ -48,8 +48,9 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Check if quiz is already completed
-    if (user.quizProgress?.completed) {
+    // Check if all 30 questions are already answered (true completion)
+    const totalQuestionsAnswered = user.quizProgress?.answeredQuestions?.length || 0;
+    if (user.quizProgress?.completed && totalQuestionsAnswered >= 30) {
       return res.status(400).json({ 
         success: false, 
         message: 'Quiz already completed' 
