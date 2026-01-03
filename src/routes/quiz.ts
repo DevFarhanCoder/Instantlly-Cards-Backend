@@ -289,4 +289,47 @@ router.post('/sync-transactions', requireAuth, async (req: AuthReq, res: Respons
   }
 });
 
+// Fix quiz completion status for users stuck with old logic
+router.post('/fix-completion', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const answeredCount = user.quizProgress?.answeredQuestions?.length || 0;
+    
+    // If user has less than 30 questions answered but marked as completed, fix it
+    if (user.quizProgress?.completed && answeredCount < 30) {
+      user.quizProgress.completed = false;
+      await user.save();
+      
+      return res.json({
+        success: true,
+        message: 'Quiz completion status fixed',
+        data: {
+          answeredQuestions: answeredCount,
+          completed: false,
+          canContinue: true
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'No fix needed',
+      data: {
+        answeredQuestions: answeredCount,
+        completed: user.quizProgress?.completed || false,
+        canContinue: answeredCount < 30
+      }
+    });
+  } catch (error) {
+    console.error('Error fixing quiz completion:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 export default router;
