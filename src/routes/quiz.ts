@@ -97,8 +97,8 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       user.quizProgress.currentQuestionIndex = questionIndex + 1;
     }
 
-    // Check if all 10 questions are answered
-    const isCompleted = user.quizProgress.answeredQuestions.length >= 10;
+    // Check if all 30 questions are answered
+    const isCompleted = user.quizProgress.answeredQuestions.length >= 30;
     if (isCompleted) {
       user.quizProgress.completed = true;
       user.quizProgress.completedAt = new Date();
