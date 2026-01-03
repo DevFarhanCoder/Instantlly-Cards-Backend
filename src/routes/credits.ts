@@ -116,11 +116,24 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get all transactions
+    // Get all transactions - filter properly
+    // For referral_bonus and signup_bonus: only show if user is the toUser (receiver)
+    // For other transactions: show if user is either fromUser or toUser
     const transactions = await Transaction.find({
       $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
+        // Show signup_bonus and referral_bonus only if user received them
+        { 
+          type: { $in: ['signup_bonus', 'referral_bonus'] },
+          toUser: req.userId 
+        },
+        // Show other transactions if user is involved
+        { 
+          type: { $nin: ['signup_bonus', 'referral_bonus'] },
+          $or: [
+            { fromUser: req.userId },
+            { toUser: req.userId }
+          ]
+        }
       ]
     })
     .populate('fromUser', 'name phone')
@@ -142,8 +155,19 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
 
     const allTransactions = await Transaction.find({
       $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
+        // Show signup_bonus and referral_bonus only if user received them
+        { 
+          type: { $in: ['signup_bonus', 'referral_bonus'] },
+          toUser: req.userId 
+        },
+        // Show other transactions if user is involved
+        { 
+          type: { $nin: ['signup_bonus', 'referral_bonus'] },
+          $or: [
+            { fromUser: req.userId },
+            { toUser: req.userId }
+          ]
+        }
       ]
     });
 

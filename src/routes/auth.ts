@@ -271,7 +271,7 @@ router.post("/signup", async (req, res) => {
       referrer.credits = (referrer.credits || 0) + referralBonus;
       await referrer.save();
 
-      // Create referral bonus transaction
+      // Create referral bonus transaction for the REFERRER (person who shared the code)
       await Transaction.create({
         type: 'referral_bonus',
         fromUser: savedUser._id,
