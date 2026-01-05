@@ -15,6 +15,25 @@ router.get('/progress', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
+    // Start a new session - mark current credits as recorded so only NEW answers in this session get recorded
+    if (!user.quizProgress) {
+      user.quizProgress = {
+        completed: false,
+        currentQuestionIndex: 0,
+        answeredQuestions: [],
+        answers: new Map(),
+        creditsEarned: 0,
+        creditsRecordedInTransactions: 0,
+        startedAt: new Date()
+      };
+    } else {
+      // Set session baseline - credits earned so far are considered "already recorded"
+      // Only credits earned AFTER this point (in this session) will be recorded in transaction
+      user.quizProgress.creditsRecordedInTransactions = user.quizProgress.creditsEarned;
+    }
+    
+    await user.save();
+
     // Return quiz progress
     res.json({
       success: true,
