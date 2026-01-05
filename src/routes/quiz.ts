@@ -50,10 +50,19 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
 
     // Check if all 30 questions are already answered (true completion)
     const totalQuestionsAnswered = user.quizProgress?.answeredQuestions?.length || 0;
+    
+    // AUTO-FIX: If marked as completed but not all 30 questions answered, reset completion status
+    if (user.quizProgress?.completed && totalQuestionsAnswered < 30) {
+      console.log(`⚠️ Auto-fixing quiz completion: User has ${totalQuestionsAnswered}/30 questions but marked as completed`);
+      user.quizProgress.completed = false;
+      await user.save();
+    }
+    
+    // Only block if truly completed (all 30 questions answered)
     if (user.quizProgress?.completed && totalQuestionsAnswered >= 30) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Quiz already completed' 
+        message: 'Quiz already completed - all 30 questions answered' 
       });
     }
 
