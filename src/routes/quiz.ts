@@ -141,24 +141,22 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       user.quizProgress.completedAt = new Date();
     }
 
-    // Create transaction record for this question
-    const transaction = new Transaction({
-      user: user._id,
-      type: 'credit',
-      amount: CREDITS_PER_QUESTION,
-      description: `Quiz Question ${user.quizProgress.answeredQuestions.length}: ${questionKey}`,
-      balanceAfter: user.credits,
-      status: 'completed',
-      date: new Date()
-    });
-    await transaction.save();
+    // Initialize creditsRecordedInTransactions if not set
+    if (!user.quizProgress.creditsRecordedInTransactions) {
+      user.quizProgress.creditsRecordedInTransactions = 0;
+    }
+
+    // Note: Transaction is NOT created here. It will be created in batches when:
+    // 1. User quits (calls /save-progress)
+    // 2. Quiz completes (frontend calls /save-progress)
+    // This way we get one transaction per session instead of per question
 
     // Log quiz progress for debugging
     console.log(`📝 Quiz Progress: Question ${user.quizProgress.answeredQuestions.length}/30 answered`);
     console.log(`   Question Key: ${questionKey}`);
     console.log(`   Total Answered: ${user.quizProgress.answeredQuestions.length}`);
     console.log(`   Is Completed: ${isCompleted}`);
-    console.log(`   Transaction Created: ${transaction._id}`);
+    console.log(`   Credits earned this session: ${user.quizProgress.creditsEarned - user.quizProgress.creditsRecordedInTransactions}`);
 
     // Save with explicit validation bypass for large arrays
     await user.save({ validateBeforeSave: true });

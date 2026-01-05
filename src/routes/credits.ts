@@ -116,23 +116,31 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get all transactions - filter properly
-    // For referral_bonus and signup_bonus: only show if user is the toUser (receiver)
-    // For other transactions: show if user is either fromUser or toUser
+    // Get all transactions - filter properly to only show user's transactions
+    // For credits earned (quiz, referral, signup, self_download): show if user is toUser
+    // For transfers sent: show if user is fromUser
+    // For transfers received: show if user is toUser
     const transactions = await Transaction.find({
       $or: [
-        // Show signup_bonus and referral_bonus only if user received them
+        // Credits earned by this user (they are the receiver)
         { 
-          type: { $in: ['signup_bonus', 'referral_bonus'] },
+          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
           toUser: req.userId 
         },
-        // Show other transactions if user is involved
+        // Transfers sent by this user
         { 
-          type: { $nin: ['signup_bonus', 'referral_bonus'] },
-          $or: [
-            { fromUser: req.userId },
-            { toUser: req.userId }
-          ]
+          type: 'transfer_sent',
+          fromUser: req.userId 
+        },
+        // Transfers received by this user
+        { 
+          type: 'transfer_received',
+          toUser: req.userId 
+        },
+        // Ad deductions from this user
+        { 
+          type: 'ad_deduction',
+          fromUser: req.userId 
         }
       ]
     })
@@ -155,18 +163,25 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
 
     const allTransactions = await Transaction.find({
       $or: [
-        // Show signup_bonus and referral_bonus only if user received them
+        // Credits earned by this user (they are the receiver)
         { 
-          type: { $in: ['signup_bonus', 'referral_bonus'] },
+          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
           toUser: req.userId 
         },
-        // Show other transactions if user is involved
+        // Transfers sent by this user
         { 
-          type: { $nin: ['signup_bonus', 'referral_bonus'] },
-          $or: [
-            { fromUser: req.userId },
-            { toUser: req.userId }
-          ]
+          type: 'transfer_sent',
+          fromUser: req.userId 
+        },
+        // Transfers received by this user
+        { 
+          type: 'transfer_received',
+          toUser: req.userId 
+        },
+        // Ad deductions from this user
+        { 
+          type: 'ad_deduction',
+          fromUser: req.userId 
         }
       ]
     });
@@ -203,8 +218,26 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
 
     const total = await Transaction.countDocuments({
       $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
+        // Credits earned by this user
+        { 
+          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
+          toUser: req.userId 
+        },
+        // Transfers sent by this user
+        { 
+          type: 'transfer_sent',
+          fromUser: req.userId 
+        },
+        // Transfers received by this user
+        { 
+          type: 'transfer_received',
+          toUser: req.userId 
+        },
+        // Ad deductions from this user
+        { 
+          type: 'ad_deduction',
+          fromUser: req.userId 
+        }
       ]
     });
 
