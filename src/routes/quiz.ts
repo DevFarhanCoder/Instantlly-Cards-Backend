@@ -105,7 +105,14 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       user.quizProgress.completedAt = new Date();
     }
 
-    await user.save();
+    // Log quiz progress for debugging
+    console.log(`📝 Quiz Progress: Question ${user.quizProgress.answeredQuestions.length}/30 answered`);
+    console.log(`   Question Key: ${questionKey}`);
+    console.log(`   Total Answered: ${user.quizProgress.answeredQuestions.length}`);
+    console.log(`   Is Completed: ${isCompleted}`);
+
+    // Save with explicit validation bypass for large arrays
+    await user.save({ validateBeforeSave: true });
 
     res.json({
       success: true,
@@ -328,6 +335,42 @@ router.post('/fix-completion', requireAuth, async (req: AuthReq, res: Response) 
     });
   } catch (error) {
     console.error('Error fixing quiz completion:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// DEBUG: Get detailed quiz stats (for debugging storage issues)
+router.get('/debug-stats', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const answeredCount = user.quizProgress?.answeredQuestions?.length || 0;
+    const answersMapSize = user.quizProgress?.answers?.size || 0;
+    
+    res.json({
+      success: true,
+      debug: {
+        answeredQuestionsCount: answeredCount,
+        answeredQuestionsList: user.quizProgress?.answeredQuestions || [],
+        answersMapSize: answersMapSize,
+        answersKeys: user.quizProgress?.answers ? Array.from(user.quizProgress.answers.keys()) : [],
+        creditsEarned: user.quizProgress?.creditsEarned || 0,
+        completed: user.quizProgress?.completed || false,
+        currentQuestionIndex: user.quizProgress?.currentQuestionIndex || 0,
+        expectedCredits: answeredCount * 10,
+        mismatch: {
+          questionsVsAnswers: answeredCount !== answersMapSize,
+          creditsVsQuestions: (user.quizProgress?.creditsEarned || 0) !== (answeredCount * 10)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error getting quiz debug stats:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
