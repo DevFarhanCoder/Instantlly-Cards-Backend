@@ -141,11 +141,24 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       user.quizProgress.completedAt = new Date();
     }
 
+    // Create transaction record for this question
+    const transaction = new Transaction({
+      user: user._id,
+      type: 'credit',
+      amount: CREDITS_PER_QUESTION,
+      description: `Quiz Question ${user.quizProgress.answeredQuestions.length}: ${questionKey}`,
+      balanceAfter: user.credits,
+      status: 'completed',
+      date: new Date()
+    });
+    await transaction.save();
+
     // Log quiz progress for debugging
     console.log(`📝 Quiz Progress: Question ${user.quizProgress.answeredQuestions.length}/30 answered`);
     console.log(`   Question Key: ${questionKey}`);
     console.log(`   Total Answered: ${user.quizProgress.answeredQuestions.length}`);
     console.log(`   Is Completed: ${isCompleted}`);
+    console.log(`   Transaction Created: ${transaction._id}`);
 
     // Save with explicit validation bypass for large arrays
     await user.save({ validateBeforeSave: true });
