@@ -259,33 +259,38 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
-// POST /api/credits/search-users - Search users by phone number (starting with 88)
+// POST /api/credits/search-users - Search users by phone number or name
 router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { phonePrefix } = req.body;
+    // Support both 'query' (new) and 'phonePrefix' (old) for backward compatibility
+    const { query, phonePrefix } = req.body;
+    const searchTerm = query || phonePrefix;
     
-    if (!phonePrefix) {
+    if (!searchTerm) {
       return res.status(400).json({ 
         success: false,
-        message: "Phone prefix is required" 
+        message: "Search query is required" 
       });
     }
 
-    // Search for users whose phone contains the prefix (after +country code)
+    // Search for users by phone number or name
     // For Bangladesh, phone numbers are like +8801XXXXXXXXX or +88XXXXXXXXXX
+    const searchRegex = new RegExp(searchTerm, 'i');
+    
     const users = await User.find({
       $and: [
         { _id: { $ne: req.userId } }, // Exclude current user
         { 
           $or: [
-            { phone: { $regex: phonePrefix, $options: 'i' } },
-            { phone: { $regex: `\\+88${phonePrefix}`, $options: 'i' } },
-            { phone: { $regex: `\\+880${phonePrefix}`, $options: 'i' } }
+            { phone: searchRegex },
+            { phone: { $regex: `\\+88${searchTerm}`, $options: 'i' } },
+            { phone: { $regex: `\\+880${searchTerm}`, $options: 'i' } },
+            { name: searchRegex }
           ]
         }
       ]
     })
-    .select('name phone profilePicture')
+    .select('name phone profilePicture credits')
     .limit(20);
 
     res.json({
@@ -295,6 +300,7 @@ router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
         name: user.name,
         phone: user.phone,
         profilePicture: user.profilePicture,
+        credits: (user as any).credits || 0,
         // Extract just the phone number part after +88 for display
         displayPhone: user.phone.replace(/^\+880?/, '')
       }))
@@ -311,7 +317,7 @@ router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
 // POST /api/credits/transfer - Transfer credits to another user
 router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { toUserId, amount, description } = req.body;
+    const { toUserId, amount, note } = req.body;
     
     // Validation
     if (!toUserId || !amount) {
@@ -321,10 +327,17 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    if (amount <= 0) {
+    if (amount <= 0 || amount < 10) {
       return res.status(400).json({ 
         success: false,
-        message: "Amount must be greater than 0" 
+        message: "Minimum transfer amount is 10 credits" 
+      });
+    }
+
+    if (amount > 10000) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Maximum transfer amount is 10,000 credits" 
       });
     }
 
@@ -375,6 +388,18 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
+    // Generate unique transaction ID
+    const generateTransactionId = () => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let id = 'TXN';
+      for (let i = 0; i < 9; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return id;
+    };
+    
+    const transactionId = generateTransactionId();
+
     // Perform transfer
     const recipientCredits = (recipient as any).credits || 0;
     
@@ -385,10 +410,11 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     await recipient.save();
 
     // Create transaction records
-    const transferDesc = description || `Transfer to ${recipient.name}`;
+    const transferDesc = note ? `Transfer to ${recipient.name}: ${note}` : `Transfer to ${recipient.name}`;
+    const receiveDesc = note ? `Transfer from ${sender.name}: ${note}` : `Transfer from ${sender.name}`;
     
     // Transaction for sender (deduction)
-    await Transaction.create({
+    const senderTransaction = await Transaction.create({
       type: 'transfer_sent',
       fromUser: sender._id,
       toUser: recipient._id,
@@ -400,30 +426,41 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     });
 
     // Transaction for recipient (addition)
-    await Transaction.create({
+    const recipientTransaction = await Transaction.create({
       type: 'transfer_received',
       fromUser: sender._id,
       toUser: recipient._id,
       amount: amount,
-      description: `Transfer from ${sender.name}`,
+      description: receiveDesc,
       balanceBefore: recipientCredits,
       balanceAfter: recipientCredits + amount,
       status: 'completed'
     });
 
-    console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name}`);
+    console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name} (${transactionId})`);
 
     res.json({
       success: true,
       message: `Successfully transferred ${amount} credits to ${recipient.name}`,
       newBalance: senderCredits - amount,
-      transfer: {
+      transaction: {
+        id: transactionId,
+        transactionId: transactionId,
         amount,
+        date: new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        }),
         to: {
           _id: recipient._id,
           name: recipient.name,
           phone: recipient.phone
-        }
+        },
+        note: note || ''
       }
     });
   } catch (error) {
