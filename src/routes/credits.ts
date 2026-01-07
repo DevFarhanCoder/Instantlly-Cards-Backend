@@ -17,6 +17,31 @@ function generateReferralCode(): string {
   return code;
 }
 
+// DEBUG ENDPOINT - Get sample phone numbers from database
+router.get("/debug-phones", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const users = await User.find()
+      .select('name phone')
+      .limit(10)
+      .lean();
+    
+    console.log('📱 [DEBUG] Sample phone numbers in database:', users);
+    
+    res.json({
+      success: true,
+      count: users.length,
+      phones: users.map(u => ({
+        name: u.name,
+        phone: u.phone,
+        phoneLength: u.phone?.length || 0
+      }))
+    });
+  } catch (error) {
+    console.error("DEBUG PHONES ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 // GET /api/credits/balance - Get current credits balance
 router.get("/balance", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -259,39 +284,44 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
-// POST /api/credits/search-users - Search users by phone number or name
+// POST /api/credits/search-users - Search users by phone number only
 router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
   try {
     // Support both 'query' (new) and 'phonePrefix' (old) for backward compatibility
     const { query, phonePrefix } = req.body;
-    const searchTerm = query || phonePrefix;
+    let searchTerm = query || phonePrefix;
+    
+    console.log('🔍 [SEARCH] Raw input:', searchTerm);
     
     if (!searchTerm) {
       return res.status(400).json({ 
         success: false,
-        message: "Search query is required" 
+        message: "Phone number is required" 
       });
     }
 
-    // Search for users by phone number or name
-    // For Bangladesh, phone numbers are like +8801XXXXXXXXX or +88XXXXXXXXXX
-    const searchRegex = new RegExp(searchTerm, 'i');
+    // Clean the search term - keep only digits
+    searchTerm = searchTerm.replace(/[^0-9]/g, '');
+    console.log('🔍 [SEARCH] Cleaned to digits only:', searchTerm);
     
+    // Simple search: Find any phone that CONTAINS these digits
+    // This works regardless of phone format (+8801xxx, +880xxx, or any other format)
     const users = await User.find({
-      $and: [
-        { _id: { $ne: req.userId } }, // Exclude current user
-        { 
-          $or: [
-            { phone: searchRegex },
-            { phone: { $regex: `\\+88${searchTerm}`, $options: 'i' } },
-            { phone: { $regex: `\\+880${searchTerm}`, $options: 'i' } },
-            { name: searchRegex }
-          ]
-        }
-      ]
+      _id: { $ne: req.userId }, // Exclude current user
+      phone: { $regex: searchTerm, $options: 'i' } // Contains search
     })
     .select('name phone profilePicture credits')
-    .limit(20);
+    .limit(20)
+    .lean();
+
+    console.log(`✅ [SEARCH] Found ${users.length} users`);
+    if (users.length > 0) {
+      console.log('📱 [SEARCH] Sample results:', users.slice(0, 3).map(u => ({ name: u.name, phone: u.phone })));
+    } else {
+      // Log all phones in DB for debugging (first 5)
+      const allUsers = await User.find().select('phone').limit(5).lean();
+      console.log('📱 [SEARCH] Sample phones in DB:', allUsers.map(u => u.phone));
+    }
 
     res.json({
       success: true,
@@ -301,12 +331,12 @@ router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
         phone: user.phone,
         profilePicture: user.profilePicture,
         credits: (user as any).credits || 0,
-        // Extract just the phone number part after +88 for display
-        displayPhone: user.phone.replace(/^\+880?/, '')
+        // Display phone as-is
+        displayPhone: user.phone
       }))
     });
   } catch (error) {
-    console.error("SEARCH USERS ERROR", error);
+    console.error("❌ [SEARCH] ERROR:", error);
     res.status(500).json({ 
       success: false,
       message: "Server error" 
