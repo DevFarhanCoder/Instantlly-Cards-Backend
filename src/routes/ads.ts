@@ -71,11 +71,11 @@ router.get("/active", async (req: Request, res: Response) => {
       endDate: { $gte: now },
       status: 'approved' // ONLY show approved ads to mobile users
     })
-      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
+      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS bottomMediaType bottomVideoUrl fullscreenMediaType fullscreenVideoUrl') // Exclude large base64 fields
       .sort({ priority: -1, createdAt: -1 })
       .limit(50) // Can handle more ads now (no heavy base64 payload)
       .lean()
-      .exec();
+      // .exec();
 
     // 🔍 LOG: Database query result
     console.log('✅ [STEP 3] Database Query Complete');
@@ -92,44 +92,64 @@ router.get("/active", async (req: Request, res: Response) => {
     }
 
     // Transform ads to include image URLs instead of base64
-    const adsWithUrls = ads.map(ad => ({
-      _id: ad._id,
-      title: ad.title,
-      phoneNumber: ad.phoneNumber,
-      priority: ad.priority,
-      impressions: ad.impressions,
-      clicks: ad.clicks,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-      // Provide image URLs - client will fetch these separately
-      bottomImageUrl: ad.bottomImageGridFS 
-        ? `/api/ads/image/${ad._id}/bottom`
-        : null,
-      fullscreenImageUrl: ad.fullscreenImageGridFS 
-        ? `/api/ads/image/${ad._id}/fullscreen`
-        : null,
-      hasBottomImage: !!ad.bottomImageGridFS,
-      hasFullscreenImage: !!ad.fullscreenImageGridFS
-    }));
+    const adsWithUrls = ads.map(ad => {
+       // 🧠 BACKWARD COMPATIBILITY
+      const bottomType = ad.bottomMediaType || "image";
+      const fullscreenType = ad.fullscreenMediaType || "image";
+
+      const bottomMediaUrl =
+        bottomType === "video"
+          ? ad.bottomVideoUrl || null
+          : ad.bottomImageGridFS
+            ? `/api/ads/image/${ad._id}/bottom`
+            : null;
+
+      const fullscreenMediaUrl =
+        fullscreenType === "video"
+          ? ad.fullscreenVideoUrl || null
+          : ad.fullscreenImageGridFS
+            ? `/api/ads/image/${ad._id}/fullscreen`
+            : null;
+
+      return {
+        _id: ad._id,
+        title: ad.title,
+        phoneNumber: ad.phoneNumber,
+        priority: ad.priority,
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+
+        bottomMediaType: bottomType,
+        bottomMediaUrl,
+        fullscreenMediaType: fullscreenType,
+        fullscreenMediaUrl,
+
+        hasBottomMedia: !!bottomMediaUrl,
+        hasFullscreenMedia: !!fullscreenMediaUrl,
+      };
+    });
+
 
     // AWS Cloud (Primary) - Render backup handled by client
     const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
 
     // 🔍 LOG: Response preparation
-    console.log('🔧 [STEP 4] Preparing Response');
-    console.log('🌐 Image Base URL:', imageBaseUrl);
-    if (adsWithUrls.length > 0) {
-      console.log('📸 First ad URLs:', {
-        bottomImageUrl: adsWithUrls[0].bottomImageUrl,
-        fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
-        fullBottomUrl: adsWithUrls[0].bottomImageUrl 
-          ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}` 
-          : 'NULL',
-        fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl 
-          ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}` 
-          : 'NULL'
-      });
-    }
+    // console.log('🔧 [STEP 4] Preparing Response');
+    // console.log('🌐 Image Base URL:', imageBaseUrl);
+    // if (adsWithUrls.length > 0) {
+    //   console.log('📸 First ad URLs:', {
+    //     bottomImageUrl: adsWithUrls[0].bottomImageUrl,
+    //     fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
+    //     fullBottomUrl: adsWithUrls[0].bottomImageUrl
+    //       ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}`
+    //       : 'NULL',
+    //     fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl
+    //       ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}`
+    //       : 'NULL'
+    //   });
+    // }
 
     const responseData = {
       success: true,
@@ -140,15 +160,15 @@ router.get("/active", async (req: Request, res: Response) => {
     };
 
     // 🔍 LOG: Sending response
-    console.log('📤 [STEP 5] Sending Response to Client');
-    console.log('📊 Response summary:', {
-      success: true,
-      count: adsWithUrls.length,
-      imageBaseUrl: imageBaseUrl,
-      adsWithImages: adsWithUrls.filter(ad => ad.hasBottomImage).length,
-      adsWithFullscreen: adsWithUrls.filter(ad => ad.hasFullscreenImage).length
-    });
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    // console.log('📤 [STEP 5] Sending Response to Client');
+    // console.log('📊 Response summary:', {
+    //   success: true,
+    //   count: adsWithUrls.length,
+    //   imageBaseUrl: imageBaseUrl,
+    //   adsWithImages: adsWithUrls.filter(ad => ad.hasBottomImage).length,
+    //   adsWithFullscreen: adsWithUrls.filter(ad => ad.hasFullscreenImage).length
+    // });
+    // console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
     res.json(responseData);
   } catch (error) {
@@ -166,7 +186,7 @@ router.get("/active", async (req: Request, res: Response) => {
 router.get("/image/:id/:type", async (req: Request, res: Response) => {
   // Set response timeout to 40 seconds (less than socket timeout)
   req.setTimeout(40000);
-  
+
   try {
     const { id, type } = req.params;
 
@@ -191,7 +211,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     // Check cache first (avoids GridFS timeout)
     const cacheKey = `${id}-${type}`;
     const cachedImage = imageCache.get(cacheKey);
-    
+
     if (cachedImage) {
       // Set caching headers
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -205,19 +225,19 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
 
     // 🔍 LOG: Fetching ad from database
     console.log('📊 [IMG STEP 2] Fetching Ad from Database');
-    
+
     // Retry logic for database query (up to 3 attempts)
     let ad = null;
     let retries = 0;
     const maxRetries = 3;
-    
+
     while (retries < maxRetries && !ad) {
       try {
         ad = await Ad.findById(id)
           .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
           .maxTimeMS(10000) // 10 second timeout for this query
           .lean();
-        
+
         if (!ad && retries < maxRetries - 1) {
           retries++;
           console.warn(`⚠️  [IMG RETRY] Database query failed, retry ${retries}/${maxRetries}`);
@@ -226,11 +246,11 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       } catch (dbError: any) {
         retries++;
         console.error(`❌ [IMG DB ERROR] Attempt ${retries}/${maxRetries}:`, dbError.message);
-        
+
         if (retries >= maxRetries) {
           throw dbError; // Throw after all retries exhausted
         }
-        
+
         // Exponential backoff: 500ms, 1000ms, 1500ms
         await new Promise(resolve => setTimeout(resolve, 500 * retries));
       }
@@ -259,10 +279,10 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
 
     if (!gridfsId) {
       console.warn('⚠️  [IMG STEP 4] No GridFS ID found - Checking for legacy base64');
-      
+
       // Fallback to base64 if GridFS migration not complete
       const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
-      
+
       if (!base64Data || base64Data.length === 0) {
         console.error('❌ [IMG ERROR] No image found (neither GridFS nor base64)');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
@@ -290,16 +310,16 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     // Buffer the entire image first (enables caching and retry)
     const chunks: Buffer[] = [];
     const downloadStream = gridfsService.getDownloadStream(gridfsId);
-    
+
     let streamTimeout: NodeJS.Timeout | null = null;
     let streamStarted = false;
-    
+
     // Set 60 second timeout for GridFS retrieval (increased for buffering)
     streamTimeout = setTimeout(() => {
       console.error('❌ [IMG TIMEOUT] GridFS buffering timed out after 60s');
       downloadStream.destroy();
     }, 60000);
-    
+
     downloadStream.on('data', (chunk: Buffer) => {
       if (!streamStarted) {
         console.log('📦 [IMG STEP 6] GridFS Stream Started - Buffering');
@@ -310,15 +330,15 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
 
     downloadStream.on('end', () => {
       if (streamTimeout) clearTimeout(streamTimeout);
-      
+
       // Combine all chunks into single buffer
       const imageBuffer = Buffer.concat(chunks);
       console.log('✅ [IMG STEP 7] Image buffered successfully');
       console.log(`📏 Total size: ${(imageBuffer.length / 1024).toFixed(2)} KB`);
-      
+
       // Store in cache for future requests
       imageCache.set(cacheKey, imageBuffer);
-      
+
       // Send to client
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.setHeader('Content-Type', 'image/jpeg');
@@ -326,15 +346,15 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       res.send(imageBuffer);
     });
-    
+
     downloadStream.on('error', (error) => {
       if (streamTimeout) clearTimeout(streamTimeout);
-      
+
       console.error('❌ [IMG ERROR] GridFS download error:', error);
       console.error('🆔 Failed GridFS ID:', gridfsId.toString());
       console.error('📷 Failed Type:', type);
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-      
+
       if (!res.headersSent) {
         res.status(500).json({
           success: false,
@@ -405,7 +425,7 @@ router.post("/", async (req: Request, res: Response) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     let isAdmin = false;
     let adminId = null;
-    
+
     // Try to verify admin token
     if (token) {
       try {
@@ -420,11 +440,11 @@ router.post("/", async (req: Request, res: Response) => {
         console.log('📱 Non-admin token detected - will create ad with pending status');
       }
     }
-    
+
     // Rate limiting: Max 60 ads per minute for admins, 10 per minute for mobile users
     const rateLimitId = adminId || req.ip || 'anonymous';
     const maxRate = isAdmin ? 60 : 10;
-    
+
     if (!checkRateLimit(rateLimitId, maxRate)) {
       console.warn(`⚠️  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
       return res.status(429).json({
@@ -432,12 +452,12 @@ router.post("/", async (req: Request, res: Response) => {
         message: `Too many uploads. Maximum ${maxRate} ads per minute. Please wait a moment.`
       });
     }
-    
+
     console.log('📝 POST /api/ads - Creating new ad');
     console.log('👤 User type:', isAdmin ? 'Admin' : 'Mobile User');
     console.log('👤 User ID:', rateLimitId);
     console.log('📊 Request body keys:', Object.keys(req.body));
-    
+
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
 
     // Validation
@@ -450,7 +470,7 @@ router.post("/", async (req: Request, res: Response) => {
       bottomImageLength: bottomImage?.length,
       fullscreenImageLength: fullscreenImage?.length
     });
-    
+
     if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
       console.error('❌ Validation failed - missing required fields');
       return res.status(400).json({
@@ -465,10 +485,10 @@ router.post("/", async (req: Request, res: Response) => {
     if (fullscreenImage) {
       console.log(`📏 Fullscreen image size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
     }
-    
+
     let bottomImageId;
     let fullscreenImageId = null;
-    
+
     try {
       bottomImageId = await gridfsService.uploadBase64(
         bottomImage,
@@ -513,7 +533,7 @@ router.post("/", async (req: Request, res: Response) => {
       endDate: new Date(endDate),
       priority: priority || 5
     };
-    
+
     // Set approval status based on user type
     if (isAdmin) {
       // Admin uploads are auto-approved
@@ -531,13 +551,13 @@ router.post("/", async (req: Request, res: Response) => {
       adData.priority = 1; // Lower priority for pending ads
       console.log('📱 Mobile upload - pending approval');
     }
-    
+
     const ad = await Ad.create(adData);
 
     console.log(`✅ Ad created with GridFS images: ${ad._id}, status: ${ad.status}`);
 
     // Different response messages for admin vs mobile user
-    const responseMessage = isAdmin 
+    const responseMessage = isAdmin
       ? 'Advertisement created and published successfully'
       : 'Advertisement uploaded successfully. Awaiting admin approval.';
 
@@ -554,7 +574,7 @@ router.post("/", async (req: Request, res: Response) => {
       name: error instanceof Error ? error.name : 'Unknown',
       message: error instanceof Error ? error.message : String(error)
     });
-    
+
     res.status(500).json({
       success: false,
       message: "Failed to create ad",
@@ -635,10 +655,10 @@ router.get("/my-ads", async (req: Request, res: Response) => {
       return {
         ...ad,
         _id: adId,
-        bottomImage: ad.bottomImageGridFS 
+        bottomImage: ad.bottomImageGridFS
           ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
           : "",
-        fullscreenImage: ad.fullscreenImageGridFS 
+        fullscreenImage: ad.fullscreenImageGridFS
           ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
           : "",
         bottomImageGridFS: ad.bottomImageGridFS?.toString(),
@@ -664,15 +684,15 @@ router.get("/my-ads", async (req: Request, res: Response) => {
 router.get("/", async (req: Request, res: Response) => {
   try {
     console.log('📊 GET /api/ads - Request received (No auth required)');
-    
+
     // SCALABILITY: Pagination parameters
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Max 100 per page
     const skip = (page - 1) * limit;
-    
+
     // SCALABILITY: Filtering options
     const filter: any = {};
-    
+
     // IMPORTANT: Only show approved ads by default (for web dashboard)
     // Admin dashboard can override this by passing approvalStatus=all
     if (req.query.approvalStatus === 'all') {
@@ -686,7 +706,7 @@ router.get("/", async (req: Request, res: Response) => {
       // Default: only show approved ads (for public web display)
       filter.status = 'approved';
     }
-    
+
     // Filter by status (active/expired/all)
     if (req.query.status === 'active') {
       const now = new Date();
@@ -697,7 +717,7 @@ router.get("/", async (req: Request, res: Response) => {
     } else if (req.query.status === 'upcoming') {
       filter.startDate = { $gt: new Date() };
     }
-    
+
     // Filter by search term (title or phone)
     if (req.query.search) {
       const searchTerm = req.query.search as string;
@@ -706,10 +726,10 @@ router.get("/", async (req: Request, res: Response) => {
         { phoneNumber: { $regex: searchTerm, $options: 'i' } }
       ];
     }
-    
+
     // PERFORMANCE: Get total count for pagination (with same filters)
     const totalAds = await Ad.countDocuments(filter);
-    
+
     // CRITICAL: Exclude base64 image fields to prevent timeout on large datasets
     // Only fetch metadata - images are served via GridFS endpoints
     const ads = await Ad.find(filter)
@@ -727,17 +747,17 @@ router.get("/", async (req: Request, res: Response) => {
     const adsWithImageUrls = ads.map((ad: any) => {
       try {
         const adId = ad._id.toString();
-        
+
         // ALL ads (both legacy and new) now use GridFS image endpoints
         // This ensures consistent behavior and avoids sending large base64 in response
         return {
           ...ad,
           _id: adId,
           // Use GridFS endpoints for images (works for both old and new ads)
-          bottomImage: ad.bottomImageGridFS 
+          bottomImage: ad.bottomImageGridFS
             ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
             : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
-          fullscreenImage: ad.fullscreenImageGridFS 
+          fullscreenImage: ad.fullscreenImageGridFS
             ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
             : "", // No fullscreen if not set
           bottomImageGridFS: ad.bottomImageGridFS?.toString(),
@@ -787,7 +807,7 @@ router.get("/analytics/summary", async (req: AdminAuthReq, res: Response) => {
       startDate: { $lte: now },
       endDate: { $gte: now }
     });
-    
+
     const analytics = await Ad.aggregate([
       {
         $group: {

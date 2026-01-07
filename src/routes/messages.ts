@@ -25,8 +25,8 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
     const senderId = req.userId;
 
     if (!receiverId || !text || !messageId || !senderId) {
-      return res.status(400).json({ 
-        error: 'Receiver ID, message text, and message ID are required' 
+      return res.status(400).json({
+        error: 'Receiver ID, message text, and message ID are required'
       });
     }
 
@@ -50,7 +50,7 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
         messageId,
         isDelivered: false
       });
-      
+
       console.log(`� Message stored temporarily for notification tracking: ${messageId}`);
     } catch (dbError) {
       console.error('Failed to store temp message:', dbError);
@@ -71,14 +71,14 @@ router.post('/send', requireAuth, async (req: AuthReq, res: Response) => {
         console.log(`📤 [PUSH] Token:`, receiver.pushToken.substring(0, 30) + '...');
         console.log(`📤 [PUSH] Title:`, sender.name);
         console.log(`📤 [PUSH] Body:`, text);
-        
+
         await sendIndividualMessageNotification(
           receiver.pushToken,
           sender.name,
           text,
           senderId
         );
-        
+
         console.log(`✅ [PUSH] Push notification sent successfully to ${receiver.name}`);
       } catch (error: any) {
         console.error(`❌ [PUSH] Failed to send push notification:`, error);
@@ -114,8 +114,8 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
     const senderId = req.userId;
 
     if (!groupId || !text || !messageId || !senderId) {
-      return res.status(400).json({ 
-        error: 'Group ID, message text, and message ID are required' 
+      return res.status(400).json({
+        error: 'Group ID, message text, and message ID are required'
       });
     }
 
@@ -189,7 +189,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
     // Broadcast to all group members via Socket.IO
     if (socketIO) {
       console.log(`� Broadcasting group message via Socket.IO to group ${groupId}`);
-      
+
       // Emit to all sockets that are members of this group
       for (const memberId of group.members) {
         const memberIdStr = memberId.toString();
@@ -197,7 +197,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
           // Find all sockets for this user
           const memberSockets = Array.from(socketIO.sockets.sockets.values())
             .filter((socket: any) => socket.userId === memberIdStr);
-          
+
           memberSockets.forEach((socket: any) => {
             socket.emit('new_group_message', messageData);
             socket.emit('new_message', messageData); // Also emit general message event for notifications
@@ -212,11 +212,11 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
     // Send push notifications to ALL group members (always send, let device decide)
     try {
       console.log(`📤 [GROUP-PUSH] Starting group notification process...`);
-      
+
       // Get all group members except sender
       const otherMembers = group.members.filter((id: any) => id.toString() !== senderId);
       console.log(`📤 [GROUP-PUSH] Found ${otherMembers.length} members (excluding sender)`);
-      
+
       // Find users with push tokens (excluding expo-go-local-mode)
       const membersWithTokens = await User.find({
         _id: { $in: otherMembers },
@@ -233,7 +233,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
             console.log(`📤 [GROUP-PUSH] Group: ${group.name}`);
             console.log(`📤 [GROUP-PUSH] Sender: ${sender.name}`);
             console.log(`📤 [GROUP-PUSH] Message: ${text}`);
-            
+
             await sendGroupMessageNotification(
               member.pushToken!,
               group.name,
@@ -241,7 +241,7 @@ router.post('/send-group', requireAuth, async (req: AuthReq, res: Response) => {
               text,
               groupId
             );
-            
+
             console.log(`✅ [GROUP-PUSH] Notification sent successfully to ${member.name}`);
           } catch (error: any) {
             console.error(`❌ [GROUP-PUSH] Failed to send to ${member.name}:`, error);
@@ -399,7 +399,7 @@ router.get('/typing-status/:userId', requireAuth, async (req: AuthReq, res: Resp
     const key = `${conversationId}-${userId}`;
 
     const status = typingStatus.get(key);
-    
+
     // Clean up old typing statuses
     const now = new Date();
     if (status && now.getTime() - status.lastUpdate.getTime() > 10000) {
@@ -474,11 +474,11 @@ router.get('/group-typing-status/:groupId', requireAuth, async (req: AuthReq, re
     const typingUsers: string[] = [];
 
     for (const [statusKey, status] of typingStatus.entries()) {
-      if (statusKey.startsWith(`group-${groupId}-`) && 
-          statusKey !== `group-${groupId}-${currentUserId}` &&
-          status.isTyping && 
-          (now.getTime() - status.lastUpdate.getTime() < 10000)) {
-        
+      if (statusKey.startsWith(`group-${groupId}-`) &&
+        statusKey !== `group-${groupId}-${currentUserId}` &&
+        status.isTyping &&
+        (now.getTime() - status.lastUpdate.getTime() < 10000)) {
+
         const userId = statusKey.split('-').pop();
         if (userId) {
           typingUsers.push(userId);
@@ -506,63 +506,108 @@ router.get('/group-typing-status/:groupId', requireAuth, async (req: AuthReq, re
 });
 
 // GET /check-all-pending - Get undelivered messages for current user
-router.get('/check-all-pending', requireAuth, async (req: AuthReq, res: Response) => {
-  try {
-    const currentUserId = req.userId;
-    
-    if (!currentUserId) {
-      return res.status(401).json({ error: 'User not authenticated' });
-    }
+router.get(
+  '/check-all-pending',
+  requireAuth,
+  async (req: AuthReq, res: Response) => {
+    try {
+      const currentUserId = req.userId;
 
-    // Find all undelivered messages for this user
-    const pendingMessages = await TempMessage.find({
-      receiverId: currentUserId,
-      isDelivered: false
-    }).populate('senderId', 'name profilePicture').sort({ createdAt: 1 });
-
-    // Group messages by sender
-    const messagesBySender: any[] = [];
-    const senderMap = new Map();
-
-    for (const message of pendingMessages) {
-      const senderData = message.senderId as any;
-      const senderId = senderData._id.toString();
-      
-      if (!senderMap.has(senderId)) {
-        senderMap.set(senderId, {
-          senderId,
-          senderName: senderData.name,
-          senderProfilePicture: senderData.profilePicture,
-          messages: []
+      if (!currentUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'User not authenticated',
         });
-        messagesBySender.push(senderMap.get(senderId));
       }
-      
-      senderMap.get(senderId).messages.push({
-        id: message.messageId,
-        backendMessageId: message._id,
-        text: message.text,
-        timestamp: message.createdAt,
-        messageId: message.messageId
+
+      const pendingMessages = await TempMessage.find({
+        receiverId: currentUserId,
+        isDelivered: false,
+      })
+        .populate('senderId', 'name profilePicture')
+        .sort({ createdAt: 1 });
+
+      const senderMap = new Map<string, any>();
+
+      for (const msg of pendingMessages) {
+        const sender = msg.senderId as any;
+        const senderId = sender._id.toString();
+
+        if (!senderMap.has(senderId)) {
+          senderMap.set(senderId, {
+            senderId,
+            senderName: sender.name,
+            senderProfilePicture: sender.profilePicture,
+            messages: [],
+          });
+        }
+
+        senderMap.get(senderId).messages.push({
+          backendMessageId: msg._id,
+          messageId: msg.messageId,
+          text: msg.text,
+          timestamp: msg.createdAt,
+        });
+      }
+
+      const messagesBySender = Array.from(senderMap.values());
+
+      if (pendingMessages.length > 0) {
+        console.log(
+          `📬 ${pendingMessages.length} pending messages for user ${currentUserId}`
+        );
+      }
+
+      res.status(200).json({
+        success: true,
+        totalPendingMessages: pendingMessages.length,
+        messagesBySender,
+      });
+    } catch (error) {
+      console.error('❌ check-all-pending error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check pending messages',
       });
     }
-
-    // Only log if there are pending messages to avoid spam
-    if (pendingMessages.length > 0) {
-      console.log(`📬 Found ${pendingMessages.length} pending messages for user ${currentUserId} from ${messagesBySender.length} senders`);
-    }
-
-    res.status(200).json({
-      success: true,
-      messagesBySender,
-      totalPendingMessages: pendingMessages.length,
-      note: 'Messages will auto-delete after 15 days'
-    });
-  } catch (error) {
-    console.error('Error in check-all-pending:', error);
-    res.status(500).json({ error: 'Failed to check pending messages' });
   }
-});
+);
+
+router.get(
+  '/check-pending/:userId',
+  requireAuth,
+  async (req: AuthReq, res: Response) => {
+    try {
+      const currentUserId = req.userId;
+      const otherUserId = req.params.userId;
+
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthenticated' });
+      }
+
+      const messages = await TempMessage.find({
+        senderId: otherUserId,
+        receiverId: currentUserId,
+        isDelivered: false
+      }).sort({ createdAt: 1 });
+
+      res.json({
+        success: true,
+        messages: messages.map(m => ({
+          id: m.messageId,
+          backendMessageId: m._id,
+          text: m.text,
+          timestamp: m.createdAt
+        }))
+      });
+
+    } catch (err) {
+      console.error('❌ check-pending error:', err);
+      res.status(500).json({ success: false, error: 'Failed to fetch messages' });
+    }
+  }
+);
+
 
 // Mark messages as delivered
 router.post('/mark-delivered', requireAuth, async (req: AuthReq, res: Response) => {
@@ -673,7 +718,7 @@ router.delete('/cleanup-expired', requireAuth, async (req: AuthReq, res: Respons
 router.delete('/typing-status/clear', requireAuth, async (req: AuthReq, res: Response) => {
   try {
     const currentUserId = req.userId;
-    
+
     if (!currentUserId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -700,7 +745,7 @@ router.get('/check-group-pending/:groupId', requireAuth, async (req: AuthReq, re
   try {
     const currentUserId = req.userId;
     const { groupId } = req.params;
-    
+
     if (!currentUserId) {
       return res.status(401).json({ error: 'User not authenticated' });
     }
