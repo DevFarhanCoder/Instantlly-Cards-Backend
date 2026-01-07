@@ -108,36 +108,57 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
 
     // Filter transactions based on type and user role
     // This ensures each user only sees their relevant transaction record
-    const filteredTransactions = allTransactions.filter((txn: any) => {
+    const filteredTransactions = allTransactions.map((txn: any) => {
       // Safely extract IDs as strings - handle both populated and non-populated refs
       const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
       const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
       
-      switch (txn.type) {
-        case 'signup_bonus':
-        case 'referral_bonus':
-        case 'quiz_bonus':
-        case 'self_download_bonus':
-          // User should be the receiver
-          return toUserId === userIdStr;
+      // For 'transfer' type, transform based on viewer's perspective
+      if (txn.type === 'transfer') {
+        const isSender = fromUserId === userIdStr;
+        const isReceiver = toUserId === userIdStr;
         
-        case 'transfer_sent':
-          // Only sender sees this transaction
-          return fromUserId === userIdStr;
-        
-        case 'transfer_received':
-          // Only receiver sees this transaction
-          return toUserId === userIdStr;
-        
-        case 'ad_deduction':
-          // User should be the one being deducted
-          return fromUserId === userIdStr;
-        
-        default:
-          // For any other type, show if user is involved
-          return fromUserId === userIdStr || toUserId === userIdStr;
+        if (isSender) {
+          // User is the sender - show as sent
+          return {
+            ...txn,
+            type: 'transfer_sent',
+            amount: -Math.abs(txn.amount), // Negative for sender
+            description: txn.description ? `Sent to ${txn.toUser?.name || 'User'}: ${txn.description}` : `Sent to ${txn.toUser?.name || 'User'}`
+          };
+        } else if (isReceiver) {
+          // User is the receiver - show as received
+          return {
+            ...txn,
+            type: 'transfer_received',
+            amount: Math.abs(txn.amount), // Positive for receiver
+            description: txn.description ? `Received from ${txn.fromUser?.name || 'User'}: ${txn.description}` : `Received from ${txn.fromUser?.name || 'User'}`
+          };
+        }
+        return null; // Not involved in this transfer
       }
-    });
+      
+      // Handle legacy transfer_sent and transfer_received types
+      if (txn.type === 'transfer_sent') {
+        return fromUserId === userIdStr ? txn : null;
+      }
+      if (txn.type === 'transfer_received') {
+        return toUserId === userIdStr ? txn : null;
+      }
+      
+      // For other types, check if user is the receiver
+      if (['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'].includes(txn.type)) {
+        return toUserId === userIdStr ? txn : null;
+      }
+      
+      // For ad_deduction, user should be fromUser
+      if (txn.type === 'ad_deduction') {
+        return fromUserId === userIdStr ? txn : null;
+      }
+      
+      // For any other type, include if user is involved
+      return (fromUserId === userIdStr || toUserId === userIdStr) ? txn : null;
+    }).filter((txn: any) => txn !== null);
 
     // Apply pagination
     const paginatedTransactions = filteredTransactions.slice(Number(skip), Number(skip) + Number(limit));
@@ -196,35 +217,56 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
     // Ensure userId is a string for comparison
     const userIdStr = userId?.toString();
     
-    const transactions = allTransactions.filter((txn: any) => {
+    const transactions = allTransactions.map((txn: any) => {
       // Safely extract IDs as strings - handle both populated and non-populated refs
       const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
       const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
       
-      switch (txn.type) {
-        case 'signup_bonus':
-        case 'referral_bonus':
-        case 'quiz_bonus':
-        case 'self_download_bonus':
-          // User should be the receiver
-          return toUserId === userIdStr;
+      // For 'transfer' type, transform based on viewer's perspective
+      if (txn.type === 'transfer') {
+        const isSender = fromUserId === userIdStr;
+        const isReceiver = toUserId === userIdStr;
         
-        case 'transfer_sent':
-          // User should be the sender (fromUser) - only sender sees this
-          return fromUserId === userIdStr;
-        
-        case 'transfer_received':
-          // User should be the receiver (toUser) - only receiver sees this
-          return toUserId === userIdStr;
-        
-        case 'ad_deduction':
-          // User should be the one being deducted (fromUser)
-          return fromUserId === userIdStr;
-        
-        default:
-          return false;
+        if (isSender) {
+          // User is the sender - show as sent
+          return {
+            ...txn,
+            type: 'transfer_sent',
+            amount: -Math.abs(txn.amount), // Negative for sender
+            description: txn.description ? `Sent to ${txn.toUser?.name || 'User'}: ${txn.description}` : `Sent to ${txn.toUser?.name || 'User'}`
+          };
+        } else if (isReceiver) {
+          // User is the receiver - show as received
+          return {
+            ...txn,
+            type: 'transfer_received',
+            amount: Math.abs(txn.amount), // Positive for receiver
+            description: txn.description ? `Received from ${txn.fromUser?.name || 'User'}: ${txn.description}` : `Received from ${txn.fromUser?.name || 'User'}`
+          };
+        }
+        return null; // Not involved in this transfer
       }
-    }).slice(0, Number(limit));
+      
+      // Handle legacy transfer_sent and transfer_received types
+      if (txn.type === 'transfer_sent') {
+        return fromUserId === userIdStr ? txn : null;
+      }
+      if (txn.type === 'transfer_received') {
+        return toUserId === userIdStr ? txn : null;
+      }
+      
+      // For other types, check if user is the receiver
+      if (['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'].includes(txn.type)) {
+        return toUserId === userIdStr ? txn : null;
+      }
+      
+      // For ad_deduction, user should be fromUser
+      if (txn.type === 'ad_deduction') {
+        return fromUserId === userIdStr ? txn : null;
+      }
+      
+      return null;
+    }).filter((txn: any) => txn !== null).slice(0, Number(limit));
 
     // Calculate breakdown by type - use the already filtered transactions
     const breakdown = {
@@ -256,10 +298,20 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         case 'self_download_bonus':
           if (toUserId === userIdStr) breakdown.selfDownloadCredits += txn.amount;
           break;
+        case 'transfer':
+          // Handle new unified transfer type
+          if (fromUserId === userIdStr) {
+            breakdown.transferSent += Math.abs(txn.amount);
+          } else if (toUserId === userIdStr) {
+            breakdown.transferReceived += Math.abs(txn.amount);
+          }
+          break;
         case 'transfer_received':
+          // Legacy type
           if (toUserId === userIdStr) breakdown.transferReceived += txn.amount;
           break;
         case 'transfer_sent':
+          // Legacy type
           if (fromUserId === userIdStr) breakdown.transferSent += Math.abs(txn.amount);
           break;
         case 'ad_deduction':
@@ -443,31 +495,16 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     await sender.save();
     await recipient.save();
 
-    // Create transaction records
-    const transferDesc = note ? `Transfer to ${recipient.name}: ${note}` : `Transfer to ${recipient.name}`;
-    const receiveDesc = note ? `Transfer from ${sender.name}: ${note}` : `Transfer from ${sender.name}`;
-    
-    // Transaction for sender (deduction) - store as NEGATIVE amount
-    const senderTransaction = await Transaction.create({
-      type: 'transfer_sent',
+    // Create SINGLE transaction record for the transfer
+    // This will be interpreted differently based on who is viewing it
+    const transferTransaction = await Transaction.create({
+      type: 'transfer',
       fromUser: sender._id,
       toUser: recipient._id,
-      amount: -amount,  // Negative for deduction
-      description: transferDesc,
+      amount: amount,  // Store as positive amount
+      description: note || 'Credit transfer',
       balanceBefore: senderCredits,
       balanceAfter: senderCredits - amount,
-      status: 'completed'
-    });
-
-    // Transaction for recipient (addition) - store as POSITIVE amount
-    const recipientTransaction = await Transaction.create({
-      type: 'transfer_received',
-      fromUser: sender._id,
-      toUser: recipient._id,
-      amount: amount,  // Positive for addition
-      description: receiveDesc,
-      balanceBefore: recipientCredits,
-      balanceAfter: recipientCredits + amount,
       status: 'completed'
     });
 
