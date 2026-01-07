@@ -146,41 +146,51 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
     // For transfers sent: show if user is fromUser
     // For transfers received: show if user is toUser
     
-    // Convert userId to ObjectId for proper comparison
-    const mongoose = require('mongoose');
-    const userObjectId = new mongoose.Types.ObjectId(req.userId);
+    const userId = req.userId;
     
-    const transactions = await Transaction.find({
+    // Fetch all potential transactions first, then filter properly
+    const allTransactions = await Transaction.find({
       $or: [
-        // Credits earned by this user (they are the receiver)
-        { 
-          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: userObjectId 
-        },
-        // Transfers sent by this user
-        { 
-          type: 'transfer_sent',
-          fromUser: userObjectId 
-        },
-        // Transfers received by this user
-        { 
-          type: 'transfer_received',
-          toUser: userObjectId 
-        },
-        // Ad deductions from this user
-        { 
-          type: 'ad_deduction',
-          fromUser: userObjectId 
-        }
+        { toUser: userId },
+        { fromUser: userId }
       ]
     })
     .populate('fromUser', 'name phone')
     .populate('toUser', 'name phone')
     .sort({ createdAt: -1 })
-    .limit(Number(limit))
-    .skip(Number(skip));
+    .lean();
 
-    // Calculate breakdown by type
+    // Filter transactions based on type and user role
+    const transactions = allTransactions.filter((txn: any) => {
+      const fromUserId = txn.fromUser?._id?.toString() || txn.fromUser?.toString();
+      const toUserId = txn.toUser?._id?.toString() || txn.toUser?.toString();
+      
+      switch (txn.type) {
+        case 'signup_bonus':
+        case 'referral_bonus':
+        case 'quiz_bonus':
+        case 'self_download_bonus':
+          // User should be the receiver
+          return toUserId === userId;
+        
+        case 'transfer_sent':
+          // User should be the sender (fromUser)
+          return fromUserId === userId;
+        
+        case 'transfer_received':
+          // User should be the receiver (toUser)
+          return toUserId === userId;
+        
+        case 'ad_deduction':
+          // User should be the one being deducted (fromUser)
+          return fromUserId === userId;
+        
+        default:
+          return false;
+      }
+    }).slice(0, Number(limit));
+
+    // Calculate breakdown by type - use the already filtered transactions
     const breakdown = {
       quizCredits: 0,
       referralCredits: 0,
@@ -191,81 +201,37 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       adDeductions: 0,
     };
 
-    const allTransactions = await Transaction.find({
-      $or: [
-        // Credits earned by this user (they are the receiver)
-        { 
-          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: userObjectId 
-        },
-        // Transfers sent by this user
-        { 
-          type: 'transfer_sent',
-          fromUser: userObjectId 
-        },
-        // Transfers received by this user
-        { 
-          type: 'transfer_received',
-          toUser: userObjectId 
-        },
-        // Ad deductions from this user
-        { 
-          type: 'ad_deduction',
-          fromUser: userObjectId 
-        }
-      ]
-    });
-
+    // Use filtered allTransactions for breakdown
     allTransactions.forEach((txn: any) => {
+      const fromUserId = txn.fromUser?._id?.toString() || txn.fromUser?.toString();
+      const toUserId = txn.toUser?._id?.toString() || txn.toUser?.toString();
+      
       switch (txn.type) {
         case 'quiz_bonus':
-          breakdown.quizCredits += txn.amount;
+          if (toUserId === userId) breakdown.quizCredits += txn.amount;
           break;
         case 'referral_bonus':
-          breakdown.referralCredits += txn.amount;
+          if (toUserId === userId) breakdown.referralCredits += txn.amount;
           break;
         case 'signup_bonus':
-          breakdown.signupBonus += txn.amount;
+          if (toUserId === userId) breakdown.signupBonus += txn.amount;
           break;
         case 'self_download_bonus':
-          breakdown.selfDownloadCredits += txn.amount;
+          if (toUserId === userId) breakdown.selfDownloadCredits += txn.amount;
           break;
         case 'transfer_received':
-          breakdown.transferReceived += txn.amount;
+          if (toUserId === userId) breakdown.transferReceived += txn.amount;
           break;
         case 'transfer_sent':
-          breakdown.transferSent += Math.abs(txn.amount);  // Use absolute value since amount is now negative
+          if (fromUserId === userId) breakdown.transferSent += Math.abs(txn.amount);
           break;
         case 'ad_deduction':
-          breakdown.adDeductions += Math.abs(txn.amount);
+          if (fromUserId === userId) breakdown.adDeductions += Math.abs(txn.amount);
           break;
       }
     });
 
-    const total = await Transaction.countDocuments({
-      $or: [
-        // Credits earned by this user
-        { 
-          type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: userObjectId 
-        },
-        // Transfers sent by this user
-        { 
-          type: 'transfer_sent',
-          fromUser: userObjectId 
-        },
-        // Transfers received by this user
-        { 
-          type: 'transfer_received',
-          toUser: userObjectId 
-        },
-        // Ad deductions from this user
-        { 
-          type: 'ad_deduction',
-          fromUser: userObjectId 
-        }
-      ]
-    });
+    const total = transactions.length;
 
     res.json({
       success: true,
