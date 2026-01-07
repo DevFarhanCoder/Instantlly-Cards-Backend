@@ -91,29 +91,61 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
 router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
   try {
     const { limit = 50, skip = 0 } = req.query;
+    const userId = req.userId;
+    const userIdStr = userId?.toString();
     
-    const transactions = await Transaction.find({
+    // Fetch all potential transactions first
+    const allTransactions = await Transaction.find({
       $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
+        { fromUser: userId },
+        { toUser: userId }
       ]
     })
     .populate('fromUser', 'name phone')
     .populate('toUser', 'name phone')
     .sort({ createdAt: -1 })
-    .limit(Number(limit))
-    .skip(Number(skip));
+    .lean();
 
-    const total = await Transaction.countDocuments({
-      $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
-      ]
+    // Filter transactions based on type and user role
+    // This ensures each user only sees their relevant transaction record
+    const filteredTransactions = allTransactions.filter((txn: any) => {
+      // Safely extract IDs as strings - handle both populated and non-populated refs
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
+      
+      switch (txn.type) {
+        case 'signup_bonus':
+        case 'referral_bonus':
+        case 'quiz_bonus':
+        case 'self_download_bonus':
+          // User should be the receiver
+          return toUserId === userIdStr;
+        
+        case 'transfer_sent':
+          // Only sender sees this transaction
+          return fromUserId === userIdStr;
+        
+        case 'transfer_received':
+          // Only receiver sees this transaction
+          return toUserId === userIdStr;
+        
+        case 'ad_deduction':
+          // User should be the one being deducted
+          return fromUserId === userIdStr;
+        
+        default:
+          // For any other type, show if user is involved
+          return fromUserId === userIdStr || toUserId === userIdStr;
+      }
     });
+
+    // Apply pagination
+    const paginatedTransactions = filteredTransactions.slice(Number(skip), Number(skip) + Number(limit));
+    const total = filteredTransactions.length;
 
     res.json({
       success: true,
-      transactions,
+      transactions: paginatedTransactions,
       total,
       limit: Number(limit),
       skip: Number(skip)
@@ -161,9 +193,13 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
     .lean();
 
     // Filter transactions based on type and user role
+    // Ensure userId is a string for comparison
+    const userIdStr = userId?.toString();
+    
     const transactions = allTransactions.filter((txn: any) => {
-      const fromUserId = txn.fromUser?._id?.toString() || txn.fromUser?.toString();
-      const toUserId = txn.toUser?._id?.toString() || txn.toUser?.toString();
+      // Safely extract IDs as strings - handle both populated and non-populated refs
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
       
       switch (txn.type) {
         case 'signup_bonus':
@@ -171,19 +207,19 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         case 'quiz_bonus':
         case 'self_download_bonus':
           // User should be the receiver
-          return toUserId === userId;
+          return toUserId === userIdStr;
         
         case 'transfer_sent':
-          // User should be the sender (fromUser)
-          return fromUserId === userId;
+          // User should be the sender (fromUser) - only sender sees this
+          return fromUserId === userIdStr;
         
         case 'transfer_received':
-          // User should be the receiver (toUser)
-          return toUserId === userId;
+          // User should be the receiver (toUser) - only receiver sees this
+          return toUserId === userIdStr;
         
         case 'ad_deduction':
           // User should be the one being deducted (fromUser)
-          return fromUserId === userId;
+          return fromUserId === userIdStr;
         
         default:
           return false;
@@ -203,30 +239,31 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
 
     // Use filtered allTransactions for breakdown
     allTransactions.forEach((txn: any) => {
-      const fromUserId = txn.fromUser?._id?.toString() || txn.fromUser?.toString();
-      const toUserId = txn.toUser?._id?.toString() || txn.toUser?.toString();
+      // Safely extract IDs as strings - handle both populated and non-populated refs
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
       
       switch (txn.type) {
         case 'quiz_bonus':
-          if (toUserId === userId) breakdown.quizCredits += txn.amount;
+          if (toUserId === userIdStr) breakdown.quizCredits += txn.amount;
           break;
         case 'referral_bonus':
-          if (toUserId === userId) breakdown.referralCredits += txn.amount;
+          if (toUserId === userIdStr) breakdown.referralCredits += txn.amount;
           break;
         case 'signup_bonus':
-          if (toUserId === userId) breakdown.signupBonus += txn.amount;
+          if (toUserId === userIdStr) breakdown.signupBonus += txn.amount;
           break;
         case 'self_download_bonus':
-          if (toUserId === userId) breakdown.selfDownloadCredits += txn.amount;
+          if (toUserId === userIdStr) breakdown.selfDownloadCredits += txn.amount;
           break;
         case 'transfer_received':
-          if (toUserId === userId) breakdown.transferReceived += txn.amount;
+          if (toUserId === userIdStr) breakdown.transferReceived += txn.amount;
           break;
         case 'transfer_sent':
-          if (fromUserId === userId) breakdown.transferSent += Math.abs(txn.amount);
+          if (fromUserId === userIdStr) breakdown.transferSent += Math.abs(txn.amount);
           break;
         case 'ad_deduction':
-          if (fromUserId === userId) breakdown.adDeductions += Math.abs(txn.amount);
+          if (fromUserId === userIdStr) breakdown.adDeductions += Math.abs(txn.amount);
           break;
       }
     });
