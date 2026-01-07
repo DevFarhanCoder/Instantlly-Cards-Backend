@@ -145,27 +145,32 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
     // For credits earned (quiz, referral, signup, self_download): show if user is toUser
     // For transfers sent: show if user is fromUser
     // For transfers received: show if user is toUser
+    
+    // Convert userId to ObjectId for proper comparison
+    const mongoose = require('mongoose');
+    const userObjectId = new mongoose.Types.ObjectId(req.userId);
+    
     const transactions = await Transaction.find({
       $or: [
         // Credits earned by this user (they are the receiver)
         { 
           type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Transfers sent by this user
         { 
           type: 'transfer_sent',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         },
         // Transfers received by this user
         { 
           type: 'transfer_received',
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Ad deductions from this user
         { 
           type: 'ad_deduction',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         }
       ]
     })
@@ -191,22 +196,22 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         // Credits earned by this user (they are the receiver)
         { 
           type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Transfers sent by this user
         { 
           type: 'transfer_sent',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         },
         // Transfers received by this user
         { 
           type: 'transfer_received',
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Ad deductions from this user
         { 
           type: 'ad_deduction',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         }
       ]
     });
@@ -226,14 +231,10 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
           breakdown.selfDownloadCredits += txn.amount;
           break;
         case 'transfer_received':
-          if (txn.toUser?.toString() === req.userId) {
-            breakdown.transferReceived += txn.amount;
-          }
+          breakdown.transferReceived += txn.amount;
           break;
         case 'transfer_sent':
-          if (txn.fromUser?.toString() === req.userId) {
-            breakdown.transferSent += Math.abs(txn.amount);  // Use absolute value since amount is now negative
-          }
+          breakdown.transferSent += Math.abs(txn.amount);  // Use absolute value since amount is now negative
           break;
         case 'ad_deduction':
           breakdown.adDeductions += Math.abs(txn.amount);
@@ -246,22 +247,22 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         // Credits earned by this user
         { 
           type: { $in: ['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'] },
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Transfers sent by this user
         { 
           type: 'transfer_sent',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         },
         // Transfers received by this user
         { 
           type: 'transfer_received',
-          toUser: req.userId 
+          toUser: userObjectId 
         },
         // Ad deductions from this user
         { 
           type: 'ad_deduction',
-          fromUser: req.userId 
+          fromUser: userObjectId 
         }
       ]
     });
