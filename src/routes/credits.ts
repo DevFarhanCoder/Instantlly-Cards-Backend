@@ -232,7 +232,7 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
           break;
         case 'transfer_sent':
           if (txn.fromUser?.toString() === req.userId) {
-            breakdown.transferSent += Math.abs(txn.amount);
+            breakdown.transferSent += Math.abs(txn.amount);  // Use absolute value since amount is now negative
           }
           break;
         case 'ad_deduction':
@@ -443,24 +443,24 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     const transferDesc = note ? `Transfer to ${recipient.name}: ${note}` : `Transfer to ${recipient.name}`;
     const receiveDesc = note ? `Transfer from ${sender.name}: ${note}` : `Transfer from ${sender.name}`;
     
-    // Transaction for sender (deduction)
+    // Transaction for sender (deduction) - store as NEGATIVE amount
     const senderTransaction = await Transaction.create({
       type: 'transfer_sent',
       fromUser: sender._id,
       toUser: recipient._id,
-      amount: amount,
+      amount: -amount,  // Negative for deduction
       description: transferDesc,
       balanceBefore: senderCredits,
       balanceAfter: senderCredits - amount,
       status: 'completed'
     });
 
-    // Transaction for recipient (addition)
+    // Transaction for recipient (addition) - store as POSITIVE amount
     const recipientTransaction = await Transaction.create({
       type: 'transfer_received',
       fromUser: sender._id,
       toUser: recipient._id,
-      amount: amount,
+      amount: amount,  // Positive for addition
       description: receiveDesc,
       balanceBefore: recipientCredits,
       balanceAfter: recipientCredits + amount,
