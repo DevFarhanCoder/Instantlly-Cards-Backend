@@ -34,82 +34,24 @@ import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
 
-// ==========================================
-// CRITICAL: Global Error Handlers
-// Prevents exit status 134 crashes
-// ==========================================
-process.on('uncaughtException', (error: Error) => {
-  console.error('❌ UNCAUGHT EXCEPTION - This would have crashed the app!');
-  console.error('Error:', error.message);
-  console.error('Stack:', error.stack);
-  // Don't exit - log and continue
-});
-
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-  console.error('❌ UNHANDLED REJECTION - This would have crashed the app!');
-  console.error('Reason:', reason);
-  console.error('Promise:', promise);
-  // Don't exit - log and continue
-});
-
-process.on('SIGTERM', async () => {
-  console.log('📴 SIGTERM received, starting graceful shutdown...');
-  await gracefulShutdown();
-});
-
-process.on('SIGINT', async () => {
-  console.log('📴 SIGINT received, starting graceful shutdown...');
-  await gracefulShutdown();
-});
-
-let isShuttingDown = false;
-
-async function gracefulShutdown() {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  
-  try {
-    console.log('🔄 Closing server...');
-    server.close(() => {
-      console.log('✅ HTTP server closed');
-    });
-    
-    console.log('🔄 Closing database connection...');
-    await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
-    
-    console.log('✅ Graceful shutdown complete');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error during graceful shutdown:', error);
-    process.exit(1);
-  }
-}
-// ==========================================
-
 const app = express();
 const server = createServer(app);
 
-// Socket.IO setup with CORS - Optimized for 4 instances with 512MB RAM each
+// Socket.IO setup with CORS - Optimized for speed and memory
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
     credentials: true
   },
-  pingTimeout: 15000, // Reduced to 15s for faster disconnect detection
-  pingInterval: 8000, // Reduced to 8s for faster keepalive
+  pingTimeout: 20000, // Reduced from 60s to 20s to detect disconnects faster
+  pingInterval: 10000, // Reduced from 25s to 10s for faster keepalive
   transports: ["websocket", "polling"], // WebSocket first for speed
   allowEIO3: true,
-  upgradeTimeout: 8000, // Reduced to 8s
-  maxHttpBufferSize: 1e6, // Reduced to 1MB (from 2MB) for 4 instances
-  connectTimeout: 8000, // Reduced connection timeout
-  perMessageDeflate: false, // Disable compression for speed
-  // CRITICAL: Prevent memory buildup with multiple instances
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
-    skipMiddlewares: true,
-  },
+  upgradeTimeout: 10000, // Reduced from 30s to 10s
+  maxHttpBufferSize: 2e6, // Reduced to 2MB (was 5MB) to save memory on Render 512MB limit
+  connectTimeout: 10000, // Add connection timeout
+  perMessageDeflate: false // Disable compression for speed
 });
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
@@ -147,14 +89,13 @@ app.use(cors({
 app.use(compression()); // Enable gzip compression for faster responses
 
 // Parse JSON bodies - with type checking for various content-types
-// REDUCED LIMITS: Prevent memory spikes with 4 instances
 app.use(express.json({ 
-  limit: "5mb", // Reduced from 10mb to prevent OOM
+  limit: "10mb",
   type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
 })); 
 
 // Parse URL-encoded bodies (for form submissions)
-app.use(express.urlencoded({ extended: true, limit: "5mb" })); // Reduced from 10mb
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Request logging middleware for debugging
 app.use((req, res, next) => {
@@ -347,48 +288,18 @@ async function startServer() {
       console.log('⚠️ ERLANG_GATEWAY_URL not set - skipping Erlang gateway initialization');
     }
 
-    // Global error handling middleware (must be last)
-    app.use((err: any, req: Request, res: Response, next: any) => {
-      console.error('❌ Global error handler caught:', err.message);
-      console.error('Stack:', err.stack);
-      
-      // Send error response
-      res.status(err.status || 500).json({
-        success: false,
-        message: err.message || 'Internal server error',
-        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-      });
-    });
-
     // Start the server
-    const port = process.env.PORT || 3001;
+  const port = process.env.PORT || 3001;
     server.listen(port, () => {
       console.log(`🚀 API server listening on 0.0.0.0:${port}`);
       console.log(`📡 Health check: http://0.0.0.0:${port}/api/health`);
       console.log(`🔌 Socket.IO server is running`);
       console.log(`👥 Real-time chat system is ready`);
-      console.log(`💾 AGGRESSIVE memory optimization active (Exit 134 prevention)`);
-      console.log(`🛡️  Global error handlers active`);
-      
-      // Log memory usage every 10 minutes
-      setInterval(() => {
-        const mem = process.memoryUsage();
-        const heapUsedMB = mem.heapUsed / 1024 / 1024;
-        const heapTotalMB = mem.heapTotal / 1024 / 1024;
-        const rssMB = mem.rss / 1024 / 1024;
-        console.log(`📊 [MEMORY] Heap: ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB | RSS: ${rssMB.toFixed(0)}MB`);
-        
-        // Warning if approaching limits
-        if (heapUsedMB > 350) {
-          console.log(`🚨 [WARNING] Memory usage high - approaching 512MB limit!`);
-        }
-      }, 10 * 60 * 1000);
     });
 
   } catch (error) {
     console.error("❌ Failed to start server:", error);
-    // Don't exit immediately - allow restart
-    setTimeout(() => process.exit(1), 1000);
+    process.exit(1);
   }
 }
 

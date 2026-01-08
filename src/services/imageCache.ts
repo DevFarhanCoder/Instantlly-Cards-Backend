@@ -26,20 +26,20 @@ class ImageCache {
   private currentSizeBytes: number;
   private cleanupInterval: NodeJS.Timeout | null;
 
-  constructor(maxSizeMB: number = 30, maxAgeHours: number = 6) { // AGGRESSIVE: Reduced to 30MB/6h for stability
+  constructor(maxSizeMB: number = 100, maxAgeHours: number = 24) {
     this.cache = new Map();
     this.maxSizeBytes = maxSizeMB * 1024 * 1024; // Convert MB to bytes
     this.maxAgeMs = maxAgeHours * 60 * 60 * 1000; // Convert hours to ms
     this.currentSizeBytes = 0;
     this.cleanupInterval = null;
 
-    // Start periodic cleanup (every 20 minutes for more aggressive cleanup)
+    // Start periodic cleanup (every 30 minutes)
     this.startCleanup();
 
-    console.log(`🗄️  Image Cache initialized (AGGRESSIVE - Prevents Exit 134):`);
-    console.log(`   Max size: ${maxSizeMB} MB (reduced for stability)`);
-    console.log(`   Max age: ${maxAgeHours} hours (shorter TTL)`);
-    console.log(`   Cleanup interval: 20 minutes`);
+    console.log(`🗄️  Image Cache initialized:`);
+    console.log(`   Max size: ${maxSizeMB} MB`);
+    console.log(`   Max age: ${maxAgeHours} hours`);
+    console.log(`   Cleanup interval: 30 minutes`);
   }
 
   /**
@@ -199,15 +199,12 @@ class ImageCache {
       const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
       const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
       
-      // AGGRESSIVE: If using >350MB (70% of 512MB limit), clear cache immediately
-      if (heapUsedMB > 350) {
-        console.log(`🚨 [CRITICAL MEMORY] Heap at ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB - Emergency cache clear!`);
-        this.clear(); // Clear everything to prevent crash
-      } else if (heapUsedMB > 300) {
-        console.log(`⚠️  [MEMORY PRESSURE] Heap at ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB - Clearing 70% of cache`);
-        this.clearOldest(Math.floor(this.cache.size * 0.7));
+      // If using >400MB (80% of 512MB limit), aggressively clear cache
+      if (heapUsedMB > 400) {
+        console.log(`⚠️  [MEMORY PRESSURE] Heap at ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB - Clearing 50% of cache`);
+        this.clearOldest(Math.floor(this.cache.size / 2));
       }
-    }, 20 * 60 * 1000); // Check every 20 minutes
+    }, 30 * 60 * 1000);
   }
 
   /**
@@ -243,9 +240,8 @@ class ImageCache {
   }
 }
 
-// Export singleton instance with AGGRESSIVE limits for Exit 134 prevention
-// Reduced: 30MB cache, 6 hour TTL
-export const imageCache = new ImageCache(30, 6);
+// Export singleton instance with 50MB limit and 24 hour TTL (reduced for Render 512MB memory limit)
+export const imageCache = new ImageCache(50, 24);
 
 // Graceful shutdown handler
 process.on('SIGTERM', () => {

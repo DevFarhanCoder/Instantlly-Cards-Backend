@@ -80,22 +80,6 @@ router.post(
       const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
         phone: String,
         credits: Number,
-        cashCredits: Number,
-        extraCredits: Number,
-        cashHistory: [{
-          type: String,
-          amount: Number,
-          balance: Number,
-          description: String,
-          date: Date
-        }],
-        extraHistory: [{
-          type: String,
-          amount: Number,
-          balance: Number,
-          description: String,
-          date: Date
-        }],
         creditsHistory: [{
           type: String,
           amount: Number,
@@ -134,86 +118,27 @@ router.post(
       }
 
       const currentCredits = user.credits || 0;
-      const cashCredits = user.cashCredits || 0;
-      const extraCredits = user.extraCredits || 0;
-      
-      console.log('💰 Current Credits:', { total: currentCredits, cash: cashCredits, extra: extraCredits });
       
       if (currentCredits < 1020) {
         return res.status(400).json({ 
           message: 'Insufficient credits. You need 1020 credits to create an ad.',
           currentCredits: currentCredits,
-          cashCredits: cashCredits,
-          extraCredits: extraCredits,
           required: 1020
         });
       }
 
-      // SMART DEDUCTION: Deduct from cash first, then from extra
-      let remainingToDeduct = 1020;
-      let deductedFromCash = 0;
-      let deductedFromExtra = 0;
-      
-      // Initialize history arrays if they don't exist
-      if (!user.cashHistory) user.cashHistory = [];
-      if (!user.extraHistory) user.extraHistory = [];
-      if (!user.creditsHistory) user.creditsHistory = [];
-      
-      // Step 1: Deduct from cash credits first
-      if (cashCredits > 0) {
-        deductedFromCash = Math.min(cashCredits, remainingToDeduct);
-        user.cashCredits = cashCredits - deductedFromCash;
-        remainingToDeduct -= deductedFromCash;
-        
-        // Add to cash history
-        (user.cashHistory as any).push({
-          type: 'debit',
-          amount: deductedFromCash,
-          balance: user.cashCredits,
-          description: `Ad creation: ${title}`,
-          date: new Date()
-        });
-        
-        console.log(`💵 Deducted ${deductedFromCash} from cash credits. Remaining cash: ${user.cashCredits}`);
-      }
-      
-      // Step 2: Deduct remaining from extra credits if needed
-      if (remainingToDeduct > 0 && extraCredits > 0) {
-        deductedFromExtra = Math.min(extraCredits, remainingToDeduct);
-        user.extraCredits = extraCredits - deductedFromExtra;
-        remainingToDeduct -= deductedFromExtra;
-        
-        // Add to extra history
-        (user.extraHistory as any).push({
-          type: 'debit',
-          amount: deductedFromExtra,
-          balance: user.extraCredits,
-          description: `Ad creation: ${title}`,
-          date: new Date()
-        });
-        
-        console.log(`🎁 Deducted ${deductedFromExtra} from extra credits. Remaining extra: ${user.extraCredits}`);
-      }
-      
-      // Update total credits
-      user.credits = user.cashCredits + user.extraCredits;
-      
-      // Add to legacy credits history (for backward compatibility)
+      // Deduct 1020 credits
+      user.credits = currentCredits - 1020;
+      user.creditsHistory = user.creditsHistory || [];
       (user.creditsHistory as any).push({
         type: 'deduction',
         amount: -1020,
-        description: `Ad creation: ${title} (${deductedFromCash} from cash + ${deductedFromExtra} from extra)`,
+        description: `Ad creation: ${title}`,
         date: new Date()
       });
-      
       await user.save();
 
-      console.log(`✅ Deducted 1020 credits from ${uploaderPhone}. New balance:`, {
-        total: user.credits,
-        cash: user.cashCredits,
-        extra: user.extraCredits,
-        breakdown: `${deductedFromCash} cash + ${deductedFromExtra} extra`
-      });
+      console.log(`✅ Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
 
       // Upload images to GridFS
       const db = mongoose.connection.db;

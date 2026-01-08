@@ -3,8 +3,7 @@ import mongoose from "mongoose";
 
 let isConnected = false;
 let connectionAttempts = 0;
-const MAX_RETRY_ATTEMPTS = 5; // Increased from 3
-const RETRY_DELAY_MS = 3000; // 3 seconds
+const MAX_RETRY_ATTEMPTS = 3;
 
 export async function connectDB() {
   if (mongoose.connection.readyState === 1) {
@@ -21,9 +20,6 @@ export async function connectDB() {
     await mongoose.connect(uri, {
       retryWrites: true,
       retryReads: true,
-      serverSelectionTimeoutMS: 10000, // 10 seconds
-      socketTimeoutMS: 45000, // 45 seconds
-      family: 4, // Use IPv4, skip trying IPv6
     });
 
     // Set connected flag immediately after successful connection
@@ -50,12 +46,10 @@ export async function connectDB() {
         console.error("🔐 CRITICAL: MongoDB authentication failed - Check MONGODB_URI password!");
         console.error("💡 Update password in Render.com environment variables");
       }
-      
-      // DON'T throw - just log
     });
     
     c.on("disconnected", () => {
-      console.warn("⚠️ MongoDB disconnected - will attempt reconnection");
+      console.warn("⚠️ MongoDB disconnected");
       isConnected = false;
     });
     
@@ -84,14 +78,12 @@ export async function connectDB() {
     }
     
     if (connectionAttempts < MAX_RETRY_ATTEMPTS) {
-      console.log(`⏳ Retrying connection in ${RETRY_DELAY_MS/1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+      console.log(`⏳ Retrying connection in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
       return connectDB(); // Retry
     }
     
-    // After max attempts, throw but don't crash the process
-    console.error("❌ Max connection attempts reached - service may be degraded");
-    throw error;
+    throw error; // Give up after max attempts
   }
 }
 
