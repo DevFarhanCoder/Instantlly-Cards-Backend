@@ -116,6 +116,35 @@ export class SocketService {
       socket.on('send_message', (data: MessageData) => {
         this.handlePrivateMessage(socket, data);
       });
+      // ✅ CLIENT DELIVERY ACK
+      socket.on('message_delivered_ack', async ({ messageId }: { messageId: string }) => {
+        try {
+          const message = await Message.findById(messageId);
+
+          if (
+            !message ||
+            message.isDelivered ||
+            message.receiver?.toString() !== socket.userId
+          ) {
+            return;
+          }
+
+          message.isDelivered = true;
+          message.deliveredAt = new Date();
+          message.isPendingDelivery = false;
+          await message.save();
+
+          // Notify sender
+          this.io.to(`user_${message.sender.toString()}`).emit('message_delivered', {
+            messageId,
+            status: 'delivered',
+            deliveredAt: message.deliveredAt
+          });
+        } catch (err) {
+          console.error('Error in delivered ACK:', err);
+        }
+      });
+
 
       // Handle group message sending
       socket.on('send_group_message', (data: MessageData) => {
@@ -194,6 +223,9 @@ export class SocketService {
 
     this.onlineUsers.set(socket.userId, user);
 
+    socket.join(`user_${socket.userId}`);
+
+
     // Notify all connected users about online status
     socket.broadcast.emit('user_online', {
       userId: socket.userId,
@@ -229,24 +261,25 @@ export class SocketService {
         });
 
         // Mark as delivered
-        message.isDelivered = true;
-        message.deliveredAt = new Date();
-        message.isPendingDelivery = false;
-        await message.save();
+        // message.isDelivered = true;
+        // message.deliveredAt = new Date();
+        // message.isPendingDelivery = false;
+        // await message.save();
 
         // Notify sender about delivery
         const senderId = message.sender && typeof message.sender === 'object' ? message.sender._id : message.sender;
-        const senderSocket = this.onlineUsers.get(senderId?.toString() || '');
-        if (senderSocket) {
-          this.io.to(senderSocket.socketId).emit('message_delivered', {
-            messageId: message._id?.toString() || '',
-            localMessageId: message.localMessageId,
-            status: 'delivered',
-            deliveredAt: message.deliveredAt
-          });
-        }
+        // const senderSocket = this.onlineUsers.get(senderId?.toString() || '');
+        // if (senderSocket) {
+        //   this.io.to(senderSocket.socketId).emit('message_delivered', {
+        //     messageId: message._id?.toString() || '',
+        //     localMessageId: message.localMessageId,
+        //     status: 'delivered',
+        //     deliveredAt: message.deliveredAt
+        //   });
+        // }
+        console.log(`📩 Sent pending message ${message._id} to ${socket.user.name}, awaiting ACK`);
 
-        console.log(`✅ Delivered pending message ${message._id} to ${socket.user.name}`);
+
       }
     } catch (error) {
       console.error('Error delivering pending messages:', error);
@@ -287,24 +320,24 @@ export class SocketService {
       // Send to receiver if online
       const receiverSocket = this.onlineUsers.get(data.receiverId);
       if (receiverSocket) {
-        this.io.to(receiverSocket.socketId).emit('new_message', {
+        this.io.to(`user_${data.receiverId}`).emit('new_message', {
           ...message.toObject(),
           conversationId: chat._id?.toString()
         });
 
         // Mark as delivered
-        message.isDelivered = true;
-        message.deliveredAt = new Date();
-        message.isPendingDelivery = false;
-        await message.save();
+        // message.isDelivered = true;
+        // message.deliveredAt = new Date();
+        // message.isPendingDelivery = false;
+        // await message.save();
 
-        // Emit delivered status to sender
-        this.io.to(socket.id).emit('message_delivered', {
-          messageId: message._id?.toString(),
-          localMessageId: data.localMessageId,
-          status: 'delivered',
-          deliveredAt: message.deliveredAt
-        });
+        // // Emit delivered status to sender
+        // this.io.to(socket.id).emit('message_delivered', {
+        //   messageId: message._id?.toString(),
+        //   localMessageId: data.localMessageId,
+        //   status: 'delivered',
+        //   deliveredAt: message.deliveredAt
+        // });
       }
 
       // Send confirmation to sender
