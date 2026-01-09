@@ -1,9 +1,34 @@
 node_modules
 dist
 .env
+.env.local
+.env.*.local
 npm-debug.log*
 yarn-error.log*
 
 # Firebase credentials - NEVER commit these!
 firebase-service-account.json
 *-service-account.json
+
+# Migration and test scripts
+cleanup-duplicates.js
+delete-duplicates.js
+verify-index.js
+migrate-*.js
+migrate-*.ts
+test-*.ps1
+
+# Deployment scripts (optional, keep if needed)
+connect-ec2.sh
+setup-ec2-migration.sh
+push-to-render.sh
+deployment-instructions.sh
+
+# SSL certificates
+*.pem
+*.crt
+*.key
+
+# Uploads folder contents (keep folder structure)
+uploads/*
+!uploads/.gitignore

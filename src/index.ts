@@ -1,11 +1,12 @@
 // index.ts
 import dotenv from "dotenv";
-dotenv.config();
+import path from "path";
+// Load .env from the project root
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
 import compression from "compression";
-import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
 import { createServer } from "http";
@@ -27,6 +28,8 @@ import adsRouter from "./routes/ads";
 import channelPartnerAdsRouter from "./routes/channelPartnerAds";
 import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
+import quizRouter from "./routes/quiz";
+import businessPromotionRouter from "./routes/businessPromotion";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -242,6 +245,7 @@ async function startServer() {
     app.use("/api/groups", groupsRouter);    
     app.use("/api/chats", chatsRouter);
     app.use("/api/admin", adminRouter);
+    console.log("✅ Mounted /api/admin routes (dashboard stats, user management)");
     app.use("/api/admin-auth", adminAuthRouter);
     console.log("✅ Mounted /api/admin-auth routes (admin login/verification)");
     app.use("/api/group-sharing", groupSharingRouter);
@@ -254,6 +258,10 @@ async function startServer() {
     console.log("✅ Mounted /api/credits routes (credits system - balance, transfer, transactions)");
     app.use("/api/feedback", feedbackRouter);
     console.log("✅ Mounted /api/feedback routes (user feedback system)");
+    app.use("/api/quiz", quizRouter);
+    console.log("✅ Mounted /api/quiz routes (quiz progress, answer submission)");
+    app.use("/api/business-promotion", businessPromotionRouter);
+    console.log("✅ Mounted /api/business-promotion routes (business promotion forms)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);

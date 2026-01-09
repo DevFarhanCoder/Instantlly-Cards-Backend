@@ -65,13 +65,15 @@ router.get("/active", async (req: Request, res: Response) => {
     });
 
     // Get ads that are currently active (within date range) AND approved
-    // Only fetch metadata, NOT images (GridFS handles images separately)
+    // Only fetch metadata, NOT images/videos (GridFS handles media separately)
+    // Exclude video ads - only show image ads in bottom carousel
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now },
-      status: 'approved' // ONLY show approved ads to mobile users
+      status: 'approved', // ONLY show approved ads to mobile users
+      adType: { $ne: 'video' } // Exclude video ads from bottom carousel
     })
-      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS')
+      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS knowMoreUrl bottomImage')
       .sort({ priority: -1, createdAt: -1 })
       .limit(50) // Can handle more ads now (no heavy base64 payload)
       .lean()
@@ -101,7 +103,7 @@ router.get("/active", async (req: Request, res: Response) => {
       clicks: ad.clicks,
       startDate: ad.startDate,
       endDate: ad.endDate,
-      // Provide image URLs - client will fetch these separately
+      // Image ad URLs
       bottomImageUrl: ad.bottomImageGridFS 
         ? `/api/ads/image/${ad._id}/bottom`
         : null,
@@ -109,7 +111,7 @@ router.get("/active", async (req: Request, res: Response) => {
         ? `/api/ads/image/${ad._id}/fullscreen`
         : null,
       hasBottomImage: !!ad.bottomImageGridFS,
-      hasFullscreenImage: !!ad.fullscreenImageGridFS
+      hasFullscreenImage: !!ad.fullscreenImageGridFS,
     }));
 
     // AWS Cloud (Primary) - Render backup handled by client
@@ -162,7 +164,7 @@ router.get("/active", async (req: Request, res: Response) => {
 
 // GET /api/ads/image/:id/:type - Get single ad's image from GridFS (NO AUTH)
 // Streams image efficiently from GridFS storage with timeout protection
-// :type can be 'bottom' or 'fullscreen'
+// :type can be 'bottom', 'fullscreen', or 'video-thumbnail'
 router.get("/image/:id/:type", async (req: Request, res: Response) => {
   // Set response timeout to 40 seconds (less than socket timeout)
   req.setTimeout(40000);
@@ -214,7 +216,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     while (retries < maxRetries && !ad) {
       try {
         ad = await Ad.findById(id)
-          .select('bottomImageGridFS fullscreenImageGridFS bottomImage fullscreenImage')
+          .select('bottomImageGridFS fullscreenImageGridFS videoThumbnailGridFS bottomImage fullscreenImage')
           .maxTimeMS(10000) // 10 second timeout for this query
           .lean();
         
@@ -246,7 +248,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     }
 
     console.log('✅ [IMG STEP 3] Ad Found in Database');
-    console.log('📋 Ad data:', {
+    console.log('🔍 [IMG STEP 3] Ad Found:', {
       _id: ad._id,
       bottomImageGridFS: ad.bottomImageGridFS?.toString() || 'NULL',
       fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || 'NULL',
@@ -255,7 +257,9 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     });
 
     // Get GridFS file ID based on type
-    const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
+    const gridfsId = type === "bottom" 
+      ? ad.bottomImageGridFS 
+      : ad.fullscreenImageGridFS;
 
     if (!gridfsId) {
       console.warn('⚠️  [IMG STEP 4] No GridFS ID found - Checking for legacy base64');

@@ -100,7 +100,7 @@ class GridFSService {
       const chunks: Buffer[] = [];
 
       downloadStream
-        .on("data", (chunk) => chunks.push(chunk))
+        .on("data", (chunk: Buffer) => chunks.push(chunk))
         .on("error", reject)
         .on("end", () => {
           const buffer = Buffer.concat(chunks);
