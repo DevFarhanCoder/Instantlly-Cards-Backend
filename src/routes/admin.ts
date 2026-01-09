@@ -1093,7 +1093,7 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
 
     // Find all users referred by this user
     const referredUsers = await User.find({ referredBy: userId })
-      .select('_id name phone referralCode createdAt referredBy')
+      .select('_id name phone referralCode createdAt referredBy credits')
       .sort({ createdAt: -1 })
       .lean() as any[];
 
@@ -1102,13 +1102,8 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
       referredUsers.map(async (refUser: any) => {
         const refUserReferralCount = await User.countDocuments({ referredBy: refUser._id });
         
-        // Get credits earned by this referred user from their own referrals
-        const referralTransactions = await Transaction.find({
-          type: 'referral_bonus',
-          toUser: refUser._id
-        }).select('amount').lean();
-
-        const creditsEarned = referralTransactions.reduce((sum: number, tx: any) => sum + (tx.amount || 0), 0);
+        // Use the User.credits field directly (it's the live balance)
+        const creditsEarned = refUser.credits || 0;
 
         return {
           userId: refUser._id.toString(),
