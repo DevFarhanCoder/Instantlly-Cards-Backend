@@ -1099,20 +1099,12 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
         const refUserReferralCount = await User.countDocuments({ referredBy: refUser._id });
         
         // Get credits earned by this referred user from their own referrals
-        const creditsResult = await Transaction.aggregate([
-          {
-            $match: {
-              type: "referral_bonus",
-              toUser: refUser._id.toString()
-            }
-          },
-          {
-            $group: {
-              _id: null,
-              totalCredits: { $sum: "$amount" }
-            }
-          }
-        ]);
+        const referralTransactions = await Transaction.find({
+          type: 'referral_bonus',
+          toUser: refUser._id
+        }).select('amount').lean();
+
+        const creditsEarned = referralTransactions.reduce((sum: number, tx: any) => sum + (tx.amount || 0), 0);
 
         return {
           userId: refUser._id.toString(),
@@ -1120,7 +1112,7 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
           phone: refUser.phone,
           referralCode: refUser.referralCode,
           totalReferrals: refUserReferralCount,
-          creditsEarned: creditsResult.length > 0 ? creditsResult[0].totalCredits : 0,
+          creditsEarned,
           joinedDate: refUser.createdAt
         };
       })
