@@ -106,18 +106,46 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     // Get additional stats for each user
     const usersWithStats = await Promise.all(
       users.map(async (user: any) => {
-        const [cardCount, messageCount, contactCount] = await Promise.all([
+        const [cardCount, messageCount, contactCount, userCredits] = await Promise.all([
           Card.countDocuments({ userId: user._id }),
           Message.countDocuments({ senderId: user._id }),
-          Contact.countDocuments({ userId: user._id })
+          Contact.countDocuments({ userId: user._id }),
+          // Get user's credit balance from Transaction model
+          Transaction.aggregate([
+            {
+              $match: {
+                $or: [
+                  { toUser: user._id },
+                  { fromUser: user._id }
+                ]
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalCredits: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ['$toUser', user._id] },
+                      '$amount',
+                      { $multiply: ['$amount', -1] }
+                    ]
+                  }
+                }
+              }
+            }
+          ])
         ]);
+
+        const credits = userCredits.length > 0 ? userCredits[0].totalCredits : 0;
 
         return {
           ...user.toObject(),
           stats: {
             cards: cardCount,
             messages: messageCount,
-            contacts: contactCount
+            contacts: contactCount,
+            credits: credits
           }
         };
       })
