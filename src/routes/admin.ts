@@ -1070,4 +1070,84 @@ router.get("/referral-tracking", adminAuth, async (req: Request, res: Response) 
   }
 });
 
+// GET /api/admin/referral-chain/:userId - Get detailed referral chain for a specific user
+router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log(`📊 Fetching referral chain for user: ${userId}`);
+
+    // Get the user's details
+    const user = await User.findById(userId).select('name phone referralCode createdAt').lean() as any;
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Find all users referred by this user
+    const referredUsers = await User.find({ referredBy: userId })
+      .select('_id name phone referralCode createdAt referredBy')
+      .sort({ createdAt: -1 })
+      .lean() as any[];
+
+    // For each referred user, count their own referrals
+    const referredUsersWithStats = await Promise.all(
+      referredUsers.map(async (refUser: any) => {
+        const refUserReferralCount = await User.countDocuments({ referredBy: refUser._id });
+        
+        // Get credits earned by this referred user from their own referrals
+        const creditsResult = await Transaction.aggregate([
+          {
+            $match: {
+              type: "referral_bonus",
+              toUser: refUser._id.toString()
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalCredits: { $sum: "$amount" }
+            }
+          }
+        ]);
+
+        return {
+          userId: refUser._id.toString(),
+          name: refUser.name,
+          phone: refUser.phone,
+          referralCode: refUser.referralCode,
+          totalReferrals: refUserReferralCount,
+          creditsEarned: creditsResult.length > 0 ? creditsResult[0].totalCredits : 0,
+          joinedDate: refUser.createdAt
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          userId: user._id.toString(),
+          name: user.name,
+          phone: user.phone,
+          referralCode: user.referralCode,
+          joinedDate: user.createdAt
+        },
+        referredUsers: referredUsersWithStats,
+        totalCount: referredUsersWithStats.length
+      }
+    });
+
+  } catch (error: any) {
+    console.error("❌ Error fetching referral chain:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch referral chain"
+    });
+  }
+});
+
 export default router;
