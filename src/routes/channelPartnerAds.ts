@@ -9,7 +9,7 @@ import { Readable } from 'stream';
 
 const router = express.Router();
 
-// Configure multer for memory storage
+// Configure multer for memory storage - images only
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {

@@ -5,7 +5,7 @@ const TransactionSchema = new Schema(
     type: { 
       type: String, 
       required: true,
-      enum: ['signup_bonus', 'referral_bonus', 'transfer_sent', 'transfer_received', 'ad_deduction', 'admin_adjustment']
+      enum: ['signup_bonus', 'referral_bonus', 'transfer_sent', 'transfer_received', 'ad_deduction', 'admin_adjustment', 'quiz_bonus', 'self_download_bonus']
     },
     fromUser: { type: Schema.Types.ObjectId, ref: 'User' },
     toUser: { type: Schema.Types.ObjectId, ref: 'User' },
