@@ -96,7 +96,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
 
     const [users, total] = await Promise.all([
       User.find(searchQuery)
-        .select('name phone profilePicture about createdAt')
+        .select('name phone profilePicture about createdAt credits')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -106,38 +106,14 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     // Get additional stats for each user
     const usersWithStats = await Promise.all(
       users.map(async (user: any) => {
-        const [cardCount, messageCount, contactCount, userCredits] = await Promise.all([
+        const [cardCount, messageCount, contactCount] = await Promise.all([
           Card.countDocuments({ userId: user._id }),
           Message.countDocuments({ senderId: user._id }),
-          Contact.countDocuments({ userId: user._id }),
-          // Get user's credit balance from Transaction model
-          Transaction.aggregate([
-            {
-              $match: {
-                $or: [
-                  { toUser: user._id },
-                  { fromUser: user._id }
-                ]
-              }
-            },
-            {
-              $group: {
-                _id: null,
-                totalCredits: {
-                  $sum: {
-                    $cond: [
-                      { $eq: ['$toUser', user._id] },
-                      '$amount',
-                      { $multiply: ['$amount', -1] }
-                    ]
-                  }
-                }
-              }
-            }
-          ])
+          Contact.countDocuments({ userId: user._id })
         ]);
 
-        const credits = userCredits.length > 0 ? userCredits[0].totalCredits : 0;
+        // User.credits is the current live balance (already includes all transactions)
+        const totalCredits = user.credits || 0;
 
         return {
           ...user.toObject(),
@@ -145,7 +121,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
             cards: cardCount,
             messages: messageCount,
             contacts: contactCount,
-            credits: credits
+            credits: totalCredits
           }
         };
       })
