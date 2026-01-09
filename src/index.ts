@@ -56,6 +56,7 @@ const io = new Server(server, {
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
 const defaultAllowed = [
+  'https://api.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
   'http://localhost:3000',
