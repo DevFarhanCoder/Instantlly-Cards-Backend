@@ -107,9 +107,15 @@ app.use((req, res, next) => {
 });
 
 // Additional CORS headers middleware (belt and suspenders approach)
+// Explicit CORS headers middleware (backup layer)
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  // Only set origin if it's in our allowed list
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost'))) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires');
   res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
