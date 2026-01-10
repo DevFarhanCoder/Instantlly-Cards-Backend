@@ -213,7 +213,7 @@ router.post(
         throw new Error('Database connection not established');
       }
 
-      const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
       
       // Upload bottom image (required)
       const bottomImageFile = files[0];
@@ -462,7 +462,7 @@ router.post(
         throw new Error('Database connection not established');
       }
 
-      const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
       
       // Upload bottom video (required)
       const bottomVideoFile = files[0];
@@ -591,7 +591,7 @@ router.get('/video/:id', async (req: Request, res: Response) => {
       throw new Error('Database connection not established');
     }
 
-    const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+    const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
     
     // Check if file exists
     const files = await bucket.find({ _id: new ObjectId(id) }).toArray();
@@ -741,7 +741,7 @@ router.put(
           throw new Error('Database connection not established');
         }
 
-        const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+        const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
 
         // Delete old images from GridFS
         const oldImageIds: ObjectId[] = [];
@@ -850,7 +850,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     // Delete images from GridFS
     const db = mongoose.connection.db;
     if (db) {
-      const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
+      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
       const imageIdsToDelete: ObjectId[] = [];
       
       if (ad.bottomImageGridFS) {
