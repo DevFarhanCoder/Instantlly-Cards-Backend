@@ -106,36 +106,73 @@ router.post(
       // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
       // Use main database User model for credits
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
+      const userId = req.body.userId;
       
-      console.log('🔍 Looking for user with phone in main DB:', uploaderPhone);
+      console.log('🔍 Looking for user - phone:', uploaderPhone, 'userId:', userId);
       
-      // Find user in main database
-      let user = await User.findOne({ phone: uploaderPhone });
+      let user = null;
       
-      // If not found, try without country code prefix
-      if (!user && uploaderPhone.startsWith('+91')) {
-        const phoneWithoutPrefix = uploaderPhone.substring(3);
-        console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
-        user = await User.findOne({ phone: phoneWithoutPrefix });
+      // First try to find by userId if provided
+      if (userId && userId.length > 0) {
+        try {
+          user = await User.findById(userId);
+          console.log('👤 Found by userId:', user ? user.name : 'NOT FOUND');
+        } catch (e) {
+          console.log('⚠️ Invalid userId format');
+        }
       }
       
-      // Try with +91 prefix
-      if (!user && !uploaderPhone.startsWith('+')) {
-        const phoneWithPrefix = '+91' + uploaderPhone;
-        console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
-        user = await User.findOne({ phone: phoneWithPrefix });
-      }
+      // If not found by ID, try phone number matching
+      if (!user) {
+        // Clean phone number - extract only digits
+        const cleanPhone = uploaderPhone.replace(/[^0-9]/g, '');
+        console.log('🔍 Cleaned phone (digits only):', cleanPhone);
+      
+        // Find user in main database - try multiple methods
+        user = await User.findOne({ phone: uploaderPhone });
+        
+        // If not found, try without country code prefix (+91)
+        if (!user && uploaderPhone.startsWith('+91')) {
+          const phoneWithoutPrefix = uploaderPhone.substring(3);
+          console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
+          user = await User.findOne({ phone: phoneWithoutPrefix });
+        }
+        
+        // Try with +91 prefix
+        if (!user && !uploaderPhone.startsWith('+')) {
+          const phoneWithPrefix = '+91' + uploaderPhone;
+          console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
+          user = await User.findOne({ phone: phoneWithPrefix });
+        }
 
-      // Try with +880 prefix (Bangladesh)
-      if (!user && !uploaderPhone.startsWith('+')) {
-        const phoneWithPrefix = '+880' + uploaderPhone;
-        console.log('🔄 Trying with +880 prefix:', phoneWithPrefix);
-        user = await User.findOne({ phone: phoneWithPrefix });
+        // Try with +880 prefix (Bangladesh)
+        if (!user && !uploaderPhone.startsWith('+')) {
+          const phoneWithPrefix = '+880' + uploaderPhone;
+          console.log('🔄 Trying with +880 prefix:', phoneWithPrefix);
+          user = await User.findOne({ phone: phoneWithPrefix });
+        }
+
+        // Try regex search - match phones ending with these digits
+        if (!user && cleanPhone.length >= 10) {
+          const last10Digits = cleanPhone.slice(-10);
+          console.log('🔄 Trying regex search with last 10 digits:', last10Digits);
+          user = await User.findOne({ phone: { $regex: last10Digits + '$' } });
+        }
+
+        // Last resort - search by contains
+        if (!user && cleanPhone.length >= 8) {
+          console.log('🔄 Trying contains search with digits:', cleanPhone);
+          user = await User.findOne({ phone: { $regex: cleanPhone } });
+        }
       }
       
       console.log('👤 Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
       
       if (!user) {
+        // Log some sample users for debugging
+        const sampleUsers = await User.find({}).select('phone name').limit(5).lean();
+        console.log('📋 Sample users in DB:', sampleUsers.map(u => ({ name: u.name, phone: u.phone })));
+        
         return res.status(404).json({ 
           message: 'User not found. Please ensure you are logged in.',
           searchedPhone: uploaderPhone,
@@ -325,28 +362,61 @@ router.post(
 
       // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
+      const userId = req.body.userId;
       
-      console.log('🔍 Looking for user with phone in main DB:', uploaderPhone);
+      console.log('🔍 Looking for user - phone:', uploaderPhone, 'userId:', userId);
       
-      // Find user in main database
-      let user = await User.findOne({ phone: uploaderPhone });
+      let user = null;
       
-      // Try without country code prefix
-      if (!user && uploaderPhone.startsWith('+91')) {
-        const phoneWithoutPrefix = uploaderPhone.substring(3);
-        user = await User.findOne({ phone: phoneWithoutPrefix });
+      // First try to find by userId if provided
+      if (userId && userId.length > 0) {
+        try {
+          user = await User.findById(userId);
+          console.log('👤 Found by userId:', user ? user.name : 'NOT FOUND');
+        } catch (e) {
+          console.log('⚠️ Invalid userId format');
+        }
       }
       
-      // Try with +91 prefix
-      if (!user && !uploaderPhone.startsWith('+')) {
-        const phoneWithPrefix = '+91' + uploaderPhone;
-        user = await User.findOne({ phone: phoneWithPrefix });
-      }
+      // If not found by ID, try phone number matching
+      if (!user) {
+        // Clean phone number - extract only digits
+        const cleanPhone = uploaderPhone.replace(/[^0-9]/g, '');
+        console.log('🔍 Cleaned phone (digits only):', cleanPhone);
+      
+        // Find user in main database - try multiple methods
+        user = await User.findOne({ phone: uploaderPhone });
+        
+        // Try without country code prefix
+        if (!user && uploaderPhone.startsWith('+91')) {
+          const phoneWithoutPrefix = uploaderPhone.substring(3);
+          user = await User.findOne({ phone: phoneWithoutPrefix });
+        }
+        
+        // Try with +91 prefix
+        if (!user && !uploaderPhone.startsWith('+')) {
+          const phoneWithPrefix = '+91' + uploaderPhone;
+          user = await User.findOne({ phone: phoneWithPrefix });
+        }
 
-      // Try with +880 prefix (Bangladesh)
-      if (!user && !uploaderPhone.startsWith('+')) {
-        const phoneWithPrefix = '+880' + uploaderPhone;
-        user = await User.findOne({ phone: phoneWithPrefix });
+        // Try with +880 prefix (Bangladesh)
+        if (!user && !uploaderPhone.startsWith('+')) {
+          const phoneWithPrefix = '+880' + uploaderPhone;
+          user = await User.findOne({ phone: phoneWithPrefix });
+        }
+
+        // Try regex search - match phones ending with these digits
+        if (!user && cleanPhone.length >= 10) {
+          const last10Digits = cleanPhone.slice(-10);
+          console.log('🔄 Trying regex search with last 10 digits:', last10Digits);
+          user = await User.findOne({ phone: { $regex: last10Digits + '$' } });
+        }
+
+        // Last resort - search by contains
+        if (!user && cleanPhone.length >= 8) {
+          console.log('🔄 Trying contains search with digits:', cleanPhone);
+          user = await User.findOne({ phone: { $regex: cleanPhone } });
+        }
       }
       
       console.log('👤 Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
