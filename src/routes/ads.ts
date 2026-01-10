@@ -181,6 +181,16 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     console.log('🌐 User-Agent:', req.headers['user-agent']);
     console.log('🔗 Referer:', req.headers.referer || 'No referer');
 
+    // Validate ObjectId format first
+    if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
+      console.error('❌ [IMG ERROR] Invalid ObjectId format:', id);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ad ID format"
+      });
+    }
+
     if (type !== "bottom" && type !== "fullscreen") {
       console.error('❌ [IMG ERROR] Invalid image type:', type);
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
@@ -291,9 +301,32 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     console.log('✅ [IMG STEP 4] GridFS ID Found:', gridfsId.toString());
     console.log('🔄 [IMG STEP 5] Buffering image from GridFS for caching');
 
+    // Verify file exists in GridFS before streaming
+    try {
+      await gridfsService.getFileInfo(gridfsId);
+    } catch (fileError) {
+      console.error('❌ [IMG ERROR] File not found in GridFS:', gridfsId.toString());
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      return res.status(404).json({
+        success: false,
+        message: `${type} image file not found in storage`
+      });
+    }
+
     // Buffer the entire image first (enables caching and retry)
     const chunks: Buffer[] = [];
-    const downloadStream = gridfsService.getDownloadStream(gridfsId);
+    let downloadStream;
+    
+    try {
+      downloadStream = gridfsService.getDownloadStream(gridfsId);
+    } catch (streamError: any) {
+      console.error('❌ [IMG ERROR] Failed to create download stream:', streamError.message);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+      return res.status(500).json({
+        success: false,
+        message: "Failed to access image storage"
+      });
+    }
     
     let streamTimeout: NodeJS.Timeout | null = null;
     let streamStarted = false;
@@ -352,10 +385,28 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     console.error("❌ Error type:", error.name);
     console.error("❌ Error message:", error.message);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch ad image"
-    });
+    
+    if (!res.headersSent) {
+      // Return appropriate error code based on error type
+      if (error.name === 'CastError' || error.message?.includes('Invalid')) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid ad ID format"
+        });
+      }
+      
+      if (error.message?.includes('not found') || error.message?.includes('File not found')) {
+        return res.status(404).json({
+          success: false,
+          message: "Ad image not found"
+        });
+      }
+      
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch ad image"
+      });
+    }
   }
 });
 
