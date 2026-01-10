@@ -262,7 +262,7 @@ router.post(
         endDate: end,
         status: 'pending', // Requires admin approval
         uploadedBy: uploaderPhone, // Use actual uploader phone for filtering
-        uploaderName: uploaderName || 'Channel Partner',
+        uploaderName: uploaderName || (user as any).name || 'Mobile User', // Use user's name, fallback to "Mobile User"
         priority: priority ? parseInt(priority) : 1, // Lower priority for channel partner ads
         clicks: 0,
         impressions: 0,
