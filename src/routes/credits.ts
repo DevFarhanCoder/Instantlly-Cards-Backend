@@ -153,7 +153,13 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
       if (txn.type === 'transfer_sent') {
         if (isSender) {
           console.log(`   ✓ Showing transfer_sent to sender`);
-          return txn;
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
         }
         console.log(`   ✗ Hiding transfer_sent from receiver`);
         return null;
@@ -163,7 +169,13 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
       if (txn.type === 'transfer_received') {
         if (isReceiver) {
           console.log(`   ✓ Showing transfer_received to receiver`);
-          return txn;
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
         }
         console.log(`   ✗ Hiding transfer_received from sender`);
         return null;
@@ -275,12 +287,30 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       
       // Handle legacy transfer_sent - ONLY show to the actual sender
       if (txn.type === 'transfer_sent') {
-        return isSender ? txn : null;
+        if (isSender) {
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
       }
       
       // Handle legacy transfer_received - ONLY show to the actual receiver  
       if (txn.type === 'transfer_received') {
-        return isReceiver ? txn : null;
+        if (isReceiver) {
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
       }
       
       // For bonus types, user must be the receiver
