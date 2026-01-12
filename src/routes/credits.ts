@@ -124,19 +124,26 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
       
       // For 'transfer' type (new single record), transform based on viewer's perspective
       if (txn.type === 'transfer') {
+        // Check if description is just the default "Credit transfer" or a custom note
+        const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+        
         if (isSender) {
           return {
             ...txn,
             type: 'transfer_sent',
             amount: -Math.abs(txn.amount),
-            description: txn.description ? `Sent to ${txn.toUser?.name || 'User'}: ${txn.description}` : `Sent to ${txn.toUser?.name || 'User'}`
+            // Always show "Transfer to [Name]" as main description
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
           };
         } else if (isReceiver) {
           return {
             ...txn,
             type: 'transfer_received',
             amount: Math.abs(txn.amount),
-            description: txn.description ? `Received from ${txn.fromUser?.name || 'User'}: ${txn.description}` : `Received from ${txn.fromUser?.name || 'User'}`
+            // Always show "Transfer from [Name]" as main description
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
           };
         }
         return null;
@@ -241,19 +248,26 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       
       // For 'transfer' type (new single record), transform based on viewer's perspective
       if (txn.type === 'transfer') {
+        // Check if description is just the default "Credit transfer" or a custom note
+        const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+        
         if (isSender) {
           return {
             ...txn,
             type: 'transfer_sent',
             amount: -Math.abs(txn.amount),
-            description: txn.description ? `Sent to ${txn.toUser?.name || 'User'}: ${txn.description}` : `Sent to ${txn.toUser?.name || 'User'}`
+            // Always show "Transfer to [Name]" as main description
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
           };
         } else if (isReceiver) {
           return {
             ...txn,
             type: 'transfer_received',
             amount: Math.abs(txn.amount),
-            description: txn.description ? `Received from ${txn.fromUser?.name || 'User'}: ${txn.description}` : `Received from ${txn.fromUser?.name || 'User'}`
+            // Always show "Transfer from [Name]" as main description
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
           };
         }
         return null;
