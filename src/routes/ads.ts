@@ -299,6 +299,23 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
 
     // 🔍 LOG: Preparing to stream from GridFS
     console.log('✅ [IMG STEP 4] GridFS ID Found:', gridfsId.toString());
+    
+    // Check if file exists in GridFS before trying to download
+    try {
+      const fileExists = await gridfsService.fileExists(gridfsId);
+      if (!fileExists) {
+        console.error('❌ [IMG ERROR] GridFS file not found:', gridfsId.toString());
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+        return res.status(404).json({
+          success: false,
+          message: `${type} image file not found in storage`
+        });
+      }
+    } catch (checkError: any) {
+      console.error('❌ [IMG ERROR] Failed to check GridFS file existence:', checkError.message);
+      // Continue anyway, let download stream handle it
+    }
+    
     console.log('🔄 [IMG STEP 5] Buffering image from GridFS for caching');
 
     // Verify file exists in GridFS before streaming

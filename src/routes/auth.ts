@@ -13,7 +13,7 @@ import CreditConfig from "../models/CreditConfig";
 // Force language server refresh
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
-import { otpService } from "../services/otpService";
+import { storeOTP, verifyOTP as verifyOTPFunc, sendOTPViaFast2SMS, generateOTP } from "../services/fast2smsOtpService";
 
 const router = Router();
 
@@ -892,8 +892,8 @@ router.post("/check-phone", async (req, res) => {
 
     console.log(`[CHECK-PHONE] 📱 New signup - sending OTP to ${normalizedPhone}`);
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpService.storeOTP(normalizedPhone, otp);
+    const otp = generateOTP();
+    storeOTP(normalizedPhone, otp);
 
     const fast2smsApiKey = process.env.FAST2SMS_API_KEY;
     if (!fast2smsApiKey) {
@@ -999,9 +999,9 @@ router.post("/send-reset-otp", async (req, res) => {
     }
 
     // At this point user exists - generate and send OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = generateOTP();
     // Store OTP in cache (expires in 5 minutes) under canonical phone
-    otpService.storeOTP(normalizedPhone, otp);
+    storeOTP(normalizedPhone, otp);
 
     const fast2smsApiKey = process.env.FAST2SMS_API_KEY;
 
@@ -1078,14 +1078,14 @@ router.post("/verify-otp", async (req, res) => {
     // Normalize phone to canonical form for verification
     const normalizedPhone = canonicalPhone(phone);
 
-    // Verify OTP using otpService (stored under canonical phone)
-    const isValid = otpService.verifyOTP(normalizedPhone, otp);
+    // Verify OTP using Fast2SMS service (stored under canonical phone)
+    const verificationResult = verifyOTPFunc(normalizedPhone, otp);
 
-    if (!isValid) {
-      console.log(`[VERIFY-OTP] ❌ Invalid OTP for ${normalizedPhone}`);
+    if (!verificationResult.success) {
+      console.log(`[VERIFY-OTP] ❌ ${verificationResult.message} for ${normalizedPhone}`);
       return res.status(400).json({
         success: false,
-        message: 'Invalid or expired OTP. Please try again.'
+        message: verificationResult.message
       });
     }
 

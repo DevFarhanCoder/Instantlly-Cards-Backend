@@ -14,7 +14,6 @@ import { Server } from "socket.io";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import otpRouter from "./routes/otp";
-import firebaseAuthRouter from "./routes/firebaseAuth";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
@@ -56,6 +55,7 @@ const io = new Server(server, {
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
 const defaultAllowed = [
+  'https://api.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
   'http://localhost:3000',
@@ -107,9 +107,15 @@ app.use((req, res, next) => {
 });
 
 // Additional CORS headers middleware (belt and suspenders approach)
+// Explicit CORS headers middleware (backup layer)
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  // Only set origin if it's in our allowed list
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost'))) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires');
   res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
@@ -230,14 +236,12 @@ async function startServer() {
     console.log("✅ GridFS initialized for ad images");
 
     // Add routes after DB connection
-    // Last updated: 2025-11-19 - Added Firebase authentication
+    // Last updated: 2025-01-10 - Removed Firebase authentication, using only Fast2SMS OTP
     app.use("/api/auth", authRouter);
-    app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp)
-    app.use("/api/auth", firebaseAuthRouter); // Firebase authentication (firebase-auth)
+    app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp) - Fast2SMS only
     app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint
     console.log("✅ Mounted /api/users route for search-by-phone endpoint");
-    console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp)");
-    console.log("✅ Mounted /api/auth Firebase routes (firebase-auth)");
+    console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp) - Fast2SMS only");
     app.use("/api/cards", cardsRouter);          
     app.use("/api/contacts", contactsRouter);    
     app.use("/api/notifications", notificationsRouter);    

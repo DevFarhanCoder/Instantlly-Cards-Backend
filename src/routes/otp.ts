@@ -1,31 +1,25 @@
 // Instantlly-Cards-Backend/src/routes/otp.ts
+// OTP routes using Fast2SMS service
 import express from 'express';
-import crypto from 'crypto';
 import User from '../models/User';
+import {
+  generateOTP,
+  storeOTP,
+  verifyOTP,
+  deleteOTP,
+  sendOTPViaFast2SMS,
+  getOTPStoreSize
+} from '../services/fast2smsOtpService';
 
 const router = express.Router();
-
-// In-memory OTP store (use Redis in production for scalability)
-// This stores OTPs temporarily for verification
-interface OTPRecord {
-  code: string;
-  expiresAt: number;
-  attempts: number;
-}
-
-const otpStore = new Map<string, OTPRecord>();
-
-// Generate 6-digit OTP
-function generateOTP(): string {
-  return crypto.randomInt(100000, 999999).toString();
-}
 
 // Debug endpoint to check configuration
 router.get('/debug-config', (req, res) => {
   res.json({
-    service: 'Firebase Phone Authentication',
+    service: 'Fast2SMS OTP Service',
     nodeEnv: process.env.NODE_ENV,
-    otpStoreSize: otpStore.size
+    hasFast2smsApiKey: !!process.env.FAST2SMS_API_KEY,
+    otpStoreSize: getOTPStoreSize()
   });
 });
 
@@ -44,19 +38,19 @@ router.post('/ping', (req, res) => {
 });
 
 // POST /api/auth/send-otp
-// This endpoint generates and stores an OTP
-// The actual SMS sending is handled by Firebase on the frontend
+// Generates OTP and sends it via Fast2SMS
 router.post('/send-otp', async (req, res) => {
   const requestTimestamp = new Date().toISOString();
   const requestId = Math.random().toString(36).substring(7);
   
   try {
-    const { phone } = req.body;
+    const { phone, appHash } = req.body;
 
     console.log(`\n${'='.repeat(70)}`);
     console.log(`📥 [SEND-OTP] REQUEST START - ID: ${requestId}`);
     console.log(`⏰ Timestamp: ${requestTimestamp}`);
     console.log(`📱 Phone: ${phone}`);
+    console.log(`🔐 AppHash: ${appHash ? 'PROVIDED' : 'NOT PROVIDED'}`);
     console.log(`${'='.repeat(70)}`);
 
     if (!phone) {
@@ -74,29 +68,45 @@ router.post('/send-otp', async (req, res) => {
     // Generate OTP
     const code = generateOTP();
     const ttlSeconds = 300; // 5 minutes
-    const expiresAt = Date.now() + ttlSeconds * 1000;
 
     console.log(`✓ [SEND-OTP] OTP Generated: ${code}`);
     console.log(`✓ [SEND-OTP] TTL: ${ttlSeconds} seconds`);
-    console.log(`✓ [SEND-OTP] Expires at: ${new Date(expiresAt).toISOString()}`);
     
-    // Store OTP for backend verification
-    otpStore.set(phone, { code, expiresAt, attempts: 0 });
-    console.log(`✓ [SEND-OTP] OTP stored in memory map. Store size: ${otpStore.size}`);
-    console.log(`⏳ [SEND-OTP] Waiting for Firebase to send SMS...`);
+    // Store OTP for verification
+    storeOTP(phone, code);
+    console.log(`✓ [SEND-OTP] OTP stored. Store size: ${getOTPStoreSize()}`);
+    
+    // Send OTP via Fast2SMS
+    console.log(`📤 [SEND-OTP] Sending OTP via Fast2SMS...`);
+    const sendResult = await sendOTPViaFast2SMS(phone, code, appHash);
 
-    // Return success - Firebase will handle SMS on the frontend
-    console.log(`✅ [SEND-OTP] SUCCESS: Sending response to mobile app`);
+    if (!sendResult.success) {
+      console.error(`❌ [SEND-OTP] Fast2SMS send failed - ID: ${requestId}`);
+      console.error(`   Error: ${sendResult.error}`);
+      
+      // Still return success since OTP is stored (useful for development/testing)
+      return res.json({
+        success: true,
+        message: 'OTP generated (SMS delivery pending)',
+        ttl: ttlSeconds,
+        requestId,
+        serverTime: requestTimestamp,
+        warning: sendResult.error,
+        // In development, return the OTP for testing
+        ...(process.env.NODE_ENV === 'development' && { devOTP: code })
+      });
+    }
+
+    console.log(`✅ [SEND-OTP] SUCCESS: OTP sent via Fast2SMS - ID: ${requestId}`);
     console.log(`${'='.repeat(70)}\n`);
     
     return res.json({
       success: true,
-      message: 'OTP ready for Firebase verification',
+      message: 'OTP sent successfully',
       ttl: ttlSeconds,
       requestId,
       serverTime: requestTimestamp,
-      // In development, you can return the OTP for testing
-      // Remove this in production when using real Firebase Phone Auth
+      // In development, return the OTP for testing
       ...(process.env.NODE_ENV === 'development' && { devOTP: code })
     });
   } catch (error: any) {
@@ -143,76 +153,25 @@ router.post('/verify-otp', (req, res) => {
     }
 
     console.log(`✓ [VERIFY-OTP] Validation passed`);
-    console.log(`🔍 [VERIFY-OTP] Checking OTP store. Total entries: ${otpStore.size}`);
+    console.log(`🔍 [VERIFY-OTP] Verifying OTP with Fast2SMS service...`);
 
-    const record = otpStore.get(phone);
+    // Verify OTP using the Fast2SMS service
+    const result = verifyOTP(phone, otp);
 
-    if (!record) {
-      console.log(`❌ [VERIFY-OTP] ERROR: No OTP found for this phone - ID: ${requestId}`);
-      console.log(`   Store contains: ${Array.from(otpStore.keys()).join(', ') || 'EMPTY'}`);
+    if (!result.success) {
+      console.log(`❌ [VERIFY-OTP] Verification failed - ID: ${requestId}`);
+      console.log(`   Message: ${result.message}`);
+      
       return res.status(400).json({
         success: false,
-        message: 'No OTP found for this phone number. Please request a new OTP.',
-        requestId
-      });
-    }
-
-    console.log(`✓ [VERIFY-OTP] OTP record found in store`);
-
-    // Check expiry
-    const now = Date.now();
-    const timeRemaining = record.expiresAt - now;
-    
-    if (now > record.expiresAt) {
-      otpStore.delete(phone);
-      console.log(`❌ [VERIFY-OTP] ERROR: OTP expired - ID: ${requestId}`);
-      console.log(`   Expired: ${new Date(record.expiresAt).toISOString()}`);
-      console.log(`   Current: ${new Date(now).toISOString()}`);
-      return res.status(400).json({
-        success: false,
-        message: 'OTP has expired. Please request a new OTP.',
-        requestId
-      });
-    }
-    
-    console.log(`✓ [VERIFY-OTP] OTP not expired. Time remaining: ${Math.round(timeRemaining / 1000)}s`);
-
-    // Check attempts
-    if (record.attempts >= 3) {
-      otpStore.delete(phone);
-      console.log(`❌ [VERIFY-OTP] ERROR: Too many failed attempts - ID: ${requestId}`);
-      console.log(`   Attempts: ${record.attempts}`);
-      return res.status(429).json({
-        success: false,
-        message: 'Too many failed attempts. Please request a new OTP.',
-        requestId
-      });
-    }
-
-    console.log(`✓ [VERIFY-OTP] Attempt count OK. Attempts used: ${record.attempts}/3`);
-    console.log(`🔄 [VERIFY-OTP] Comparing codes...`);
-    console.log(`   Stored code: ${record.code}`);
-    console.log(`   Provided code: ${String(otp)}`);
-    console.log(`   Match: ${record.code === String(otp) ? '✓ YES' : '✗ NO'}`);
-
-    // Verify OTP
-    if (record.code !== String(otp)) {
-      record.attempts++;
-      const attemptsRemaining = 3 - record.attempts;
-      console.log(`❌ [VERIFY-OTP] ERROR: Invalid OTP - ID: ${requestId}`);
-      console.log(`   Attempts remaining: ${attemptsRemaining}`);
-      return res.status(400).json({
-        success: false,
-        message: `Invalid OTP. ${attemptsRemaining} attempts remaining.`,
+        message: result.message,
         requestId,
-        attemptsRemaining
+        attemptsRemaining: result.attemptsRemaining
       });
     }
 
     // OTP verified successfully
-    otpStore.delete(phone);
     console.log(`✅ [VERIFY-OTP] SUCCESS: OTP verified successfully - ID: ${requestId}`);
-    console.log(`   OTP record deleted from store. Store size: ${otpStore.size}`);
     console.log(`${'='.repeat(70)}\n`);
 
     return res.json({
@@ -243,9 +202,10 @@ router.post('/resend-otp', async (req, res) => {
   // Delete old OTP first to allow resend
   const { phone } = req.body;
   if (phone) {
-    otpStore.delete(phone);
+    deleteOTP(phone);
+    console.log(`[RESEND-OTP] Deleted old OTP for ${phone}`);
   }
-  // Forward to send-otp handler by manually calling it
+  // Forward to send-otp by calling it directly
   req.url = '/send-otp';
   return;
 });

@@ -96,7 +96,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
 
     const [users, total] = await Promise.all([
       User.find(searchQuery)
-        .select('name phone profilePicture about createdAt')
+        .select('name phone profilePicture about createdAt credits')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -112,12 +112,16 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
           Contact.countDocuments({ userId: user._id })
         ]);
 
+        // User.credits is the current live balance (already includes all transactions)
+        const totalCredits = user.credits || 0;
+
         return {
           ...user.toObject(),
           stats: {
             cards: cardCount,
             messages: messageCount,
-            contacts: contactCount
+            contacts: contactCount,
+            credits: totalCredits
           }
         };
       })
@@ -922,6 +926,218 @@ router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Re
   } catch (error) {
     console.error('❌ Transfer position error:', error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /api/admin/referral-tracking - Get comprehensive referral statistics
+router.get("/referral-tracking", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    
+    // Calculate date filter
+    let dateFilter: any = {};
+    if (days > 0) {
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      dateFilter = { createdAt: { $gte: startDate } };
+    }
+
+    // Get all users who have made referrals
+    const usersWithReferrals = await User.find({
+      referralCode: { $exists: true, $ne: null }
+    }).select('_id name phone referralCode createdAt').lean();
+
+    // Count referrals for each user
+    const topReferrersData = await Promise.all(
+      usersWithReferrals.map(async (user: any) => {
+        // Count users referred by this user
+        const referralCount = await User.countDocuments({
+          referredBy: user._id,
+          ...dateFilter
+        });
+
+        // Get total credits earned from referrals
+        const referralTransactions = await Transaction.find({
+          type: 'referral_bonus',
+          toUser: user._id,
+          ...dateFilter
+        }).select('amount').lean();
+
+        const creditsEarned = referralTransactions.reduce((sum, tx: any) => sum + (tx.amount || 0), 0);
+
+        return {
+          userId: user._id.toString(),
+          name: user.name,
+          phone: user.phone,
+          referralCode: user.referralCode,
+          totalReferrals: referralCount,
+          creditsEarned,
+          joinedDate: user.createdAt
+        };
+      })
+    );
+
+    // Filter out users with 0 referrals and sort by total referrals
+    const topReferrers = topReferrersData
+      .filter(r => r.totalReferrals > 0)
+      .sort((a, b) => b.totalReferrals - a.totalReferrals)
+      .slice(0, 100); // Top 100 referrers
+
+    // Get overall statistics
+    const totalReferrals = await User.countDocuments({
+      referredBy: { $exists: true, $ne: null },
+      ...dateFilter
+    });
+
+    const totalReferralTransactions = await Transaction.find({
+      type: 'referral_bonus',
+      ...dateFilter
+    }).select('amount').lean();
+
+    const totalReferralCreditsGiven = totalReferralTransactions.reduce((sum, tx: any) => sum + (tx.amount || 0), 0);
+
+    const uniqueReferrers = topReferrers.length;
+    const averageReferralsPerUser = uniqueReferrers > 0 ? totalReferrals / uniqueReferrers : 0;
+
+    // Get recent referral activity
+    const recentReferredUsers = await User.find({
+      referredBy: { $exists: true, $ne: null },
+      ...dateFilter
+    })
+      .select('name phone referredBy createdAt')
+      .populate('referredBy', 'name referralCode')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Get corresponding transactions for credits awarded
+    const recentActivity = await Promise.all(
+      recentReferredUsers.map(async (user: any) => {
+        const transaction = await Transaction.findOne({
+          type: 'referral_bonus',
+          fromUser: user._id
+        }).select('amount').lean();
+
+        return {
+          referrerName: user.referredBy?.name || 'Unknown',
+          referrerCode: user.referredBy?.referralCode || 'N/A',
+          newUserName: user.name,
+          newUserPhone: user.phone,
+          date: user.createdAt,
+          creditsAwarded: (transaction as any)?.amount || 0
+        };
+      })
+    );
+
+    // Get referral trends (daily count for the period)
+    const referralTrends: Array<{ date: string; count: number }> = [];
+    if (days > 0 && days <= 90) {
+      const trendDays = days > 30 ? 30 : days;
+      for (let i = trendDays - 1; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        date.setHours(0, 0, 0, 0);
+        
+        const nextDate = new Date(date);
+        nextDate.setDate(nextDate.getDate() + 1);
+
+        const count = await User.countDocuments({
+          referredBy: { $exists: true, $ne: null },
+          createdAt: { $gte: date, $lt: nextDate }
+        });
+
+        referralTrends.push({
+          date: date.toISOString().split('T')[0],
+          count
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        totalReferrals,
+        totalReferralCreditsGiven,
+        uniqueReferrers,
+        averageReferralsPerUser,
+        topReferrers,
+        recentActivity,
+        referralTrends
+      }
+    });
+  } catch (error) {
+    console.error('❌ Referral tracking error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
+// GET /api/admin/referral-chain/:userId - Get detailed referral chain for a specific user
+router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log(`📊 Fetching referral chain for user: ${userId}`);
+
+    // Get the user's details
+    const user = await User.findById(userId).select('name phone referralCode createdAt').lean() as any;
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Find all users referred by this user
+    const referredUsers = await User.find({ referredBy: userId })
+      .select('_id name phone referralCode createdAt referredBy credits')
+      .sort({ createdAt: -1 })
+      .lean() as any[];
+
+    // For each referred user, count their own referrals
+    const referredUsersWithStats = await Promise.all(
+      referredUsers.map(async (refUser: any) => {
+        const refUserReferralCount = await User.countDocuments({ referredBy: refUser._id });
+        
+        // Use the User.credits field directly (it's the live balance)
+        const creditsEarned = refUser.credits || 0;
+
+        return {
+          userId: refUser._id.toString(),
+          name: refUser.name,
+          phone: refUser.phone,
+          referralCode: refUser.referralCode,
+          totalReferrals: refUserReferralCount,
+          creditsEarned,
+          joinedDate: refUser.createdAt
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          userId: user._id.toString(),
+          name: user.name,
+          phone: user.phone,
+          referralCode: user.referralCode,
+          joinedDate: user.createdAt
+        },
+        referredUsers: referredUsersWithStats,
+        totalCount: referredUsersWithStats.length
+      }
+    });
+
+  } catch (error: any) {
+    console.error("❌ Error fetching referral chain:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch referral chain"
+    });
   }
 });
 
