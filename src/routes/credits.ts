@@ -258,6 +258,9 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       const isSender = fromUserId === userIdStr;
       const isReceiver = toUserId === userIdStr;
       
+      // DEBUG: Log transaction details
+      console.log(`📊 [HISTORY] Processing txn: type=${txn.type}, fromUser=${txn.fromUser?.name}, toUser=${txn.toUser?.name}, isSender=${isSender}, isReceiver=${isReceiver}, originalDesc=${txn.description}`);
+      
       // For 'transfer' type (new single record), transform based on viewer's perspective
       if (txn.type === 'transfer') {
         // Check if description is just the default "Credit transfer" or a custom note
