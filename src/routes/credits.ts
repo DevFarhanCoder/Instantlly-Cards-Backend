@@ -485,13 +485,6 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    if (amount > 10000) {
-      return res.status(400).json({ 
-        success: false,
-        message: "Maximum transfer amount is 10,000 credits" 
-      });
-    }
-
     if (toUserId === req.userId) {
       return res.status(400).json({ 
         success: false,
