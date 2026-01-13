@@ -65,6 +65,33 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
+// DIAGNOSTIC ENDPOINT - Check if card exists in database (for debugging deletion issues)
+r.get("/debug/:id", async (req: AuthReq, res) => {
+  try {
+    const cardId = req.params.id;
+    const userId = req.userId!;
+    
+    console.log(`🔍 DEBUG card check - CardID: ${cardId}, UserID: ${userId}`);
+    
+    // Check if card exists
+    const card = await Card.findById(cardId);
+    const count = await Card.countDocuments({ _id: cardId });
+    const userCards = await Card.find({ userId }).select('_id name');
+    
+    res.json({ 
+      requested: cardId,
+      found: !!card,
+      count,
+      card: card || null,
+      userCardsCount: userCards.length,
+      userCardIds: userCards.map(c => c._id.toString())
+    });
+  } catch (err) {
+    console.error("DEBUG ERROR", err);
+    res.status(500).json({ message: "Debug check failed" });
+  }
+});
+
 // CONTACTS FEED - Get cards from OTHER contacts only (NOT user's own cards)
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
@@ -244,18 +271,22 @@ r.get("/", async (req: AuthReq, res) => {
       console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${(card as any).businessHours}", servicesOffered="${(card as any).servicesOffered}", establishedYear="${(card as any).establishedYear}", aboutBusiness="${(card as any).aboutBusiness}"`);
     });
     
-    // Generate ETag for proper caching
-    const etag = `"own-cards-${userId}-${items.length}-${items[0]?.updatedAt || 'empty'}"`;
+    // DISABLED ETag caching to prevent stale data after delete
+    // Generate ETag using ALL card IDs to detect deletions
+    // const cardIds = items.map(c => c._id).join(',');
+    // const etag = `"own-cards-${userId}-${items.length}-${cardIds.substring(0, 50)}-${items[0]?.updatedAt || 'empty'}"`;
     
     // Check if client has cached version
-    if (req.headers['if-none-match'] === etag) {
-      console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
-      return res.status(304).end();
-    }
+    // if (req.headers['if-none-match'] === etag) {
+    //   console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
+    //   return res.status(304).end();
+    // }
     
-    // Set proper cache headers
-    res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'private, max-age=60'); // Cache for 1 minute
+    // Force no-cache to prevent stale data issues
+    // res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
     res.json({ 
       success: true,

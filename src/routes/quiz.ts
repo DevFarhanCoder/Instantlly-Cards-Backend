@@ -15,6 +15,25 @@ router.get('/progress', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
+    // Start a new session - mark current credits as recorded so only NEW answers in this session get recorded
+    if (!user.quizProgress) {
+      user.quizProgress = {
+        completed: false,
+        currentQuestionIndex: 0,
+        answeredQuestions: [],
+        answers: new Map(),
+        creditsEarned: 0,
+        creditsRecordedInTransactions: 0,
+        startedAt: new Date()
+      };
+    } else {
+      // Set session baseline - credits earned so far are considered "already recorded"
+      // Only credits earned AFTER this point (in this session) will be recorded in transaction
+      user.quizProgress.creditsRecordedInTransactions = user.quizProgress.creditsEarned;
+    }
+    
+    await user.save();
+
     // Return quiz progress
     res.json({
       success: true,
@@ -48,13 +67,31 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Check if quiz is already completed
-    if (user.quizProgress?.completed) {
+    // Check if all 30 questions are already answered (true completion)
+    const totalQuestionsAnswered = user.quizProgress?.answeredQuestions?.length || 0;
+    
+    console.log(`🔍 QUIZ DEBUG - User: ${user.phone}, Completed: ${user.quizProgress?.completed}, Total Q's: ${totalQuestionsAnswered}/30`);
+    console.log(`🔍 QuizProgress object:`, JSON.stringify(user.quizProgress, null, 2));
+    
+    // AUTO-FIX: If marked as completed but not all 30 questions answered, reset completion status
+    if (user.quizProgress?.completed && totalQuestionsAnswered < 30) {
+      console.log(`⚠️ Auto-fixing quiz completion: User ${user.phone} has ${totalQuestionsAnswered}/30 questions but marked as completed`);
+      user.quizProgress.completed = false;
+      const savedUser = await user.save();
+      console.log(`✅ Auto-fix saved. New completed status: ${savedUser.quizProgress?.completed}`);
+    }
+    
+    // Only block if truly completed (all 30 questions answered)
+    if (user.quizProgress?.completed && totalQuestionsAnswered >= 30) {
+      console.log(`🚫 BLOCKING: Quiz truly completed with ${totalQuestionsAnswered} questions`);
       return res.status(400).json({ 
         success: false, 
-        message: 'Quiz already completed' 
+        message: 'Quiz already completed - all 30 questions answered' 
       });
     }
+    
+    console.log(`✅ ALLOWING: Proceeding with answer submission`);
+
 
     // Initialize quizProgress if it doesn't exist
     if (!user.quizProgress) {
@@ -97,14 +134,32 @@ router.post('/answer', requireAuth, async (req: AuthReq, res: Response) => {
       user.quizProgress.currentQuestionIndex = questionIndex + 1;
     }
 
-    // Check if all 10 questions are answered
-    const isCompleted = user.quizProgress.answeredQuestions.length >= 10;
+    // Check if all 30 questions are answered
+    const isCompleted = user.quizProgress.answeredQuestions.length >= 30;
     if (isCompleted) {
       user.quizProgress.completed = true;
       user.quizProgress.completedAt = new Date();
     }
 
-    await user.save();
+    // Initialize creditsRecordedInTransactions if not set
+    if (!user.quizProgress.creditsRecordedInTransactions) {
+      user.quizProgress.creditsRecordedInTransactions = 0;
+    }
+
+    // Note: Transaction is NOT created here. It will be created in batches when:
+    // 1. User quits (calls /save-progress)
+    // 2. Quiz completes (frontend calls /save-progress)
+    // This way we get one transaction per session instead of per question
+
+    // Log quiz progress for debugging
+    console.log(`📝 Quiz Progress: Question ${user.quizProgress.answeredQuestions.length}/30 answered`);
+    console.log(`   Question Key: ${questionKey}`);
+    console.log(`   Total Answered: ${user.quizProgress.answeredQuestions.length}`);
+    console.log(`   Is Completed: ${isCompleted}`);
+    console.log(`   Credits earned this session: ${user.quizProgress.creditsEarned - user.quizProgress.creditsRecordedInTransactions}`);
+
+    // Save with explicit validation bypass for large arrays
+    await user.save({ validateBeforeSave: true });
 
     res.json({
       success: true,
@@ -284,6 +339,85 @@ router.post('/sync-transactions', requireAuth, async (req: AuthReq, res: Respons
     });
   } catch (error) {
     console.error('Error syncing quiz transactions:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Fix quiz completion status for users stuck with old logic
+router.post('/fix-completion', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const answeredCount = user.quizProgress?.answeredQuestions?.length || 0;
+    
+    // If user has less than 30 questions answered but marked as completed, fix it
+    if (user.quizProgress?.completed && answeredCount < 30) {
+      user.quizProgress.completed = false;
+      await user.save();
+      
+      return res.json({
+        success: true,
+        message: 'Quiz completion status fixed',
+        data: {
+          answeredQuestions: answeredCount,
+          completed: false,
+          canContinue: true
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'No fix needed',
+      data: {
+        answeredQuestions: answeredCount,
+        completed: user.quizProgress?.completed || false,
+        canContinue: answeredCount < 30
+      }
+    });
+  } catch (error) {
+    console.error('Error fixing quiz completion:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// DEBUG: Get detailed quiz stats (for debugging storage issues)
+router.get('/debug-stats', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const answeredCount = user.quizProgress?.answeredQuestions?.length || 0;
+    const answersMapSize = user.quizProgress?.answers?.size || 0;
+    
+    res.json({
+      success: true,
+      debug: {
+        answeredQuestionsCount: answeredCount,
+        answeredQuestionsList: user.quizProgress?.answeredQuestions || [],
+        answersMapSize: answersMapSize,
+        answersKeys: user.quizProgress?.answers ? Array.from(user.quizProgress.answers.keys()) : [],
+        creditsEarned: user.quizProgress?.creditsEarned || 0,
+        completed: user.quizProgress?.completed || false,
+        currentQuestionIndex: user.quizProgress?.currentQuestionIndex || 0,
+        expectedCredits: answeredCount * 10,
+        mismatch: {
+          questionsVsAnswers: answeredCount !== answersMapSize,
+          creditsVsQuestions: (user.quizProgress?.creditsEarned || 0) !== (answeredCount * 10)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error getting quiz debug stats:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

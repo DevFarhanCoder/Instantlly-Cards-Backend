@@ -17,6 +17,31 @@ function generateReferralCode(): string {
   return code;
 }
 
+// DEBUG ENDPOINT - Get sample phone numbers from database
+router.get("/debug-phones", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const users = await User.find()
+      .select('name phone')
+      .limit(10)
+      .lean();
+    
+    console.log('📱 [DEBUG] Sample phone numbers in database:', users);
+    
+    res.json({
+      success: true,
+      count: users.length,
+      phones: users.map(u => ({
+        name: u.name,
+        phone: u.phone,
+        phoneLength: u.phone?.length || 0
+      }))
+    });
+  } catch (error) {
+    console.error("DEBUG PHONES ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 // GET /api/credits/balance - Get current credits balance
 router.get("/balance", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -66,29 +91,118 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
 router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
   try {
     const { limit = 50, skip = 0 } = req.query;
+    const userId = req.userId;
+    const userIdStr = userId?.toString();
     
-    const transactions = await Transaction.find({
+    console.log(`📊 [TRANSACTIONS] Fetching for user: ${userIdStr}`);
+    
+    // Fetch all potential transactions first
+    const allTransactions = await Transaction.find({
       $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
+        { fromUser: userId },
+        { toUser: userId }
       ]
     })
     .populate('fromUser', 'name phone')
     .populate('toUser', 'name phone')
     .sort({ createdAt: -1 })
-    .limit(Number(limit))
-    .skip(Number(skip));
+    .lean();
 
-    const total = await Transaction.countDocuments({
-      $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
-      ]
-    });
+    console.log(`📊 [TRANSACTIONS] Found ${allTransactions.length} raw transactions`);
+
+    // Filter transactions based on type and user role
+    // This ensures each user only sees their relevant transaction record
+    const filteredTransactions = allTransactions.map((txn: any) => {
+      // Safely extract IDs as strings - handle both populated and non-populated refs
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
+      
+      const isSender = fromUserId === userIdStr;
+      const isReceiver = toUserId === userIdStr;
+      
+      console.log(`   Type: ${txn.type}, fromUser: ${fromUserId}, toUser: ${toUserId}, isSender: ${isSender}, isReceiver: ${isReceiver}`);
+      
+      // For 'transfer' type (new single record), transform based on viewer's perspective
+      if (txn.type === 'transfer') {
+        // Check if description is just the default "Credit transfer" or a custom note
+        const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+        
+        if (isSender) {
+          return {
+            ...txn,
+            type: 'transfer_sent',
+            amount: -Math.abs(txn.amount),
+            // Always show "Transfer to [Name]" as main description
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        } else if (isReceiver) {
+          return {
+            ...txn,
+            type: 'transfer_received',
+            amount: Math.abs(txn.amount),
+            // Always show "Transfer from [Name]" as main description
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
+      }
+      
+      // Handle legacy transfer_sent - ONLY show to the actual sender (fromUser)
+      if (txn.type === 'transfer_sent') {
+        if (isSender) {
+          console.log(`   ✓ Showing transfer_sent to sender`);
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        console.log(`   ✗ Hiding transfer_sent from receiver`);
+        return null;
+      }
+      
+      // Handle legacy transfer_received - ONLY show to the actual receiver (toUser)
+      if (txn.type === 'transfer_received') {
+        if (isReceiver) {
+          console.log(`   ✓ Showing transfer_received to receiver`);
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        console.log(`   ✗ Hiding transfer_received from sender`);
+        return null;
+      }
+      
+      // For bonus types, user must be the receiver
+      if (['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'].includes(txn.type)) {
+        return isReceiver ? txn : null;
+      }
+      
+      // For ad_deduction, user must be fromUser
+      if (txn.type === 'ad_deduction') {
+        return isSender ? txn : null;
+      }
+      
+      return null;
+    }).filter((txn: any) => txn !== null);
+
+    console.log(`📊 [TRANSACTIONS] After filtering: ${filteredTransactions.length} transactions`);
+
+    // Apply pagination
+    const paginatedTransactions = filteredTransactions.slice(Number(skip), Number(skip) + Number(limit));
+    const total = filteredTransactions.length;
 
     res.json({
       success: true,
-      transactions,
+      transactions: paginatedTransactions,
       total,
       limit: Number(limit),
       skip: Number(skip)
@@ -116,31 +230,106 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get all transactions - filter properly
-    // For referral_bonus and signup_bonus: only show if user is the toUser (receiver)
-    // For other transactions: show if user is either fromUser or toUser
-    const transactions = await Transaction.find({
+    const userId = req.userId;
+    const userIdStr = userId?.toString();
+    
+    console.log(`📊 [HISTORY] Fetching for user: ${userIdStr}`);
+    
+    // Fetch all potential transactions first, then filter properly
+    const allTransactions = await Transaction.find({
       $or: [
-        // Show signup_bonus and referral_bonus only if user received them
-        { 
-          type: { $in: ['signup_bonus', 'referral_bonus'] },
-          toUser: req.userId 
-        },
-        // Show other transactions if user is involved
-        { 
-          type: { $nin: ['signup_bonus', 'referral_bonus'] },
-          $or: [
-            { fromUser: req.userId },
-            { toUser: req.userId }
-          ]
-        }
+        { toUser: userId },
+        { fromUser: userId }
       ]
     })
     .populate('fromUser', 'name phone')
     .populate('toUser', 'name phone')
     .sort({ createdAt: -1 })
-    .limit(Number(limit))
-    .skip(Number(skip));
+    .lean();
+
+    console.log(`📊 [HISTORY] Found ${allTransactions.length} raw transactions`);
+
+    // Filter transactions based on type and user role
+    const transactions = allTransactions.map((txn: any) => {
+      // Safely extract IDs as strings
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
+      
+      const isSender = fromUserId === userIdStr;
+      const isReceiver = toUserId === userIdStr;
+      
+      // DEBUG: Log transaction details
+      console.log(`📊 [HISTORY] Processing txn: type=${txn.type}, fromUser=${txn.fromUser?.name}, toUser=${txn.toUser?.name}, isSender=${isSender}, isReceiver=${isReceiver}, originalDesc=${txn.description}`);
+      
+      // For 'transfer' type (new single record), transform based on viewer's perspective
+      if (txn.type === 'transfer') {
+        // Check if description is just the default "Credit transfer" or a custom note
+        const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+        
+        if (isSender) {
+          return {
+            ...txn,
+            type: 'transfer_sent',
+            amount: -Math.abs(txn.amount),
+            // Always show "Transfer to [Name]" as main description
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        } else if (isReceiver) {
+          return {
+            ...txn,
+            type: 'transfer_received',
+            amount: Math.abs(txn.amount),
+            // Always show "Transfer from [Name]" as main description
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
+      }
+      
+      // Handle legacy transfer_sent - ONLY show to the actual sender
+      if (txn.type === 'transfer_sent') {
+        if (isSender) {
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer to ${txn.toUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
+      }
+      
+      // Handle legacy transfer_received - ONLY show to the actual receiver  
+      if (txn.type === 'transfer_received') {
+        if (isReceiver) {
+          // Transform legacy description to proper format
+          const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          return {
+            ...txn,
+            description: `Transfer from ${txn.fromUser?.name || 'User'}`,
+            note: isDefaultNote ? undefined : txn.description
+          };
+        }
+        return null;
+      }
+      
+      // For bonus types, user must be the receiver
+      if (['signup_bonus', 'referral_bonus', 'quiz_bonus', 'self_download_bonus'].includes(txn.type)) {
+        return isReceiver ? txn : null;
+      }
+      
+      // For ad_deduction, user must be fromUser
+      if (txn.type === 'ad_deduction') {
+        return isSender ? txn : null;
+      }
+      
+      return null;
+    }).filter((txn: any) => txn !== null).slice(0, Number(limit));
+
+    console.log(`📊 [HISTORY] After filtering: ${transactions.length} transactions`);
 
     // Calculate breakdown by type
     const breakdown = {
@@ -153,60 +342,50 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       adDeductions: 0,
     };
 
-    const allTransactions = await Transaction.find({
-      $or: [
-        // Show signup_bonus and referral_bonus only if user received them
-        { 
-          type: { $in: ['signup_bonus', 'referral_bonus'] },
-          toUser: req.userId 
-        },
-        // Show other transactions if user is involved
-        { 
-          type: { $nin: ['signup_bonus', 'referral_bonus'] },
-          $or: [
-            { fromUser: req.userId },
-            { toUser: req.userId }
-          ]
-        }
-      ]
-    });
-
+    // Use allTransactions for breakdown but with proper filtering
     allTransactions.forEach((txn: any) => {
+      const fromUserId = txn.fromUser?._id?.toString() || (typeof txn.fromUser === 'object' ? txn.fromUser?.toString() : txn.fromUser);
+      const toUserId = txn.toUser?._id?.toString() || (typeof txn.toUser === 'object' ? txn.toUser?.toString() : txn.toUser);
+      
+      const isSender = fromUserId === userIdStr;
+      const isReceiver = toUserId === userIdStr;
+      
       switch (txn.type) {
         case 'quiz_bonus':
-          breakdown.quizCredits += txn.amount;
+          if (isReceiver) breakdown.quizCredits += txn.amount;
           break;
         case 'referral_bonus':
-          breakdown.referralCredits += txn.amount;
+          if (isReceiver) breakdown.referralCredits += txn.amount;
           break;
         case 'signup_bonus':
-          breakdown.signupBonus += txn.amount;
+          if (isReceiver) breakdown.signupBonus += txn.amount;
           break;
         case 'self_download_bonus':
-          breakdown.selfDownloadCredits += txn.amount;
+          if (isReceiver) breakdown.selfDownloadCredits += txn.amount;
+          break;
+        case 'transfer':
+          // Handle new unified transfer type
+          if (isSender) {
+            breakdown.transferSent += Math.abs(txn.amount);
+          } else if (isReceiver) {
+            breakdown.transferReceived += Math.abs(txn.amount);
+          }
           break;
         case 'transfer_received':
-          if (txn.toUser?.toString() === req.userId) {
-            breakdown.transferReceived += txn.amount;
-          }
+          // Legacy type - only count if user is actual receiver
+          if (isReceiver) breakdown.transferReceived += Math.abs(txn.amount);
           break;
         case 'transfer_sent':
-          if (txn.fromUser?.toString() === req.userId) {
-            breakdown.transferSent += Math.abs(txn.amount);
-          }
+          // Legacy type - only count if user is actual sender
+          if (isSender) breakdown.transferSent += Math.abs(txn.amount);
           break;
         case 'ad_deduction':
-          breakdown.adDeductions += Math.abs(txn.amount);
+          if (isSender) breakdown.adDeductions += Math.abs(txn.amount);
           break;
       }
     });
 
-    const total = await Transaction.countDocuments({
-      $or: [
-        { fromUser: req.userId },
-        { toUser: req.userId }
-      ]
-    });
+    const total = transactions.length;
 
     res.json({
       success: true,
@@ -226,34 +405,44 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
-// POST /api/credits/search-users - Search users by phone number (starting with 88)
+// POST /api/credits/search-users - Search users by phone number only
 router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { phonePrefix } = req.body;
+    // Support both 'query' (new) and 'phonePrefix' (old) for backward compatibility
+    const { query, phonePrefix } = req.body;
+    let searchTerm = query || phonePrefix;
     
-    if (!phonePrefix) {
+    console.log('🔍 [SEARCH] Raw input:', searchTerm);
+    
+    if (!searchTerm) {
       return res.status(400).json({ 
         success: false,
-        message: "Phone prefix is required" 
+        message: "Phone number is required" 
       });
     }
 
-    // Search for users whose phone contains the prefix (after +country code)
-    // For Bangladesh, phone numbers are like +8801XXXXXXXXX or +88XXXXXXXXXX
+    // Clean the search term - keep only digits
+    searchTerm = searchTerm.replace(/[^0-9]/g, '');
+    console.log('🔍 [SEARCH] Cleaned to digits only:', searchTerm);
+    
+    // Simple search: Find any phone that CONTAINS these digits
+    // This works regardless of phone format (+8801xxx, +880xxx, or any other format)
     const users = await User.find({
-      $and: [
-        { _id: { $ne: req.userId } }, // Exclude current user
-        { 
-          $or: [
-            { phone: { $regex: phonePrefix, $options: 'i' } },
-            { phone: { $regex: `\\+88${phonePrefix}`, $options: 'i' } },
-            { phone: { $regex: `\\+880${phonePrefix}`, $options: 'i' } }
-          ]
-        }
-      ]
+      _id: { $ne: req.userId }, // Exclude current user
+      phone: { $regex: searchTerm, $options: 'i' } // Contains search
     })
-    .select('name phone profilePicture')
-    .limit(20);
+    .select('name phone profilePicture credits')
+    .limit(20)
+    .lean();
+
+    console.log(`✅ [SEARCH] Found ${users.length} users`);
+    if (users.length > 0) {
+      console.log('📱 [SEARCH] Sample results:', users.slice(0, 3).map(u => ({ name: u.name, phone: u.phone })));
+    } else {
+      // Log all phones in DB for debugging (first 5)
+      const allUsers = await User.find().select('phone').limit(5).lean();
+      console.log('📱 [SEARCH] Sample phones in DB:', allUsers.map(u => u.phone));
+    }
 
     res.json({
       success: true,
@@ -262,12 +451,13 @@ router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
         name: user.name,
         phone: user.phone,
         profilePicture: user.profilePicture,
-        // Extract just the phone number part after +88 for display
-        displayPhone: user.phone.replace(/^\+880?/, '')
+        credits: (user as any).credits || 0,
+        // Display phone as-is
+        displayPhone: user.phone
       }))
     });
   } catch (error) {
-    console.error("SEARCH USERS ERROR", error);
+    console.error("❌ [SEARCH] ERROR:", error);
     res.status(500).json({ 
       success: false,
       message: "Server error" 
@@ -278,7 +468,7 @@ router.post("/search-users", requireAuth, async (req: AuthReq, res) => {
 // POST /api/credits/transfer - Transfer credits to another user
 router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { toUserId, amount, description } = req.body;
+    const { toUserId, amount, note } = req.body;
     
     // Validation
     if (!toUserId || !amount) {
@@ -288,10 +478,10 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    if (amount <= 0) {
+    if (amount <= 0 || amount < 10) {
       return res.status(400).json({ 
         success: false,
-        message: "Amount must be greater than 0" 
+        message: "Minimum transfer amount is 10 credits" 
       });
     }
 
@@ -342,6 +532,18 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
+    // Generate unique transaction ID
+    const generateTransactionId = () => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let id = 'TXN';
+      for (let i = 0; i < 9; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return id;
+    };
+    
+    const transactionId = generateTransactionId();
+
     // Perform transfer
     const recipientCredits = (recipient as any).credits || 0;
     
@@ -351,46 +553,43 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     await sender.save();
     await recipient.save();
 
-    // Create transaction records
-    const transferDesc = description || `Transfer to ${recipient.name}`;
-    
-    // Transaction for sender (deduction)
-    await Transaction.create({
-      type: 'transfer_sent',
+    // Create SINGLE transaction record for the transfer
+    // This will be interpreted differently based on who is viewing it
+    const transferTransaction = await Transaction.create({
+      type: 'transfer',
       fromUser: sender._id,
       toUser: recipient._id,
-      amount: amount,
-      description: transferDesc,
+      amount: amount,  // Store as positive amount
+      description: note || 'Credit transfer',
       balanceBefore: senderCredits,
       balanceAfter: senderCredits - amount,
       status: 'completed'
     });
 
-    // Transaction for recipient (addition)
-    await Transaction.create({
-      type: 'transfer_received',
-      fromUser: sender._id,
-      toUser: recipient._id,
-      amount: amount,
-      description: `Transfer from ${sender.name}`,
-      balanceBefore: recipientCredits,
-      balanceAfter: recipientCredits + amount,
-      status: 'completed'
-    });
-
-    console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name}`);
+    console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name} (${transactionId})`);
 
     res.json({
       success: true,
       message: `Successfully transferred ${amount} credits to ${recipient.name}`,
       newBalance: senderCredits - amount,
-      transfer: {
+      transaction: {
+        id: transactionId,
+        transactionId: transactionId,
         amount,
+        date: new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        }),
         to: {
           _id: recipient._id,
           name: recipient.name,
           phone: recipient.phone
-        }
+        },
+        note: note || ''
       }
     });
   } catch (error) {

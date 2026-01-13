@@ -35,6 +35,37 @@ const AdSchema = new mongoose.Schema(
       ref: "adImages.files"
     },
 
+    // Video Ad Support - Bottom Video (624 × 174px)
+    bottomVideo: {
+      type: String, // Legacy or empty when using GridFS
+      default: ""
+    },
+
+    // GridFS reference for bottom video
+    bottomVideoGridFS: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "uploads.files"
+    },
+
+    // Video Ad Support - Fullscreen Video (624 × 1000px)
+    fullscreenVideo: {
+      type: String, // Legacy or empty when using GridFS
+      default: ""
+    },
+
+    // GridFS reference for fullscreen video
+    fullscreenVideoGridFS: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "uploads.files"
+    },
+
+    // Ad Type - image or video
+    adType: {
+      type: String,
+      enum: ['image', 'video'],
+      default: 'image'
+    },
+
     // Contact Information
     phoneNumber: {
       type: String,
