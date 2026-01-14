@@ -94,6 +94,8 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     const sortOrder = req.query.sortOrder as string || '';
     const skip = (page - 1) * limit;
 
+    console.log('📊 Admin /users request:', { page, limit, search, sortBy, sortOrder });
+
     // Build search query
     const searchQuery: any = {};
     if (search) {
@@ -107,6 +109,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     let sortQuery: any = { createdAt: -1 }; // Default sort by creation date
     if (sortBy === 'credits' && (sortOrder === 'asc' || sortOrder === 'desc')) {
       sortQuery = { credits: sortOrder === 'asc' ? 1 : -1 };
+      console.log('💳 Sorting by credits:', sortQuery);
     }
 
     const [users, total] = await Promise.all([
@@ -117,6 +120,9 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
         .limit(limit),
       User.countDocuments(searchQuery)
     ]);
+
+    console.log(`✅ Found ${users.length} users (Total: ${total}). First user credits: ${users[0]?.credits}, Last user credits: ${users[users.length - 1]?.credits}`);
+
 
     // Get additional stats for each user
     const usersWithStats = await Promise.all(

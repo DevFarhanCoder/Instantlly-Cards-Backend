@@ -16,24 +16,51 @@ const r = Router();
 // Helper function to save Base64 image to file system
 const saveBase64Image = async (base64Data: string, userId: string): Promise<string> => {
   try {
+    // Check if data is provided
+    if (!base64Data || typeof base64Data !== 'string') {
+      throw new Error('Image data is required and must be a valid string');
+    }
+
     // Check if it's a data URI
     if (!base64Data.startsWith('data:image/')) {
-      throw new Error('Invalid image data format');
+      throw new Error('Invalid image format. Image must be in data:image/ format (PNG, JPEG, JPG, GIF, WebP)');
     }
 
     // Extract mime type and base64 data
     const matches = base64Data.match(/^data:image\/([^;]+);base64,(.+)$/);
     if (!matches) {
-      throw new Error('Invalid Base64 image format');
+      throw new Error('Invalid Base64 image encoding. Please ensure the image is properly encoded');
     }
 
     const [, extension, base64] = matches;
-    const buffer = Buffer.from(base64, 'base64');
-
-    // Validate file size (limit to 5MB)
-    if (buffer.length > 5 * 1024 * 1024) {
-      throw new Error('Image size too large (max 5MB)');
+    
+    // Validate base64 string
+    if (!base64 || base64.length === 0) {
+      throw new Error('Image data is empty or corrupted');
     }
+
+    let buffer;
+    try {
+      buffer = Buffer.from(base64, 'base64');
+    } catch (err) {
+      throw new Error('Failed to decode image. The image data may be corrupted');
+    }
+
+    // Validate file size (limit to 15MB)
+    const maxSize = 15 * 1024 * 1024; // 15MB
+    const actualSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
+    
+    if (buffer.length > maxSize) {
+      throw new Error(`Image size is ${actualSizeMB}MB which exceeds the maximum limit of 15MB. Please compress or resize your image`);
+    }
+    
+    // Validate supported image formats
+    const supportedFormats = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+    if (!supportedFormats.includes(extension.toLowerCase())) {
+      throw new Error(`Image format '${extension}' is not supported. Supported formats: ${supportedFormats.join(', ').toUpperCase()}`);
+    }
+    
+    console.log(`✅ Image validation passed - Size: ${actualSizeMB}MB, Format: ${extension.toUpperCase()}, User: ${userId}`);
 
     // Generate unique filename
     const filename = `${uuidv4()}.${extension}`;
@@ -50,9 +77,16 @@ const saveBase64Image = async (base64Data: string, userId: string): Promise<stri
 
     // Return relative path for storing in database
     return `/uploads/cards/${filename}`;
-  } catch (error) {
-    console.error('Error saving Base64 image:', error);
-    throw new Error('Failed to process image');
+  } catch (error: any) {
+    console.error('❌ Error saving Base64 image:', error.message || error);
+    
+    // Re-throw with more specific error message if available
+    if (error.message) {
+      throw error; // Preserve our detailed error messages
+    }
+    
+    // Generic fallback for unexpected errors
+    throw new Error('Failed to process image. Please ensure the image is valid and try again');
   }
 };
 
