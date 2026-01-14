@@ -130,6 +130,9 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
         if (isSender) {
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
             type: 'transfer_sent',
             amount: -Math.abs(txn.amount),
             // Always show "Transfer to [Name]" as main description
@@ -139,6 +142,9 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
         } else if (isReceiver) {
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
             type: 'transfer_received',
             amount: Math.abs(txn.amount),
             // Always show "Transfer from [Name]" as main description
@@ -157,6 +163,10 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
+            amount: -Math.abs(txn.amount), // Ensure negative for sent
             description: `Transfer to ${txn.toUser?.name || 'User'}`,
             note: isDefaultNote ? undefined : txn.description
           };
@@ -173,6 +183,10 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
+            amount: Math.abs(txn.amount), // Ensure positive for received
             description: `Transfer from ${txn.fromUser?.name || 'User'}`,
             note: isDefaultNote ? undefined : txn.description
           };
@@ -269,6 +283,9 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         if (isSender) {
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
             type: 'transfer_sent',
             amount: -Math.abs(txn.amount),
             // Always show "Transfer to [Name]" as main description
@@ -278,6 +295,9 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         } else if (isReceiver) {
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
             type: 'transfer_received',
             amount: Math.abs(txn.amount),
             // Always show "Transfer from [Name]" as main description
@@ -295,6 +315,10 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
+            amount: -Math.abs(txn.amount), // Ensure negative for sent
             description: `Transfer to ${txn.toUser?.name || 'User'}`,
             note: isDefaultNote ? undefined : txn.description
           };
@@ -309,6 +333,10 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
             ...txn,
+            _id: txn._id,
+            transactionId: txn.transactionId,
+            createdAt: txn.createdAt,
+            amount: Math.abs(txn.amount), // Ensure positive for received
             description: `Transfer from ${txn.fromUser?.name || 'User'}`,
             note: isDefaultNote ? undefined : txn.description
           };
@@ -557,6 +585,7 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     // This will be interpreted differently based on who is viewing it
     const transferTransaction = await Transaction.create({
       type: 'transfer',
+      transactionId: transactionId,
       fromUser: sender._id,
       toUser: recipient._id,
       amount: amount,  // Store as positive amount

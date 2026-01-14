@@ -18,11 +18,18 @@ const router = express.Router();
 const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   const adminKey = req.headers['x-admin-key'];
   
-  // TODO: Replace with your secure admin key
-  if (adminKey === process.env.ADMIN_SECRET_KEY || adminKey === 'your-secure-admin-key-here') {
+  // Accept configured admin key from environment or known keys
+  const validKeys = [
+    process.env.ADMIN_SECRET_KEY,
+    'your-secure-admin-key-here',
+    'Farhan_90'  // Admin dashboard key
+  ].filter(Boolean);
+  
+  if (adminKey && validKeys.includes(adminKey as string)) {
     next();
   } else {
-    res.status(401).json({ error: 'Unauthorized' });
+    console.log(`❌ Admin auth failed. Received key: ${adminKey}, Expected one of: ${validKeys.join(', ')}`);
+    res.status(401).json({ error: 'Unauthorized', message: 'Invalid admin key' });
   }
 };
 
@@ -857,69 +864,6 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
 
 // Credit Transfer endpoint (alternative path for admin dashboard)
 router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) => {
-  try {
-    const { userId, amount, reason } = req.body;
-    
-    // Validation
-    if (!userId || !amount) {
-      return res.status(400).json({ 
-        success: false,
-        message: "User ID and amount are required" 
-      });
-    }
-
-    if (amount <= 0) {
-      return res.status(400).json({ 
-        success: false,
-        message: "Amount must be greater than 0" 
-      });
-    }
-
-    // Get recipient
-    const recipient = await User.findById(userId);
-    if (!recipient) {
-      return res.status(404).json({ 
-        success: false,
-        message: "User not found" 
-      });
-    }
-
-    // Add credits to recipient
-    const recipientCredits = (recipient as any).credits || 0;
-    recipient.set({ credits: recipientCredits + amount });
-    await recipient.save();
-
-    // Create transaction record
-    const transferDesc = reason || `Admin credit transfer - ${amount.toLocaleString('en-IN')} credits`;
-    
-    await Transaction.create({
-      type: 'admin_adjustment',
-      toUser: recipient._id,
-      amount: amount,
-      description: transferDesc,
-      balanceBefore: recipientCredits,
-      balanceAfter: recipientCredits + amount,
-      status: 'completed'
-    });
-
-    console.log(`✅ Admin transferred ${amount} credits to ${recipient.name}`);
-
-    res.json({
-      success: true,
-      message: `Successfully transferred ${amount} credits to ${recipient.name}`,
-      newBalance: recipientCredits + amount
-    });
-  } catch (error) {
-    console.error('❌ Admin credit transfer error:', error);
-    res.status(500).json({ 
-      success: false,
-      message: "Server error during transfer" 
-    });
-  }
-});
-
-// Credit Transfer endpoint (alternative path for admin dashboard)
-router.post("/transfer-credits", adminAuth, async (req: Request, res: Response) => {
   try {
     const { userId, amount, reason } = req.body;
     
