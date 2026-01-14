@@ -90,6 +90,8 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
     const search = req.query.search as string || '';
+    const sortBy = req.query.sortBy as string || '';
+    const sortOrder = req.query.sortOrder as string || '';
     const skip = (page - 1) * limit;
 
     // Build search query
@@ -101,10 +103,16 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
       ];
     }
 
+    // Build sort query
+    let sortQuery: any = { createdAt: -1 }; // Default sort by creation date
+    if (sortBy === 'credits' && (sortOrder === 'asc' || sortOrder === 'desc')) {
+      sortQuery = { credits: sortOrder === 'asc' ? 1 : -1 };
+    }
+
     const [users, total] = await Promise.all([
       User.find(searchQuery)
         .select('name phone profilePicture about createdAt credits')
-        .sort({ createdAt: -1 })
+        .sort(sortQuery)
         .skip(skip)
         .limit(limit),
       User.countDocuments(searchQuery)
