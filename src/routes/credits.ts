@@ -177,8 +177,9 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
       
       // Handle legacy transfer_received - ONLY show to the actual receiver (toUser)
       if (txn.type === 'transfer_received') {
-        if (isReceiver) {
-          console.log(`   ✓ Showing transfer_received to receiver`);
+        // IMPORTANT: Only show to receiver AND NOT to sender
+        if (isReceiver && !isSender) {
+          console.log(`   ✓ Showing transfer_received to receiver (NOT sender)`);
           // Transform legacy description to proper format
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
@@ -191,7 +192,7 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
             note: isDefaultNote ? undefined : txn.description
           };
         }
-        console.log(`   ✗ Hiding transfer_received from sender`);
+        console.log(`   ✗ Hiding transfer_received (isSender=${isSender}, isReceiver=${isReceiver})`);
         return null;
       }
       
@@ -328,7 +329,8 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       
       // Handle legacy transfer_received - ONLY show to the actual receiver  
       if (txn.type === 'transfer_received') {
-        if (isReceiver) {
+        // IMPORTANT: Only show to receiver AND NOT to sender
+        if (isReceiver && !isSender) {
           // Transform legacy description to proper format
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
           return {
