@@ -314,14 +314,18 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         if (isSender) {
           // Transform legacy description to proper format
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          const transformedAmount = -Math.abs(txn.amount);
+          console.log(`🔄 [TRANSFORM] transfer_sent: ${txn.amount} → ${transformedAmount}`);
           return {
-            ...txn,
             _id: txn._id,
+            type: txn.type,
             transactionId: txn.transactionId,
             createdAt: txn.createdAt,
-            amount: -Math.abs(txn.amount), // Ensure negative for sent
+            amount: transformedAmount, // Explicitly set negative amount
             description: `Transfer to ${txn.toUser?.name || 'User'}`,
-            note: isDefaultNote ? undefined : txn.description
+            note: isDefaultNote ? undefined : txn.description,
+            fromUser: txn.fromUser,
+            toUser: txn.toUser
           };
         }
         return null;
@@ -333,14 +337,18 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
         if (isReceiver && !isSender) {
           // Transform legacy description to proper format
           const isDefaultNote = !txn.description || txn.description === 'Credit transfer';
+          const transformedAmount = Math.abs(txn.amount);
+          console.log(`🔄 [TRANSFORM] transfer_received: ${txn.amount} → ${transformedAmount}`);
           return {
-            ...txn,
             _id: txn._id,
+            type: txn.type,
             transactionId: txn.transactionId,
             createdAt: txn.createdAt,
-            amount: Math.abs(txn.amount), // Ensure positive for received
+            amount: transformedAmount, // Explicitly set positive amount
             description: `Transfer from ${txn.fromUser?.name || 'User'}`,
-            note: isDefaultNote ? undefined : txn.description
+            note: isDefaultNote ? undefined : txn.description,
+            fromUser: txn.fromUser,
+            toUser: txn.toUser
           };
         }
         return null;
