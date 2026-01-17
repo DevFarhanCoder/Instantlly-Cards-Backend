@@ -918,7 +918,7 @@ router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res:
     await Transaction.create({
       type: 'admin_adjustment',
       toUser: user._id,
-      amount: Math.abs(creditDifference),
+      amount: creditDifference, // Keep the sign: positive for add, negative for deduct
       description: transactionDescription,
       note: reason || undefined,
       balanceBefore: oldCredits,
