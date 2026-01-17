@@ -206,6 +206,11 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
         return isSender ? txn : null;
       }
       
+      // For admin_adjustment, user must be the receiver (toUser)
+      if (txn.type === 'admin_adjustment') {
+        return isReceiver ? txn : null;
+      }
+      
       return null;
     }).filter((txn: any) => txn !== null);
 
@@ -362,6 +367,11 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       // For ad_deduction, user must be fromUser
       if (txn.type === 'ad_deduction') {
         return isSender ? txn : null;
+      }
+      
+      // For admin_adjustment, user must be the receiver (toUser)
+      if (txn.type === 'admin_adjustment') {
+        return isReceiver ? txn : null;
       }
       
       return null;
