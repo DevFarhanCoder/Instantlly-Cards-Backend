@@ -1,11 +1,12 @@
 // index.ts
 import dotenv from "dotenv";
-dotenv.config();
+import path from "path";
+// Load .env from the project root
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
 import compression from "compression";
-import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
 import { createServer } from "http";
@@ -13,7 +14,6 @@ import { Server } from "socket.io";
 import { connectDB } from "./db";
 import authRouter from "./routes/auth";
 import otpRouter from "./routes/otp";
-import firebaseAuthRouter from "./routes/firebaseAuth";
 import cardsRouter from "./routes/cards";
 import contactsRouter from "./routes/contacts";
 import notificationsRouter from "./routes/notifications";
@@ -27,6 +27,8 @@ import adsRouter from "./routes/ads";
 import channelPartnerAdsRouter from "./routes/channelPartnerAds";
 import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
+import quizRouter from "./routes/quiz";
+import businessPromotionRouter from "./routes/businessPromotion";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -53,6 +55,7 @@ const io = new Server(server, {
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
 const defaultAllowed = [
+  'https://api.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
   'http://localhost:3000',
@@ -87,12 +90,12 @@ app.use(compression()); // Enable gzip compression for faster responses
 
 // Parse JSON bodies - with type checking for various content-types
 app.use(express.json({ 
-  limit: "10mb",
+  limit: "20mb", // Increased to 20MB to support larger card images (up to 15MB)
   type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
 })); 
 
 // Parse URL-encoded bodies (for form submissions)
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
 // Request logging middleware for debugging
 app.use((req, res, next) => {
@@ -104,9 +107,15 @@ app.use((req, res, next) => {
 });
 
 // Additional CORS headers middleware (belt and suspenders approach)
+// Explicit CORS headers middleware (backup layer)
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  // Only set origin if it's in our allowed list
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost'))) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  }
+  
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires');
   res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
@@ -227,14 +236,12 @@ async function startServer() {
     console.log("✅ GridFS initialized for ad images");
 
     // Add routes after DB connection
-    // Last updated: 2025-11-19 - Added Firebase authentication
+    // Last updated: 2025-01-10 - Removed Firebase authentication, using only Fast2SMS OTP
     app.use("/api/auth", authRouter);
-    app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp)
-    app.use("/api/auth", firebaseAuthRouter); // Firebase authentication (firebase-auth)
+    app.use("/api/auth", otpRouter); // OTP endpoints (send-otp, verify-otp) - Fast2SMS only
     app.use("/api/users", authRouter); // Mount auth router at /api/users for search-by-phone endpoint
     console.log("✅ Mounted /api/users route for search-by-phone endpoint");
-    console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp)");
-    console.log("✅ Mounted /api/auth Firebase routes (firebase-auth)");
+    console.log("✅ Mounted /api/auth OTP routes (send-otp, verify-otp) - Fast2SMS only");
     app.use("/api/cards", cardsRouter);          
     app.use("/api/contacts", contactsRouter);    
     app.use("/api/notifications", notificationsRouter);    
@@ -242,6 +249,7 @@ async function startServer() {
     app.use("/api/groups", groupsRouter);    
     app.use("/api/chats", chatsRouter);
     app.use("/api/admin", adminRouter);
+    console.log("✅ Mounted /api/admin routes (dashboard stats, user management)");
     app.use("/api/admin-auth", adminAuthRouter);
     console.log("✅ Mounted /api/admin-auth routes (admin login/verification)");
     app.use("/api/group-sharing", groupSharingRouter);
@@ -254,6 +262,10 @@ async function startServer() {
     console.log("✅ Mounted /api/credits routes (credits system - balance, transfer, transactions)");
     app.use("/api/feedback", feedbackRouter);
     console.log("✅ Mounted /api/feedback routes (user feedback system)");
+    app.use("/api/quiz", quizRouter);
+    console.log("✅ Mounted /api/quiz routes (quiz progress, answer submission)");
+    app.use("/api/business-promotion", businessPromotionRouter);
+    console.log("✅ Mounted /api/business-promotion routes (business promotion forms)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);

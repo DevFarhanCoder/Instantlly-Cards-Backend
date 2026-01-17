@@ -16,24 +16,51 @@ const r = Router();
 // Helper function to save Base64 image to file system
 const saveBase64Image = async (base64Data: string, userId: string): Promise<string> => {
   try {
+    // Check if data is provided
+    if (!base64Data || typeof base64Data !== 'string') {
+      throw new Error('Image data is required and must be a valid string');
+    }
+
     // Check if it's a data URI
     if (!base64Data.startsWith('data:image/')) {
-      throw new Error('Invalid image data format');
+      throw new Error('Invalid image format. Image must be in data:image/ format (PNG, JPEG, JPG, GIF, WebP)');
     }
 
     // Extract mime type and base64 data
     const matches = base64Data.match(/^data:image\/([^;]+);base64,(.+)$/);
     if (!matches) {
-      throw new Error('Invalid Base64 image format');
+      throw new Error('Invalid Base64 image encoding. Please ensure the image is properly encoded');
     }
 
     const [, extension, base64] = matches;
-    const buffer = Buffer.from(base64, 'base64');
-
-    // Validate file size (limit to 5MB)
-    if (buffer.length > 5 * 1024 * 1024) {
-      throw new Error('Image size too large (max 5MB)');
+    
+    // Validate base64 string
+    if (!base64 || base64.length === 0) {
+      throw new Error('Image data is empty or corrupted');
     }
+
+    let buffer;
+    try {
+      buffer = Buffer.from(base64, 'base64');
+    } catch (err) {
+      throw new Error('Failed to decode image. The image data may be corrupted');
+    }
+
+    // Validate file size (limit to 15MB)
+    const maxSize = 15 * 1024 * 1024; // 15MB
+    const actualSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
+    
+    if (buffer.length > maxSize) {
+      throw new Error(`Image size is ${actualSizeMB}MB which exceeds the maximum limit of 15MB. Please compress or resize your image`);
+    }
+    
+    // Validate supported image formats
+    const supportedFormats = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+    if (!supportedFormats.includes(extension.toLowerCase())) {
+      throw new Error(`Image format '${extension}' is not supported. Supported formats: ${supportedFormats.join(', ').toUpperCase()}`);
+    }
+    
+    console.log(`✅ Image validation passed - Size: ${actualSizeMB}MB, Format: ${extension.toUpperCase()}, User: ${userId}`);
 
     // Generate unique filename
     const filename = `${uuidv4()}.${extension}`;
@@ -50,9 +77,16 @@ const saveBase64Image = async (base64Data: string, userId: string): Promise<stri
 
     // Return relative path for storing in database
     return `/uploads/cards/${filename}`;
-  } catch (error) {
-    console.error('Error saving Base64 image:', error);
-    throw new Error('Failed to process image');
+  } catch (error: any) {
+    console.error('❌ Error saving Base64 image:', error.message || error);
+    
+    // Re-throw with more specific error message if available
+    if (error.message) {
+      throw error; // Preserve our detailed error messages
+    }
+    
+    // Generic fallback for unexpected errors
+    throw new Error('Failed to process image. Please ensure the image is valid and try again');
   }
 };
 
@@ -65,13 +99,40 @@ r.get("/feed/public", async (_req, res) => {
 // Require auth for everything below
 r.use(requireAuth);
 
-// CONTACTS FEED - Get cards from my contacts AND my own cards (OPTIMIZED WITH CACHING)
+// DIAGNOSTIC ENDPOINT - Check if card exists in database (for debugging deletion issues)
+r.get("/debug/:id", async (req: AuthReq, res) => {
+  try {
+    const cardId = req.params.id;
+    const userId = req.userId!;
+    
+    console.log(`🔍 DEBUG card check - CardID: ${cardId}, UserID: ${userId}`);
+    
+    // Check if card exists
+    const card = await Card.findById(cardId);
+    const count = await Card.countDocuments({ _id: cardId });
+    const userCards = await Card.find({ userId }).select('_id name');
+    
+    res.json({ 
+      requested: cardId,
+      found: !!card,
+      count,
+      card: card || null,
+      userCardsCount: userCards.length,
+      userCardIds: userCards.map(c => c._id.toString())
+    });
+  } catch (err) {
+    console.error("DEBUG ERROR", err);
+    res.status(500).json({ message: "Debug check failed" });
+  }
+});
+
+// CONTACTS FEED - Get cards from OTHER contacts only (NOT user's own cards)
 r.get("/feed/contacts", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     const startTime = Date.now();
     
-    console.log(`📱 [${userId}] Fetching contacts feed...`);
+    console.log(`📱 [${userId}] Fetching contacts feed (other members only)...`);
     
     // Get all contacts who are app users (optimized query with select)
     const myContacts = await Contact.find({ 
@@ -85,30 +146,34 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
-    // Add current user's ID to see their own cards too
-    const allUserIds = [userId, ...contactUserIds];
+    // CRITICAL: Explicitly exclude user's own ID (in case they added themselves as a contact)
+    const safeContactIds = contactUserIds.filter((id: any) => id.toString() !== userId.toString());
     
-    console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app`);
+    console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app (${safeContactIds.length} after self-exclusion)`);
     
-    // Get cards from contacts AND own cards (optimized with lean and select)
+    // Get cards from contacts ONLY (excluding user's own cards)
     const allCards = await Card.find({
-      userId: { $in: allUserIds }
+      $and: [
+        { userId: { $in: safeContactIds } },
+        { userId: { $ne: userId } }  // Additional safety: Explicitly exclude user's own userId
+      ]
     })
-    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress createdAt updatedAt')
+    .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress birthdate anniversary createdAt updatedAt')
     .sort({ createdAt: -1 })
     .limit(100)
     .lean()
     .exec();
     
-    // Separate own cards and contact cards for metadata
-    const ownCards = allCards.filter((card: any) => card.userId.toString() === userId);
-    const contactCards = allCards.filter((card: any) => card.userId.toString() !== userId);
+    // Final safety check: Filter out any cards that might have slipped through
+    const filteredCards = allCards.filter((card: any) => 
+      card.userId && card.userId.toString() !== userId.toString()
+    );
     
     const elapsed = Date.now() - startTime;
-    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${ownCards.length} own + ${contactCards.length} from contacts = ${allCards.length} total`);
+    console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${filteredCards.length} cards from contacts (user's own cards excluded)`);
     
     // Generate ETag based on card IDs and update times for browser caching
-    const etag = `"${allCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
+    const etag = `"${filteredCards.map((c: any) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
     
     // Check if client has cached version
     if (req.headers['if-none-match'] === etag) {
@@ -122,12 +187,11 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     
     res.json({ 
       success: true,
-      data: allCards,
+      data: filteredCards,
       meta: {
         totalContacts: contactUserIds.length,
-        totalCards: allCards.length,
-        ownCards: ownCards.length,
-        contactCards: contactCards.length,
+        totalCards: filteredCards.length,
+        contactCards: filteredCards.length,
         loadTimeMs: elapsed
       }
     });
@@ -146,6 +210,13 @@ r.post("/", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let cardData = { ...req.body, userId };
+    console.log('📝 [CREATE CARD] Received data:', JSON.stringify({ 
+      name: cardData.name,
+      birthdate: cardData.birthdate, 
+      anniversary: cardData.anniversary,
+      email: cardData.email,
+      location: cardData.location
+    }, null, 2));
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (cardData.companyPhoto && cardData.companyPhoto.startsWith('data:image/')) {
@@ -162,6 +233,14 @@ r.post("/", async (req: AuthReq, res) => {
     }
 
     const doc = await Card.create(cardData);
+    console.log('✅ [CREATE CARD] Saved to DB:', JSON.stringify({ 
+      _id: doc._id,
+      name: doc.name,
+      birthdate: (doc as any).birthdate, 
+      anniversary: (doc as any).anniversary,
+      email: doc.email,
+      location: doc.location
+    }, null, 2));
     
     // Send notifications to contacts who have this user in their contacts
     try {
@@ -223,21 +302,25 @@ r.get("/", async (req: AuthReq, res) => {
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
     items.forEach((card, i) => {
-      console.log(`   Card ${i + 1}: "${card.name}"`);
+      console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${(card as any).businessHours}", servicesOffered="${(card as any).servicesOffered}", establishedYear="${(card as any).establishedYear}", aboutBusiness="${(card as any).aboutBusiness}"`);
     });
     
-    // Generate ETag for proper caching
-    const etag = `"own-cards-${userId}-${items.length}-${items[0]?.updatedAt || 'empty'}"`;
+    // DISABLED ETag caching to prevent stale data after delete
+    // Generate ETag using ALL card IDs to detect deletions
+    // const cardIds = items.map(c => c._id).join(',');
+    // const etag = `"own-cards-${userId}-${items.length}-${cardIds.substring(0, 50)}-${items[0]?.updatedAt || 'empty'}"`;
     
     // Check if client has cached version
-    if (req.headers['if-none-match'] === etag) {
-      console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
-      return res.status(304).end();
-    }
+    // if (req.headers['if-none-match'] === etag) {
+    //   console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
+    //   return res.status(304).end();
+    // }
     
-    // Set proper cache headers
-    res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'private, max-age=60'); // Cache for 1 minute
+    // Force no-cache to prevent stale data issues
+    // res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
     res.json({ 
       success: true,
@@ -262,31 +345,39 @@ r.put("/:id", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let updateData = { ...req.body };
+    
+    console.log('🔧 UPDATE CARD REQUEST RECEIVED - Card ID:', req.params.id);
+    console.log('📦 NEW FIELDS in request:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
-      console.log('🖼️ Processing Base64 image for card update...');
       try {
-        // Get existing card to potentially delete old image
-        const existingCard = await Card.findOne({ _id: req.params.id, userId });
-        
         const imagePath = await saveBase64Image(updateData.companyPhoto, userId);
+        
+        // Get old image path before update (only if we're changing the image)
+        const existingCard = await Card.findOne({ _id: req.params.id, userId }).select('companyPhoto').lean();
+        const oldImagePath: string | undefined = existingCard?.companyPhoto;
+        
         updateData.companyPhoto = imagePath;
-        console.log('✅ Image updated successfully:', imagePath);
-
-        // Clean up old image file if it exists and is different
-        if (existingCard?.companyPhoto && 
-            existingCard.companyPhoto !== imagePath && 
-            existingCard.companyPhoto.startsWith('/uploads/')) {
-          try {
-            const oldPath = path.join(process.cwd(), existingCard.companyPhoto);
-            if (fs.existsSync(oldPath)) {
-              fs.unlinkSync(oldPath);
-              console.log('🗑️ Deleted old image:', existingCard.companyPhoto);
+        
+        // Clean up old image in background (non-blocking)
+        if (oldImagePath && typeof oldImagePath === 'string' && oldImagePath !== imagePath && oldImagePath.startsWith('/uploads/')) {
+          const pathToDelete = oldImagePath; // Capture in closure
+          setImmediate(() => {
+            try {
+              const oldPath = path.join(process.cwd(), pathToDelete);
+              if (fs.existsSync(oldPath)) {
+                fs.unlinkSync(oldPath);
+              }
+            } catch (deleteError) {
+              console.error('Warning: Failed to delete old image:', deleteError);
             }
-          } catch (deleteError) {
-            console.error('Warning: Failed to delete old image:', deleteError);
-          }
+          });
         }
       } catch (imageError) {
         console.error('❌ Failed to process image:', imageError);
@@ -295,12 +386,29 @@ r.put("/:id", async (req: AuthReq, res) => {
       }
     }
 
+    // Single database query for update
+    console.log('🔧 UPDATE: Received data for new fields:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
+    
     const doc = await Card.findOneAndUpdate(
       { _id: req.params.id, userId },
       updateData,
       { new: true }
     );
+    
     if (!doc) return res.status(404).json({ message: "Not found" });
+
+    console.log('✅ UPDATE: Saved doc has new fields:', {
+      businessHours: doc.businessHours,
+      servicesOffered: doc.servicesOffered,
+      establishedYear: doc.establishedYear,
+      aboutBusiness: doc.aboutBusiness
+    });
+
     res.json({ data: doc });
   } catch (err) {
     console.error("UPDATE CARD ERROR", err);
@@ -311,8 +419,29 @@ r.put("/:id", async (req: AuthReq, res) => {
 // DELETE
 r.delete("/:id", async (req: AuthReq, res) => {
   try {
-    const doc = await Card.findOneAndDelete({ _id: req.params.id, userId: req.userId! });
-    if (!doc) return res.status(404).json({ message: "Not found" });
+    const cardId = req.params.id;
+    const userId = req.userId!;
+    
+    console.log(`🗑️ DELETE card request - CardID: ${cardId}, UserID: ${userId}`);
+    
+    // First check if card exists at all (for debugging)
+    const existingCard = await Card.findById(cardId);
+    if (!existingCard) {
+      console.log(`❌ Card ${cardId} does not exist in database`);
+      return res.status(404).json({ message: "Card not found - it may have already been deleted" });
+    }
+    
+    console.log(`📋 Card found - Owner: ${existingCard.userId}, Requester: ${userId}`);
+    
+    // Check if user owns the card
+    if (existingCard.userId.toString() !== userId.toString()) {
+      console.log(`❌ Permission denied - Card ${cardId} belongs to ${existingCard.userId}, not ${userId}`);
+      return res.status(403).json({ message: "You don't have permission to delete this card" });
+    }
+    
+    // Delete the card
+    await Card.findByIdAndDelete(cardId);
+    console.log(`✅ Card ${cardId} deleted successfully by user ${userId}`);
     res.json({ ok: true });
   } catch (err) {
     console.error("DELETE CARD ERROR", err);
@@ -347,6 +476,20 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     const sender = await User.findById(senderId);
     if (!sender) {
       return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Check for duplicate - prevent sharing same card to same person twice
+    const existingShare = await SharedCard.findOne({
+      cardId,
+      senderId,
+      recipientId
+    });
+
+    if (existingShare) {
+      return res.status(409).json({ 
+        message: "Card already shared",
+        error: "You have already sent this card to this person. You can only send a card once to each user."
+      });
     }
 
     // PERFORMANCE OPTIMIZATION: Store all data in shared card (ultra denormalization)
@@ -495,8 +638,22 @@ r.get("/received", async (req: AuthReq, res) => {
     
     console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit}, search: "${search || 'none'}", fuzzy: ${fuzzy})...`);
     
-    // Build query with cursor for pagination
-    const query: any = { recipientId };
+    // STEP 1: Find all senders who sent cards to this recipient
+    const receivedFromSenders = await SharedCard.find({ recipientId }).distinct('senderId');
+    
+    // STEP 2: Find which of these senders the recipient has ALSO sent cards to (mutual exchange)
+    const mutualSenders = await SharedCard.find({
+      senderId: recipientId,
+      recipientId: { $in: receivedFromSenders }
+    }).distinct('recipientId');
+    
+    console.log(`🔄 [${recipientId}] Received from ${receivedFromSenders.length} users, mutual exchange with ${mutualSenders.length} users`);
+    
+    // Build query with cursor for pagination - ONLY show cards from mutual exchanges
+    const query: any = { 
+      recipientId,
+      senderId: { $in: mutualSenders } // Only show if recipient has also sent card back
+    };
     if (cursor) {
       query._id = { $lt: cursor };
     }
@@ -884,6 +1041,20 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     const sender = await User.findById(senderId);
     if (!sender) {
       return res.status(404).json({ message: "Sender not found" });
+    }
+
+    // Check for duplicate - prevent sharing same card to same group twice
+    const existingGroupShare = await GroupSharedCard.findOne({
+      cardId,
+      senderId,
+      groupId
+    });
+
+    if (existingGroupShare) {
+      return res.status(409).json({ 
+        message: "Card already shared to group",
+        error: "You have already sent this card to this group. You can only send a card once to each group."
+      });
     }
 
     // Create group shared card record

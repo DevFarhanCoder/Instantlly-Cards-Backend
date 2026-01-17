@@ -28,10 +28,40 @@ const UserSchema = new Schema(
     platform: { type: String },
     pushTokenUpdatedAt: { type: Date },
     // Credits system - 5 lac (500,000) credits on signup, valid for 1 month
-    credits: { type: Number, default: 500000 },
+    credits: { type: Number, default: 200 },
     creditsExpiryDate: { type: Date }, // Credits expire 1 month after signup
     referralCode: { type: String, unique: true, sparse: true, index: true },
     referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    // Service type - Selected during first-time account setup
+    serviceType: { 
+      type: String, 
+      enum: ['home-based', 'business-visiting'],
+      default: null 
+    },
+    // Quiz progress tracking - supports all 30 questions
+    quizProgress: {
+      completed: { type: Boolean, default: false },
+      currentQuestionIndex: { type: Number, default: 0 },
+      answeredQuestions: { 
+        type: [String], 
+        default: [],
+        validate: {
+          validator: function(v: string[]) {
+            return v.length <= 30; // Maximum 30 questions
+          },
+          message: 'Cannot have more than 30 answered questions'
+        }
+      }, // Array of question keys (e.g., ['married', 'haveBike'])
+      answers: {
+        type: Map,
+        of: String,
+        default: {}
+      }, // Map of questionKey -> answer (stores all 30 Q&A pairs)
+      creditsEarned: { type: Number, default: 0 },
+      creditsRecordedInTransactions: { type: Number, default: 0 }, // Credits already saved in transactions
+      startedAt: { type: Date },
+      completedAt: { type: Date }
+    }
   },
   { timestamps: true }
 );

@@ -100,7 +100,7 @@ class GridFSService {
       const chunks: Buffer[] = [];
 
       downloadStream
-        .on("data", (chunk) => chunks.push(chunk))
+        .on("data", (chunk: Buffer) => chunks.push(chunk))
         .on("error", reject)
         .on("end", () => {
           const buffer = Buffer.concat(chunks);
@@ -148,6 +148,25 @@ class GridFSService {
 
     const id = typeof fileId === "string" ? new ObjectId(fileId) : fileId;
     return this.bucket.openDownloadStream(id);
+  }
+
+  /**
+   * Check if file exists in GridFS
+   * @param fileId - GridFS file ID
+   * @returns true if file exists, false otherwise
+   */
+  async fileExists(fileId: string | ObjectId): Promise<boolean> {
+    if (!this.bucket) {
+      throw new Error("GridFS bucket not initialized");
+    }
+
+    try {
+      const id = typeof fileId === "string" ? new ObjectId(fileId) : fileId;
+      const files = await this.bucket.find({ _id: id }).limit(1).toArray();
+      return files.length > 0;
+    } catch (error) {
+      return false;
+    }
   }
 
   /**

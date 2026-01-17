@@ -18,11 +18,18 @@ const router = express.Router();
 const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   const adminKey = req.headers['x-admin-key'];
   
-  // TODO: Replace with your secure admin key
-  if (adminKey === process.env.ADMIN_SECRET_KEY || adminKey === 'your-secure-admin-key-here') {
+  // Accept configured admin key from environment or known keys
+  const validKeys = [
+    process.env.ADMIN_SECRET_KEY,
+    'your-secure-admin-key-here',
+    'Farhan_90'  // Admin dashboard key
+  ].filter(Boolean);
+  
+  if (adminKey && validKeys.includes(adminKey as string)) {
     next();
   } else {
-    res.status(401).json({ error: 'Unauthorized' });
+    console.log(`❌ Admin auth failed. Received key: ${adminKey}, Expected one of: ${validKeys.join(', ')}`);
+    res.status(401).json({ error: 'Unauthorized', message: 'Invalid admin key' });
   }
 };
 
@@ -83,7 +90,11 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
     const search = req.query.search as string || '';
+    const sortBy = req.query.sortBy as string || '';
+    const sortOrder = req.query.sortOrder as string || '';
     const skip = (page - 1) * limit;
+
+    console.log('📊 Admin /users request:', { page, limit, search, sortBy, sortOrder });
 
     // Build search query
     const searchQuery: any = {};
@@ -94,14 +105,24 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
       ];
     }
 
+    // Build sort query
+    let sortQuery: any = { createdAt: -1 }; // Default sort by creation date
+    if (sortBy === 'credits' && (sortOrder === 'asc' || sortOrder === 'desc')) {
+      sortQuery = { credits: sortOrder === 'asc' ? 1 : -1 };
+      console.log('💳 Sorting by credits:', sortQuery);
+    }
+
     const [users, total] = await Promise.all([
       User.find(searchQuery)
-        .select('name phone profilePicture about createdAt')
-        .sort({ createdAt: -1 })
+        .select('name phone profilePicture about createdAt credits')
+        .sort(sortQuery)
         .skip(skip)
         .limit(limit),
       User.countDocuments(searchQuery)
     ]);
+
+    console.log(`✅ Found ${users.length} users (Total: ${total}). First user credits: ${users[0]?.credits}, Last user credits: ${users[users.length - 1]?.credits}`);
+
 
     // Get additional stats for each user
     const usersWithStats = await Promise.all(
@@ -112,12 +133,16 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
           Contact.countDocuments({ userId: user._id })
         ]);
 
+        // User.credits is the current live balance (already includes all transactions)
+        const totalCredits = user.credits || 0;
+
         return {
           ...user.toObject(),
           stats: {
             cards: cardCount,
             messages: messageCount,
-            contacts: contactCount
+            contacts: contactCount,
+            credits: totalCredits
           }
         };
       })
@@ -818,7 +843,7 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
     const transferDesc = description || `Admin credit - ${amount.toLocaleString('en-IN')} credits`;
     
     await Transaction.create({
-      type: 'admin_credit',
+      type: 'admin_adjustment',
       toUser: recipient._id,
       amount: amount,
       description: transferDesc,
@@ -844,6 +869,69 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
     });
   } catch (error) {
     console.error('❌ Admin transfer error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error during transfer" 
+    });
+  }
+});
+
+// Credit Transfer endpoint (alternative path for admin dashboard)
+router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId, amount, reason } = req.body;
+    
+    // Validation
+    if (!userId || !amount) {
+      return res.status(400).json({ 
+        success: false,
+        message: "User ID and amount are required" 
+      });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Amount must be greater than 0" 
+      });
+    }
+
+    // Get recipient
+    const recipient = await User.findById(userId);
+    if (!recipient) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    // Add credits to recipient
+    const recipientCredits = (recipient as any).credits || 0;
+    recipient.set({ credits: recipientCredits + amount });
+    await recipient.save();
+
+    // Create transaction record
+    const transferDesc = reason || `Admin credit transfer - ${amount.toLocaleString('en-IN')} credits`;
+    
+    await Transaction.create({
+      type: 'admin_adjustment',
+      toUser: recipient._id,
+      amount: amount,
+      description: transferDesc,
+      balanceBefore: recipientCredits,
+      balanceAfter: recipientCredits + amount,
+      status: 'completed'
+    });
+
+    console.log(`✅ Admin transferred ${amount} credits to ${recipient.name}`);
+
+    res.json({
+      success: true,
+      message: `Successfully transferred ${amount} credits to ${recipient.name}`,
+      newBalance: recipientCredits + amount
+    });
+  } catch (error) {
+    console.error('❌ Admin credit transfer error:', error);
     res.status(500).json({ 
       success: false,
       message: "Server error during transfer" 
@@ -922,6 +1010,218 @@ router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Re
   } catch (error) {
     console.error('❌ Transfer position error:', error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /api/admin/referral-tracking - Get comprehensive referral statistics
+router.get("/referral-tracking", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    
+    // Calculate date filter
+    let dateFilter: any = {};
+    if (days > 0) {
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      dateFilter = { createdAt: { $gte: startDate } };
+    }
+
+    // Get all users who have made referrals
+    const usersWithReferrals = await User.find({
+      referralCode: { $exists: true, $ne: null }
+    }).select('_id name phone referralCode createdAt').lean();
+
+    // Count referrals for each user
+    const topReferrersData = await Promise.all(
+      usersWithReferrals.map(async (user: any) => {
+        // Count users referred by this user
+        const referralCount = await User.countDocuments({
+          referredBy: user._id,
+          ...dateFilter
+        });
+
+        // Get total credits earned from referrals
+        const referralTransactions = await Transaction.find({
+          type: 'referral_bonus',
+          toUser: user._id,
+          ...dateFilter
+        }).select('amount').lean();
+
+        const creditsEarned = referralTransactions.reduce((sum, tx: any) => sum + (tx.amount || 0), 0);
+
+        return {
+          userId: user._id.toString(),
+          name: user.name,
+          phone: user.phone,
+          referralCode: user.referralCode,
+          totalReferrals: referralCount,
+          creditsEarned,
+          joinedDate: user.createdAt
+        };
+      })
+    );
+
+    // Filter out users with 0 referrals and sort by total referrals
+    const topReferrers = topReferrersData
+      .filter(r => r.totalReferrals > 0)
+      .sort((a, b) => b.totalReferrals - a.totalReferrals)
+      .slice(0, 100); // Top 100 referrers
+
+    // Get overall statistics
+    const totalReferrals = await User.countDocuments({
+      referredBy: { $exists: true, $ne: null },
+      ...dateFilter
+    });
+
+    const totalReferralTransactions = await Transaction.find({
+      type: 'referral_bonus',
+      ...dateFilter
+    }).select('amount').lean();
+
+    const totalReferralCreditsGiven = totalReferralTransactions.reduce((sum, tx: any) => sum + (tx.amount || 0), 0);
+
+    const uniqueReferrers = topReferrers.length;
+    const averageReferralsPerUser = uniqueReferrers > 0 ? totalReferrals / uniqueReferrers : 0;
+
+    // Get recent referral activity
+    const recentReferredUsers = await User.find({
+      referredBy: { $exists: true, $ne: null },
+      ...dateFilter
+    })
+      .select('name phone referredBy createdAt')
+      .populate('referredBy', 'name referralCode')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Get corresponding transactions for credits awarded
+    const recentActivity = await Promise.all(
+      recentReferredUsers.map(async (user: any) => {
+        const transaction = await Transaction.findOne({
+          type: 'referral_bonus',
+          fromUser: user._id
+        }).select('amount').lean();
+
+        return {
+          referrerName: user.referredBy?.name || 'Unknown',
+          referrerCode: user.referredBy?.referralCode || 'N/A',
+          newUserName: user.name,
+          newUserPhone: user.phone,
+          date: user.createdAt,
+          creditsAwarded: (transaction as any)?.amount || 0
+        };
+      })
+    );
+
+    // Get referral trends (daily count for the period)
+    const referralTrends: Array<{ date: string; count: number }> = [];
+    if (days > 0 && days <= 90) {
+      const trendDays = days > 30 ? 30 : days;
+      for (let i = trendDays - 1; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        date.setHours(0, 0, 0, 0);
+        
+        const nextDate = new Date(date);
+        nextDate.setDate(nextDate.getDate() + 1);
+
+        const count = await User.countDocuments({
+          referredBy: { $exists: true, $ne: null },
+          createdAt: { $gte: date, $lt: nextDate }
+        });
+
+        referralTrends.push({
+          date: date.toISOString().split('T')[0],
+          count
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        totalReferrals,
+        totalReferralCreditsGiven,
+        uniqueReferrers,
+        averageReferralsPerUser,
+        topReferrers,
+        recentActivity,
+        referralTrends
+      }
+    });
+  } catch (error) {
+    console.error('❌ Referral tracking error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
+// GET /api/admin/referral-chain/:userId - Get detailed referral chain for a specific user
+router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log(`📊 Fetching referral chain for user: ${userId}`);
+
+    // Get the user's details
+    const user = await User.findById(userId).select('name phone referralCode createdAt').lean() as any;
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Find all users referred by this user
+    const referredUsers = await User.find({ referredBy: userId })
+      .select('_id name phone referralCode createdAt referredBy credits')
+      .sort({ createdAt: -1 })
+      .lean() as any[];
+
+    // For each referred user, count their own referrals
+    const referredUsersWithStats = await Promise.all(
+      referredUsers.map(async (refUser: any) => {
+        const refUserReferralCount = await User.countDocuments({ referredBy: refUser._id });
+        
+        // Use the User.credits field directly (it's the live balance)
+        const creditsEarned = refUser.credits || 0;
+
+        return {
+          userId: refUser._id.toString(),
+          name: refUser.name,
+          phone: refUser.phone,
+          referralCode: refUser.referralCode,
+          totalReferrals: refUserReferralCount,
+          creditsEarned,
+          joinedDate: refUser.createdAt
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          userId: user._id.toString(),
+          name: user.name,
+          phone: user.phone,
+          referralCode: user.referralCode,
+          joinedDate: user.createdAt
+        },
+        referredUsers: referredUsersWithStats,
+        totalCount: referredUsersWithStats.length
+      }
+    });
+
+  } catch (error: any) {
+    console.error("❌ Error fetching referral chain:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch referral chain"
+    });
   }
 });
 
