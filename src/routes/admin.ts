@@ -840,7 +840,7 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
     await recipient.save();
 
     // Create transaction record
-    const transferDesc = description || `Admin credit - ${amount.toLocaleString('en-IN')} credits`;
+    const transferDesc = description || `Credited by Instantlly`;
     
     await Transaction.create({
       type: 'admin_adjustment',
@@ -1005,7 +1005,7 @@ router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) 
     await recipient.save();
 
     // Create transaction record
-    const transferDesc = reason || `Admin credit transfer - ${amount.toLocaleString('en-IN')} credits`;
+    const transferDesc = reason || `Credited by Instantlly`;
     
     await Transaction.create({
       type: 'admin_adjustment',
