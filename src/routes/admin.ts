@@ -911,11 +911,16 @@ router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res:
     await user.save();
 
     // Create transaction record for the adjustment
+    const transactionDescription = creditDifference >= 0 
+      ? 'Added by Instantlly Cards'
+      : 'Deducted by Instantlly Cards';
+    
     await Transaction.create({
       type: 'admin_adjustment',
       toUser: user._id,
       amount: Math.abs(creditDifference),
-      description: reason || `Admin ${creditDifference >= 0 ? 'added' : 'deducted'} ${Math.abs(creditDifference).toLocaleString('en-IN')} credits`,
+      description: transactionDescription,
+      note: reason || undefined,
       balanceBefore: oldCredits,
       balanceAfter: newCredits,
       status: 'completed'

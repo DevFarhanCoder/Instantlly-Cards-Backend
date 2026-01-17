@@ -12,6 +12,7 @@ const TransactionSchema = new Schema(
     toUser: { type: Schema.Types.ObjectId, ref: 'User' },
     amount: { type: Number, required: true },
     description: { type: String, required: true },
+    note: { type: String }, // Optional admin reason/note
     balanceBefore: { type: Number },
     balanceAfter: { type: Number },
     relatedAd: { type: Schema.Types.ObjectId, ref: 'Ad' },
