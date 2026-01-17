@@ -876,6 +876,95 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
   }
 });
 
+// PUT /api/admin/users/:userId/update-credits - Admin update user credits directly
+router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { credits, reason } = req.body;
+
+    console.log('💰 Update Credits Request:', { userId, credits, reason });
+
+    // Validate inputs
+    if (credits === undefined || credits === null || credits < 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Credits must be 0 or greater' 
+      });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+
+    const oldCredits = (user as any).credits || 0;
+    const newCredits = parseInt(credits);
+    const creditDifference = newCredits - oldCredits;
+
+    // Update user credits
+    user.set({ credits: newCredits });
+    await user.save();
+
+    // Create transaction record for the adjustment
+    await Transaction.create({
+      type: 'admin_adjustment',
+      toUser: user._id,
+      amount: Math.abs(creditDifference),
+      description: reason || `Admin ${creditDifference >= 0 ? 'added' : 'deducted'} ${Math.abs(creditDifference).toLocaleString('en-IN')} credits`,
+      balanceBefore: oldCredits,
+      balanceAfter: newCredits,
+      status: 'completed'
+    });
+
+    // Emit Socket.IO event to notify user's mobile app
+    try {
+      const io = (global as any).io;
+      if (io) {
+        io.emit(`credits_updated_${userId}`, {
+          userId: userId,
+          oldCredits,
+          newCredits,
+          creditDifference,
+          timestamp: new Date()
+        });
+        console.log(`📡 Emitted credits_updated event for user ${userId}`);
+      }
+    } catch (socketError) {
+      console.log('⚠️ Socket.IO not available for credit update notification');
+    }
+    
+    console.log(`✅ Credits updated for ${user.name}:`, {
+      old: oldCredits,
+      new: newCredits,
+      difference: creditDifference
+    });
+    
+    res.json({ 
+      success: true,
+      message: `Credits ${creditDifference >= 0 ? 'increased' : 'decreased'} successfully from ${oldCredits.toLocaleString('en-IN')} to ${newCredits.toLocaleString('en-IN')}`,
+      user: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone,
+        oldCredits: oldCredits,
+        newCredits: newCredits,
+        creditDifference: creditDifference
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error updating credits:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update credits'
+    });
+  }
+});
+
 // Credit Transfer endpoint (alternative path for admin dashboard)
 router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) => {
   try {

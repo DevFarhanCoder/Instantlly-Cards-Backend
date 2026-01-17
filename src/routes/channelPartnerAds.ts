@@ -5,15 +5,16 @@ import mongoose from 'mongoose';
 import Ad from '../models/Ad';
 import User from '../models/User';
 import Transaction from '../models/Transaction';
+import DesignRequest from '../models/DesignRequest';
 import { Readable } from 'stream';
 
 const router = express.Router();
 
-// Configure multer for memory storage - images only
+// Configure multer for memory storage - images only (16MB limit)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 16 * 1024 * 1024, // 16MB limit for images
   },
   fileFilter: (req, file, cb) => {
     // Accept images only
@@ -41,11 +42,11 @@ const uploadVideos = multer({
   },
 });
 
-// Configure multer for mixed uploads (images + videos)
+// Configure multer for mixed uploads (images + videos) - supports both
 const uploadMixed = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit (covers both 16MB images and 50MB videos)
   },
   fileFilter: (req, file, cb) => {
     // Accept images and videos
@@ -752,6 +753,7 @@ router.put(
           try {
             await bucket.delete(imageId);
           } catch (error) {
+            
             console.warn(`⚠️ Failed to delete old image ${imageId}:`, error);
           }
         }
@@ -821,6 +823,232 @@ router.put(
     }
   }
 );
+
+/**
+ * POST /api/channel-partner/ads/design-request
+ * Submit a design request when user doesn't have ad design
+ * Fields: webLinks (array), phoneNumber, adText, businessAddress, referenceImages, referenceVideos
+ * NO AUTH REQUIRED - Anyone can submit design requests
+ */
+router.post(
+  '/design-request',
+  uploadMixed.fields([
+    { name: 'referenceImages', maxCount: 10 },
+    { name: 'referenceVideos', maxCount: 5 },
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      console.log('📤 Design Request submission:', {
+        body: req.body,
+        files: req.files,
+      });
+
+      const { businessName, email, webLinks, phoneNumber, adText, businessAddress, uploaderPhone, uploaderName, userId, adType, channelType } = req.body;
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+
+      // Parse webLinks if it's a JSON string
+      let parsedWebLinks: string[] = [];
+      try {
+        if (webLinks) {
+          parsedWebLinks = typeof webLinks === 'string' ? JSON.parse(webLinks) : webLinks;
+          parsedWebLinks = parsedWebLinks.filter(link => link && link.trim().length > 0);
+        }
+      } catch (e) {
+        parsedWebLinks = [];
+      }
+
+      // Validation - at least one content should be provided
+      const hasWebLinks = parsedWebLinks.length > 0;
+      const hasPhoneNumber = phoneNumber && phoneNumber.trim().length > 0;
+      const hasAdText = adText && adText.trim().length > 0;
+      const hasBusinessAddress = businessAddress && businessAddress.trim().length > 0;
+      const hasImages = files?.referenceImages && files.referenceImages.length > 0;
+      const hasVideos = files?.referenceVideos && files.referenceVideos.length > 0;
+
+      if (!hasWebLinks && !hasPhoneNumber && !hasAdText && !hasBusinessAddress && !hasImages && !hasVideos) {
+        return res.status(400).json({
+          message: 'Please provide at least one of: Web Links, Phone Number, Ad Text, Business Address, or Images/Videos',
+        });
+      }
+
+      if (!uploaderPhone) {
+        return res.status(400).json({
+          message: 'Uploader phone number is required',
+        });
+      }
+
+      const db = mongoose.connection.db;
+      if (!db) {
+        throw new Error('Database connection not established');
+      }
+
+      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
+      
+      const referenceImageIds: ObjectId[] = [];
+      const referenceVideoIds: ObjectId[] = [];
+
+      // Upload multiple reference images if provided
+      if (hasImages) {
+        for (let i = 0; i < files.referenceImages.length; i++) {
+          const imageFile = files.referenceImages[i];
+          const imageReadable = new Readable();
+          imageReadable.push(imageFile.buffer);
+          imageReadable.push(null);
+
+          const imageStream = bucket.openUploadStream(`design_ref_img_${Date.now()}_${i}.jpg`, {
+            contentType: imageFile.mimetype,
+            metadata: {
+              type: 'design-reference-image',
+              originalName: imageFile.originalname,
+            },
+          });
+
+          const imageId = await new Promise<ObjectId>((resolve, reject) => {
+            imageReadable
+              .pipe(imageStream)
+              .on('finish', () => resolve(imageStream.id as ObjectId))
+              .on('error', reject);
+          });
+
+          referenceImageIds.push(imageId);
+          console.log(`✅ Uploaded reference image ${i + 1} to GridFS: ${imageId}`);
+        }
+      }
+
+      // Upload multiple reference videos if provided
+      if (hasVideos) {
+        for (let i = 0; i < files.referenceVideos.length; i++) {
+          const videoFile = files.referenceVideos[i];
+          const videoReadable = new Readable();
+          videoReadable.push(videoFile.buffer);
+          videoReadable.push(null);
+
+          const videoStream = bucket.openUploadStream(`design_ref_vid_${Date.now()}_${i}.mp4`, {
+            contentType: videoFile.mimetype,
+            metadata: {
+              type: 'design-reference-video',
+              originalName: videoFile.originalname,
+            },
+          });
+
+          const videoId = await new Promise<ObjectId>((resolve, reject) => {
+            videoReadable
+              .pipe(videoStream)
+              .on('finish', () => resolve(videoStream.id as ObjectId))
+              .on('error', reject);
+          });
+
+          referenceVideoIds.push(videoId);
+          console.log(`✅ Uploaded reference video ${i + 1} to GridFS: ${videoId}`);
+        }
+      }
+
+      // Create design request
+      const designRequest = new DesignRequest({
+        businessName: businessName?.trim() || '',
+        email: email?.trim() || '',
+        webLinks: parsedWebLinks,
+        phoneNumber: phoneNumber?.trim() || '',
+        adText: adText?.trim() || '',
+        businessAddress: businessAddress?.trim() || '',
+        adType: adType || 'image',
+        channelType: channelType || 'withoutChannel',
+        referenceImagesGridFS: referenceImageIds,
+        referenceVideosGridFS: referenceVideoIds,
+        uploaderPhone,
+        uploaderName: uploaderName || 'Mobile User',
+        userId: userId || '',
+        status: 'pending',
+      });
+
+      await designRequest.save();
+
+      console.log(`✅ Design Request created:`, {
+        id: designRequest._id,
+        uploaderPhone: designRequest.uploaderPhone,
+        uploaderName: designRequest.uploaderName,
+        webLinksCount: parsedWebLinks.length,
+        hasPhoneNumber,
+        hasAdText,
+        hasBusinessAddress,
+        imagesCount: referenceImageIds.length,
+        videosCount: referenceVideoIds.length,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Design request submitted successfully! Our team will create the ad design for you.',
+        designRequest: {
+          id: designRequest._id,
+          businessName: designRequest.businessName,
+          email: designRequest.email,
+          webLinks: designRequest.webLinks,
+          phoneNumber: designRequest.phoneNumber,
+          adText: designRequest.adText,
+          businessAddress: designRequest.businessAddress,
+          adType: designRequest.adType,
+          channelType: designRequest.channelType,
+          referenceImagesCount: referenceImageIds.length,
+          referenceVideosCount: referenceVideoIds.length,
+          status: designRequest.status,
+          createdAt: designRequest.createdAt,
+        },
+      });
+    } catch (error) {
+      console.error('❌ Design request submission error:', error);
+
+      if (error instanceof Error) {
+        return res.status(500).json({
+          message: 'Failed to submit design request',
+          error: error.message,
+        });
+      }
+
+      res.status(500).json({ message: 'Failed to submit design request' });
+    }
+  }
+);
+
+/**
+ * GET /api/channel-partner/ads/design-requests
+ * Get design requests for a user by phone
+ */
+router.get('/design-requests', async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.query;
+
+    if (!phone) {
+      return res.status(400).json({ message: 'Phone number is required' });
+    }
+
+    const designRequests = await DesignRequest.find({ uploaderPhone: phone as string })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json({
+      success: true,
+      count: designRequests.length,
+      designRequests: designRequests.map(dr => ({
+        id: dr._id,
+        webLinks: dr.webLinks || [],
+        phoneNumber: dr.phoneNumber || '',
+        adText: dr.adText,
+        businessAddress: dr.businessAddress || '',
+        adType: dr.adType,
+        channelType: dr.channelType,
+        referenceImagesCount: dr.referenceImagesGridFS?.length || 0,
+        referenceVideosCount: dr.referenceVideosGridFS?.length || 0,
+        status: dr.status,
+        adminNotes: dr.adminNotes,
+        createdAt: dr.createdAt,
+        updatedAt: dr.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error('❌ Error fetching design requests:', error);
+    res.status(500).json({ message: 'Failed to fetch design requests' });
+  }
+});
 
 /**
  * DELETE /api/channel-partner/ads/:id
