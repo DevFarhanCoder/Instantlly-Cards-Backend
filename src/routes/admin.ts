@@ -1,5 +1,7 @@
 // src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import { GridFSBucket } from "mongodb";
 import User from "../models/User";
 import Card from "../models/Card";
 import Message from "../models/Message";
@@ -423,28 +425,40 @@ router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Resp
 
     console.log(`✅ Found ${pendingAds.length} pending ads`);
 
-    const adsWithDetails = pendingAds.map((ad) => ({
-      id: ad._id,
-      title: ad.title,
-      adType: (ad as any).adType || 'image',
-      phoneNumber: ad.phoneNumber,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-      status: ad.status,
-      uploadedBy: ad.uploadedBy,
-      uploaderName: ad.uploaderName,
-      priority: ad.priority,
-      bottomImageId: ad.bottomImageGridFS,
-      fullscreenImageId: ad.fullscreenImageGridFS,
-      bottomVideoId: (ad as any).bottomVideoGridFS,
-      fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
-      hasBottomVideo: !!(ad as any).bottomVideoGridFS,
-      hasFullscreenVideo: !!(ad as any).fullscreenVideoGridFS,
-      impressions: ad.impressions,
-      clicks: ad.clicks,
-      createdAt: ad.createdAt,
-      updatedAt: ad.updatedAt,
-    }));
+    const adsWithDetails = pendingAds.map((ad) => {
+      // Debug: Log raw ad document
+      console.log('Raw ad document:', {
+        id: ad._id,
+        adType: (ad as any).adType,
+        bottomVideoGridFS: (ad as any).bottomVideoGridFS,
+        fullscreenVideoGridFS: (ad as any).fullscreenVideoGridFS,
+        bottomImageGridFS: ad.bottomImageGridFS,
+        fullscreenImageGridFS: ad.fullscreenImageGridFS
+      });
+
+      return {
+        id: ad._id,
+        title: ad.title,
+        adType: (ad as any).adType || 'image',
+        phoneNumber: ad.phoneNumber,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+        status: ad.status,
+        uploadedBy: ad.uploadedBy,
+        uploaderName: ad.uploaderName,
+        priority: ad.priority,
+        bottomImageId: ad.bottomImageGridFS,
+        fullscreenImageId: ad.fullscreenImageGridFS,
+        bottomVideoId: (ad as any).bottomVideoGridFS,
+        fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
+        hasBottomVideo: !!(ad as any).bottomVideoGridFS,
+        hasFullscreenVideo: !!(ad as any).fullscreenVideoGridFS,
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        createdAt: ad.createdAt,
+        updatedAt: ad.updatedAt,
+      };
+    });
 
     res.json({
       success: true,
@@ -615,6 +629,58 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         success: false,
         message: `Advertisement is already ${ad.status}`,
       });
+    }
+
+    // DELETE IMAGES/VIDEOS FROM GRIDFS WHEN REJECTED
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const imageBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adImages' });
+        const videoBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adVideos' });
+        
+        // Delete bottom image if exists
+        if (ad.bottomImageGridFS) {
+          try {
+            await imageBucket.delete(ad.bottomImageGridFS);
+            console.log(`🗑️ Deleted bottom image: ${ad.bottomImageGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete bottom image: ${err}`);
+          }
+        }
+        
+        // Delete fullscreen image if exists
+        if (ad.fullscreenImageGridFS) {
+          try {
+            await imageBucket.delete(ad.fullscreenImageGridFS);
+            console.log(`🗑️ Deleted fullscreen image: ${ad.fullscreenImageGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete fullscreen image: ${err}`);
+          }
+        }
+        
+        // Delete bottom video if exists
+        if ((ad as any).bottomVideoGridFS) {
+          try {
+            await videoBucket.delete((ad as any).bottomVideoGridFS);
+            console.log(`🗑️ Deleted bottom video: ${(ad as any).bottomVideoGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete bottom video: ${err}`);
+          }
+        }
+        
+        // Delete fullscreen video if exists
+        if ((ad as any).fullscreenVideoGridFS) {
+          try {
+            await videoBucket.delete((ad as any).fullscreenVideoGridFS);
+            console.log(`🗑️ Deleted fullscreen video: ${(ad as any).fullscreenVideoGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete fullscreen video: ${err}`);
+          }
+        }
+      }
+    } catch (deleteError) {
+      console.error('❌ Error deleting files:', deleteError);
+      // Continue with rejection even if deletion fails
     }
 
     // Update ad status to rejected
