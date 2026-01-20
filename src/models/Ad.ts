@@ -44,7 +44,7 @@ const AdSchema = new mongoose.Schema(
     // GridFS reference for bottom video
     bottomVideoGridFS: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "uploads.files"
+      ref: "adVideos.files"
     },
 
     // Video Ad Support - Fullscreen Video (624 × 1000px)
@@ -56,7 +56,7 @@ const AdSchema = new mongoose.Schema(
     // GridFS reference for fullscreen video
     fullscreenVideoGridFS: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "uploads.files"
+      ref: "adVideos.files"
     },
 
     // Ad Type - image or video

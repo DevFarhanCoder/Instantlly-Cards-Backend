@@ -90,12 +90,12 @@ app.use(compression()); // Enable gzip compression for faster responses
 
 // Parse JSON bodies - with type checking for various content-types
 app.use(express.json({ 
-  limit: "20mb", // Increased to 20MB to support larger card images (up to 15MB)
+  limit: "150mb", // Increased to 150MB to support video ads
   type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
 })); 
 
 // Parse URL-encoded bodies (for form submissions)
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "150mb" }));
 
 // Request logging middleware for debugging
 app.use((req, res, next) => {

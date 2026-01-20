@@ -30,7 +30,8 @@ const upload = multer({
 const uploadVideos = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit for videos
+    fileSize: 100 * 1024 * 1024, // 100MB limit for videos
+    fieldSize: 100 * 1024 * 1024, // 100MB field size
   },
   fileFilter: (req, file, cb) => {
     // Accept videos only
@@ -448,14 +449,14 @@ router.post(
         type: 'ad_deduction',
         fromUser: user._id,
         toUser: null,
-        amount: -1020,
+        amount: -1200,
         description: `Video Ad creation: ${title}`,
         balanceBefore: currentCredits,
-        balanceAfter: currentCredits - 1020,
+        balanceAfter: currentCredits - 1200,
         status: 'completed'
       });
 
-      console.log(`✅ Deducted 1020 credits from ${user.name} (${uploaderPhone}). Remaining: ${(user as any).credits}`);
+      console.log(`✅ Deducted 1200 credits from ${user.name} (${uploaderPhone}). Remaining: ${(user as any).credits}`);
 
       // Upload videos to GridFS
       const db = mongoose.connection.db;
@@ -463,7 +464,7 @@ router.post(
         throw new Error('Database connection not established');
       }
 
-      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
+      const bucket = new GridFSBucket(db, { bucketName: 'adVideos' });
       
       // Upload bottom video (required)
       const bottomVideoFile = files[0];
@@ -539,11 +540,9 @@ router.post(
       });
 
       res.status(201).json({
-        message: 'Video ad submitted successfully! 1020 credits deducted. Admin will review your ad.',
-        creditsDeducted: 1020,
+        message: 'Video ad submitted successfully! 1200 credits deducted. Admin will review your ad.',
+        creditsDeducted: 1200,
         remainingCredits: user.credits,
-        cashPaymentRequired: 180,
-        totalCost: '1020 credits + ₹180 cash',
         ad: {
           id: ad._id,
           title: ad.title,
@@ -592,7 +591,7 @@ router.get('/video/:id', async (req: Request, res: Response) => {
       throw new Error('Database connection not established');
     }
 
-    const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
+    const bucket = new GridFSBucket(db, { bucketName: 'adVideos' });
     
     // Check if file exists
     const files = await bucket.find({ _id: new ObjectId(id) }).toArray();
