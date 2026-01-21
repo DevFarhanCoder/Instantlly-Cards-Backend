@@ -702,6 +702,7 @@ r.get("/received", async (req: AuthReq, res) => {
       
       recipientId,
       senderId: { $in: mutualSenders } // Only show if recipient has also sent card back
+   ,
     };
     if (cursor) {
       query._id = { $lt: cursor };
@@ -1092,6 +1093,7 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
       return res.status(404).json({ message: "Sender not found" });
     }
 
+
     // Check for duplicate - prevent sharing same card to same group twice
     const existingGroupShare = await GroupSharedCard.findOne({
       cardId,
@@ -1100,13 +1102,11 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     });
 
     if (existingGroupShare) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         message: "Card already shared to group",
         error: "You have already sent this card to this group. You can only send a card once to each group."
       });
     }
-
-
 
     // Create group shared card record
     const groupSharedCard = await GroupSharedCard.create({
