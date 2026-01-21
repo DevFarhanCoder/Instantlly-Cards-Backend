@@ -66,14 +66,13 @@ router.get("/active", async (req: Request, res: Response) => {
 
     // Get ads that are currently active (within date range) AND approved
     // Only fetch metadata, NOT images/videos (GridFS handles media separately)
-    // Exclude video ads - only show image ads in bottom carousel
+    // Include both image and video ads in bottom carousel
     const ads = await Ad.find({
       startDate: { $lte: now },
       endDate: { $gte: now },
       status: 'approved', // ONLY show approved ads to mobile users
-      adType: { $ne: 'video' } // Exclude video ads from bottom carousel
     })
-      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS knowMoreUrl bottomImage')
+      .select('title phoneNumber priority impressions clicks startDate endDate bottomImageGridFS fullscreenImageGridFS bottomVideoGridFS fullscreenVideoGridFS adType knowMoreUrl bottomImage')
       .sort({ priority: -1, createdAt: -1 })
       .limit(50) // Can handle more ads now (no heavy base64 payload)
       .lean()
@@ -93,26 +92,48 @@ router.get("/active", async (req: Request, res: Response) => {
       });
     }
 
-    // Transform ads to include image URLs instead of base64
-    const adsWithUrls = ads.map(ad => ({
-      _id: ad._id,
-      title: ad.title,
-      phoneNumber: ad.phoneNumber,
-      priority: ad.priority,
-      impressions: ad.impressions,
-      clicks: ad.clicks,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-      // Image ad URLs
-      bottomImageUrl: ad.bottomImageGridFS 
-        ? `/api/ads/image/${ad._id}/bottom`
-        : null,
-      fullscreenImageUrl: ad.fullscreenImageGridFS 
-        ? `/api/ads/image/${ad._id}/fullscreen`
-        : null,
-      hasBottomImage: !!ad.bottomImageGridFS,
-      hasFullscreenImage: !!ad.fullscreenImageGridFS,
-    }));
+    // Transform ads to include image/video URLs instead of base64
+    const adsWithUrls = ads.map((ad: any) => {
+      // Detect ad type if not set
+      let detectedAdType = ad.adType;
+      if (!detectedAdType) {
+        if (ad.bottomVideoGridFS || ad.fullscreenVideoGridFS) {
+          detectedAdType = 'video';
+        } else {
+          detectedAdType = 'image';
+        }
+      }
+      
+      return {
+        _id: ad._id,
+        title: ad.title,
+        phoneNumber: ad.phoneNumber,
+        priority: ad.priority,
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+        adType: detectedAdType,
+        // Image URLs
+        bottomImageUrl: ad.bottomImageGridFS 
+          ? `/api/ads/image/${ad._id}/bottom`
+          : null,
+        fullscreenImageUrl: ad.fullscreenImageGridFS 
+          ? `/api/ads/image/${ad._id}/fullscreen`
+          : null,
+        hasBottomImage: !!ad.bottomImageGridFS,
+        hasFullscreenImage: !!ad.fullscreenImageGridFS,
+        // Video URLs
+        bottomVideoUrl: ad.bottomVideoGridFS
+          ? `/api/channel-partner/ads/video/${ad.bottomVideoGridFS}`
+          : null,
+        fullscreenVideoUrl: ad.fullscreenVideoGridFS
+          ? `/api/channel-partner/ads/video/${ad.fullscreenVideoGridFS}`
+          : null,
+        hasBottomVideo: !!ad.bottomVideoGridFS,
+        hasFullscreenVideo: !!ad.fullscreenVideoGridFS,
+      };
+    });
 
     // AWS Cloud (Primary) - Render backup handled by client
     const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
@@ -800,12 +821,23 @@ router.get("/", async (req: Request, res: Response) => {
       try {
         const adId = ad._id.toString();
         
+        // Detect ad type if not set (for backward compatibility)
+        let detectedAdType = ad.adType;
+        if (!detectedAdType) {
+          if (ad.bottomVideoGridFS || ad.fullscreenVideoGridFS) {
+            detectedAdType = 'video';
+          } else {
+            detectedAdType = 'image';
+          }
+        }
+        
         // ALL ads (both legacy and new) now use GridFS image endpoints
         // This ensures consistent behavior and avoids sending large base64 in response
         return {
           ...ad,
           _id: adId,
-          // Use GridFS endpoints for images (works for both old and new ads)
+          adType: detectedAdType,
+          // Image URLs
           bottomImage: ad.bottomImageGridFS 
             ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
             : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
@@ -813,7 +845,12 @@ router.get("/", async (req: Request, res: Response) => {
             ? `${imageBaseUrl}/api/ads/image/${adId}/fullscreen`
             : "", // No fullscreen if not set
           bottomImageGridFS: ad.bottomImageGridFS?.toString(),
-          fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString()
+          fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString(),
+          // Video fields
+          bottomVideoId: ad.bottomVideoGridFS?.toString(),
+          fullscreenVideoId: ad.fullscreenVideoGridFS?.toString(),
+          hasBottomVideo: !!ad.bottomVideoGridFS,
+          hasFullscreenVideo: !!ad.fullscreenVideoGridFS,
         };
       } catch (mapError) {
         console.error('❌ Error transforming ad:', ad._id, mapError);
