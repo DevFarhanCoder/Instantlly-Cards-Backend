@@ -255,6 +255,7 @@ router.post(
       // Create ad with pending status
       const ad = new Ad({
         title,
+        adType: 'image', // Explicitly set ad type
         bottomImage: '', // Empty when using GridFS
         bottomImageGridFS: bottomImageId,
         fullscreenImage: '',

@@ -436,10 +436,21 @@ router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Resp
         fullscreenImageGridFS: ad.fullscreenImageGridFS
       });
 
+      // Auto-detect ad type if not set (for backward compatibility)
+      let detectedAdType = (ad as any).adType;
+      if (!detectedAdType) {
+        // If has video GridFS references, it's a video ad
+        if ((ad as any).bottomVideoGridFS || (ad as any).fullscreenVideoGridFS) {
+          detectedAdType = 'video';
+        } else {
+          detectedAdType = 'image';
+        }
+      }
+
       return {
         id: ad._id,
         title: ad.title,
-        adType: (ad as any).adType || 'image',
+        adType: detectedAdType,
         phoneNumber: ad.phoneNumber,
         startDate: ad.startDate,
         endDate: ad.endDate,

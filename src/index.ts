@@ -81,8 +81,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'Cache-Control', 'Pragma', 'Expires'],
-  exposedHeaders: ['Content-Length', 'Content-Type'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'Cache-Control', 'Pragma', 'Expires', 'Range'],
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges'],
   maxAge: 86400 // 24 hours
 }));
 
@@ -117,8 +117,8 @@ app.use((req, res, next) => {
   }
   
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires');
-  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires, Range');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
   
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
