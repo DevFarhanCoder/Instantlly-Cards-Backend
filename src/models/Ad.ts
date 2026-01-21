@@ -34,6 +34,31 @@ const AdSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "adImages.files"
     },
+     // ===== 🔥 NEW: MEDIA TYPE FLAGS =====
+    // WHY: frontend ko pata ho image render kare ya video player
+    bottomMediaType: {
+      type: String,
+      enum: ["image", "video"],
+      default: "image",
+    },
+
+    fullscreenMediaType: {
+      type: String,
+      enum: ["image", "video"],
+      default: "image",
+    },
+
+    // ===== 🔥 NEW: S3 VIDEO URLS =====
+    // WHY: videos GridFS me heavy padte hain, S3 best
+    bottomVideoUrl: {
+      type: String,
+      default: null,
+    },
+
+    fullscreenVideoUrl: {
+      type: String,
+      default: null,
+    },
 
     // Video Ad Support - Bottom Video (624 × 174px)
     bottomVideo: {

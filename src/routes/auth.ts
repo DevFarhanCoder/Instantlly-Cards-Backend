@@ -11,6 +11,8 @@ import Transaction from "../models/Transaction";
 import Card from "../models/Card";
 import CreditConfig from "../models/CreditConfig";
 // Force language server refresh
+import CreditConfig from "../models/CreditConfig";
+// Force language server refresh
 import { requireAuth, AuthReq } from "../middleware/auth";
 import { sendContactJoinedNotification } from "../services/pushNotifications";
 import { storeOTP, verifyOTP as verifyOTPFunc, sendOTPViaFast2SMS, generateOTP } from "../services/fast2smsOtpService";
