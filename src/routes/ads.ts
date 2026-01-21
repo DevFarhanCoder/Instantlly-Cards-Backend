@@ -533,6 +533,17 @@ router.post("/", async (req: Request, res: Response) => {
     
     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
 
+    // Detect media type from base64 data
+    const isBottomVideo = bottomImage?.startsWith('data:video/');
+    const isFullscreenVideo = fullscreenImage?.startsWith('data:video/');
+    const adType = (isBottomVideo || isFullscreenVideo) ? 'video' : 'image';
+
+    console.log('🎬 Media type detection:', {
+      adType,
+      isBottomVideo,
+      isFullscreenVideo
+    });
+
     // Validation
     console.log('🔍 Validating fields:', {
       hasTitle: !!title,
@@ -552,60 +563,92 @@ router.post("/", async (req: Request, res: Response) => {
       });
     }
 
-    // Upload images to GridFS
-    console.log(`📤 Uploading images to GridFS for new ad: ${title}`);
-    console.log(`📏 Bottom image size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
+    // Upload images/videos to GridFS
+    console.log(`📤 Uploading media to GridFS for new ad: ${title}`);
+    console.log(`📏 Bottom ${adType} size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
     if (fullscreenImage) {
-      console.log(`📏 Fullscreen image size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
+      console.log(`📏 Fullscreen ${adType} size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
     }
     
     let bottomImageId;
     let fullscreenImageId = null;
+    let bottomVideoId;
+    let fullscreenVideoId = null;
     
     try {
-      bottomImageId = await gridfsService.uploadBase64(
-        bottomImage,
-        `${Date.now()}_bottom.jpg`,
-        {
-          title,
-          type: "bottom"
-        }
-      );
-      console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
+      if (isBottomVideo) {
+        // Upload to video bucket
+        const videoService = require('../services/gridfsVideoService').gridfsVideoService;
+        bottomVideoId = await videoService.uploadBase64(
+          bottomImage,
+          `${Date.now()}_bottom.mp4`,
+          { title, type: "bottom" }
+        );
+        console.log(`✅ Bottom video uploaded to GridFS: ${bottomVideoId}`);
+      } else {
+        bottomImageId = await gridfsService.uploadBase64(
+          bottomImage,
+          `${Date.now()}_bottom.jpg`,
+          { title, type: "bottom" }
+        );
+        console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
+      }
     } catch (uploadError) {
-      console.error(`❌ Failed to upload bottom image to GridFS:`, uploadError);
-      throw new Error(`Image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+      console.error(`❌ Failed to upload bottom media to GridFS:`, uploadError);
+      throw new Error(`Media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
     }
 
     if (fullscreenImage && fullscreenImage.length > 0) {
       try {
-        fullscreenImageId = await gridfsService.uploadBase64(
-          fullscreenImage,
-          `${Date.now()}_fullscreen.jpg`,
-          {
-            title,
-            type: "fullscreen"
-          }
-        );
-        console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+        if (isFullscreenVideo) {
+          // Upload to video bucket
+          const videoService = require('../services/gridfsVideoService').gridfsVideoService;
+          fullscreenVideoId = await videoService.uploadBase64(
+            fullscreenImage,
+            `${Date.now()}_fullscreen.mp4`,
+            { title, type: "fullscreen" }
+          );
+          console.log(`✅ Fullscreen video uploaded to GridFS: ${fullscreenVideoId}`);
+        } else {
+          fullscreenImageId = await gridfsService.uploadBase64(
+            fullscreenImage,
+            `${Date.now()}_fullscreen.jpg`,
+            { title, type: "fullscreen" }
+          );
+          console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+        }
       } catch (uploadError) {
-        console.error(`❌ Failed to upload fullscreen image to GridFS:`, uploadError);
-        throw new Error(`Fullscreen image upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+        console.error(`❌ Failed to upload fullscreen media to GridFS:`, uploadError);
+        throw new Error(`Fullscreen media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
       }
     }
 
     // Create ad with GridFS references and approval workflow
     const adData: any = {
       title,
-      bottomImage: "", // Empty - using GridFS
-      bottomImageGridFS: bottomImageId,
-      fullscreenImage: "", // Empty - using GridFS
-      fullscreenImageGridFS: fullscreenImageId,
+      adType,
       phoneNumber,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
       priority: priority || 5
     };
+    
+    // Set image/video fields based on type
+    if (adType === 'video') {
+      adData.bottomVideoGridFS = bottomVideoId;
+      adData.fullscreenVideoGridFS = fullscreenVideoId;
+      adData.bottomImage = "";
+      adData.bottomImageGridFS = null;
+      adData.fullscreenImage = "";
+      adData.fullscreenImageGridFS = null;
+    } else {
+      adData.bottomImage = "";
+      adData.bottomImageGridFS = bottomImageId;
+      adData.fullscreenImage = "";
+      adData.fullscreenImageGridFS = fullscreenImageId;
+      adData.bottomVideoGridFS = null;
+      adData.fullscreenVideoGridFS = null;
+    }
     
     // Set approval status based on user type
     if (isAdmin) {
