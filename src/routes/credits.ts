@@ -55,13 +55,15 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
     }
 
     const currentCredits = (user as any).credits || 0;
-    const expiryDate = (user as any).creditsExpiryDate;
+    
+    // Fixed expiry date: March 31, 2026
+    const fixedExpiryDate = new Date('2026-03-31T23:59:59');
     
     // Check if credits have expired
     let activeCredits = currentCredits;
     let isExpired = false;
     
-    if (expiryDate && new Date() > new Date(expiryDate)) {
+    if (new Date() > fixedExpiryDate) {
       // Credits expired, set to 0
       isExpired = true;
       activeCredits = 0;
@@ -77,9 +79,9 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
     res.json({
       success: true,
       credits: activeCredits,
-      creditsExpiryDate: expiryDate,
+      creditsExpiryDate: fixedExpiryDate.toISOString(),
       isExpired: isExpired,
-      daysRemaining: expiryDate ? Math.max(0, Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : null
+      daysRemaining: Math.max(0, Math.ceil((fixedExpiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     });
   } catch (error) {
     console.error("GET BALANCE ERROR", error);
