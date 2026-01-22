@@ -622,11 +622,19 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
 
     // Send push notification to recipient
     try {
+      console.log('🔔 [CREDIT TRANSFER] Checking for pushToken...');
+      console.log(`📱 Recipient pushToken: ${(recipient as any).pushToken ? 'EXISTS' : 'NOT FOUND'}`);
+      
       if ((recipient as any).pushToken) {
         const notificationTitle = "Credits Received";
         const notificationMessage = `Credit received from ${sender.name} - ${amount} credits`;
         
-        await sendPushNotification(
+        console.log(`📤 [CREDIT TRANSFER] Sending push notification to ${recipient.name}`);
+        console.log(`   Title: ${notificationTitle}`);
+        console.log(`   Message: ${notificationMessage}`);
+        console.log(`   Token: ${(recipient as any).pushToken.substring(0, 30)}...`);
+        
+        const notificationSent = await sendPushNotification(
           (recipient as any).pushToken,
           notificationTitle,
           notificationMessage,
@@ -638,6 +646,8 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
             transactionId
           }
         );
+
+        console.log(`📬 Push notification result: ${notificationSent ? 'SUCCESS' : 'FAILED'}`);
 
         // Save notification to database
         await Notification.create({
@@ -654,10 +664,14 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
           read: false
         });
 
-        console.log(`📬 Notification sent to ${recipient.name}`);
+        console.log(`✅ Notification saved to database for ${recipient.name}`);
+      } else {
+        console.log(`⚠️ [CREDIT TRANSFER] Recipient ${recipient.name} has no push token - skipping notification`);
       }
-    } catch (notifError) {
-      console.error('Failed to send notification:', notifError);
+    } catch (notifError: any) {
+      console.error('❌ [CREDIT TRANSFER] Failed to send notification:', notifError);
+      console.error('❌ Error details:', notifError.message);
+      console.error('❌ Stack:', notifError.stack);
       // Don't fail the transfer if notification fails
     }
 
