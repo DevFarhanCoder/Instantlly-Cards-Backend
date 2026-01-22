@@ -574,8 +574,8 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get recipient
-    const recipient = await User.findById(toUserId);
+    // Get recipient (include pushToken for notifications)
+    const recipient = await User.findById(toUserId).select('+pushToken');
     if (!recipient) {
       return res.status(404).json({ 
         success: false,
