@@ -3,7 +3,7 @@ import multer from 'multer';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import Ad from '../models/Ad';
-import AWS from "aws-sdk";
+
 import User from '../models/User';
 import Transaction from '../models/Transaction';
 import DesignRequest from '../models/DesignRequest';
@@ -27,14 +27,7 @@ const upload = multer({
     cb(null, true);
   },
 });
-// Configure AWS S3
-const s3 = new AWS.S3({
-  region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+
 
 // Configure multer for video uploads
 const uploadVideos = multer({
@@ -270,34 +263,6 @@ router.post(
         });
       }
       // }
-      // ---- VIDEO → S3 ----
-      if (bottomMediaType === "video" && bottomVideo) {
-        const key = `ads/bottom/${Date.now()}-${bottomVideo.originalname}`;
-        await s3.putObject({
-          Bucket: process.env.S3_BUCKET!,
-          Key: key,
-          Body: bottomVideo.buffer,
-          ContentType: bottomVideo.mimetype,
-          // ACL: "public-read",
-        }).promise();
-
-        bottomVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
-      }
-      console.log('Bottom video uploaded to S3:', bottomVideoUrl);
-
-      if (fullscreenMediaType === "video" && fullscreenVideo) {
-        const key = `ads/fullscreen/${Date.now()}-${fullscreenVideo.originalname}`;
-        await s3.putObject({
-          Bucket: process.env.S3_BUCKET!,
-          Key: key,
-          Body: fullscreenVideo.buffer,
-          ContentType: fullscreenVideo.mimetype,
-          // ACL: "public-read",
-        }).promise();
-
-        fullscreenVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
-      }
-      console.log('Fullscreen video uploaded to S3:', fullscreenVideoUrl);
 
       // ---- SAVE AD ----
 

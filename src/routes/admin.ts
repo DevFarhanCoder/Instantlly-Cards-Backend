@@ -646,13 +646,13 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
     try {
       const db = mongoose.connection.db;
       if (db) {
-        // Use the same bucket for both images and videos
-        const bucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adImages' });
+        const imageBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adImages' });
+        const videoBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adVideos' });
         
         // Delete bottom image if exists
         if (ad.bottomImageGridFS) {
           try {
-            await bucket.delete(ad.bottomImageGridFS);
+            await imageBucket.delete(ad.bottomImageGridFS);
             console.log(`🗑️ Deleted bottom image: ${ad.bottomImageGridFS}`);
           } catch (err) {
             console.log(`⚠️ Could not delete bottom image: ${err}`);
@@ -662,7 +662,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         // Delete fullscreen image if exists
         if (ad.fullscreenImageGridFS) {
           try {
-            await bucket.delete(ad.fullscreenImageGridFS);
+            await imageBucket.delete(ad.fullscreenImageGridFS);
             console.log(`🗑️ Deleted fullscreen image: ${ad.fullscreenImageGridFS}`);
           } catch (err) {
             console.log(`⚠️ Could not delete fullscreen image: ${err}`);
@@ -672,7 +672,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         // Delete bottom video if exists
         if ((ad as any).bottomVideoGridFS) {
           try {
-            await bucket.delete((ad as any).bottomVideoGridFS);
+            await videoBucket.delete((ad as any).bottomVideoGridFS);
             console.log(`🗑️ Deleted bottom video: ${(ad as any).bottomVideoGridFS}`);
           } catch (err) {
             console.log(`⚠️ Could not delete bottom video: ${err}`);
@@ -682,7 +682,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         // Delete fullscreen video if exists
         if ((ad as any).fullscreenVideoGridFS) {
           try {
-            await bucket.delete((ad as any).fullscreenVideoGridFS);
+            await videoBucket.delete((ad as any).fullscreenVideoGridFS);
             console.log(`🗑️ Deleted fullscreen video: ${(ad as any).fullscreenVideoGridFS}`);
           } catch (err) {
             console.log(`⚠️ Could not delete fullscreen video: ${err}`);
