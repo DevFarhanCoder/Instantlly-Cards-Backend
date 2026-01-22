@@ -645,7 +645,7 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
             amount,
             transactionId
           },
-          'credits' // Use the credits notification channel
+          'default' // Use default channel for backward compatibility with old APKs
         );
 
         console.log(`📬 Push notification result: ${notificationSent ? 'SUCCESS' : 'FAILED'}`);
