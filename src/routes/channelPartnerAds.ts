@@ -515,7 +515,8 @@ router.post(
         throw new Error('Database connection not established');
       }
 
-      const bucket = new GridFSBucket(db, { bucketName: 'adVideos' });
+      // Use the same bucket as images - 'adImages' for both
+      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
       
       // Upload bottom video (required)
       const bottomVideoFile = files[0];
@@ -642,7 +643,8 @@ router.get('/video/:id', async (req: Request, res: Response) => {
       throw new Error('Database connection not established');
     }
 
-    const bucket = new GridFSBucket(db, { bucketName: 'adVideos' });
+    // Use the same bucket as images - gridfsService uses 'adImages' for both
+    const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
     
     // Check if file exists
     const files = await bucket.find({ _id: new ObjectId(id) }).toArray();

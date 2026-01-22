@@ -216,7 +216,11 @@ class GridFSService {
       png: "image/png",
       gif: "image/gif",
       webp: "image/webp",
-      svg: "image/svg+xml"
+      svg: "image/svg+xml",
+      mp4: "video/mp4",
+      webm: "video/webm",
+      mov: "video/quicktime",
+      avi: "video/x-msvideo"
     };
     return mimeTypes[ext || ""] || "image/jpeg";
   }

@@ -575,9 +575,8 @@ router.post("/", async (req: Request, res: Response) => {
     
     try {
       if (isBottomVideo) {
-        // Upload to video bucket
-        const videoService = require('../services/gridfsVideoService').gridfsVideoService;
-        bottomVideoId = await videoService.uploadBase64(
+        // Upload video using the same gridfsService (it handles both images and videos)
+        bottomVideoId = await gridfsService.uploadBase64(
           bottomImage,
           `${Date.now()}_bottom.mp4`,
           { title, type: "bottom" }
@@ -599,9 +598,8 @@ router.post("/", async (req: Request, res: Response) => {
     if (fullscreenImage && fullscreenImage.length > 0) {
       try {
         if (isFullscreenVideo) {
-          // Upload to video bucket
-          const videoService = require('../services/gridfsVideoService').gridfsVideoService;
-          fullscreenVideoId = await videoService.uploadBase64(
+          // Upload video using the same gridfsService (it handles both images and videos)
+          fullscreenVideoId = await gridfsService.uploadBase64(
             fullscreenImage,
             `${Date.now()}_fullscreen.mp4`,
             { title, type: "fullscreen" }
