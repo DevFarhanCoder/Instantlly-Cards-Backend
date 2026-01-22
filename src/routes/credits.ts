@@ -2,7 +2,6 @@ import { Router } from "express";
 import User from "../models/User";
 import Transaction from "../models/Transaction";
 import CreditConfig from "../models/CreditConfig";
-import CreditConfig from "../models/CreditConfig";
 import { requireAuth, AuthReq } from "../middleware/auth";
 // Force language server refresh
 // Force language server refresh
