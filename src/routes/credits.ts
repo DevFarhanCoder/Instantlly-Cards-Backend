@@ -644,7 +644,8 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
             senderName: sender.name,
             amount,
             transactionId
-          }
+          },
+          'credits' // Use the credits notification channel
         );
 
         console.log(`📬 Push notification result: ${notificationSent ? 'SUCCESS' : 'FAILED'}`);
