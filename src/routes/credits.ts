@@ -3,6 +3,8 @@ import User from "../models/User";
 import Transaction from "../models/Transaction";
 import CreditConfig from "../models/CreditConfig";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { sendPushNotification } from "../services/pushNotifications";
+import Notification from "../models/Notification";
 // Force language server refresh
 // Force language server refresh
 
@@ -617,6 +619,47 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     });
 
     console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name} (${transactionId})`);
+
+    // Send push notification to recipient
+    try {
+      if ((recipient as any).pushToken) {
+        const notificationTitle = "Credits Received";
+        const notificationMessage = `Credit received from ${sender.name} - ${amount} credits`;
+        
+        await sendPushNotification(
+          (recipient as any).pushToken,
+          notificationTitle,
+          notificationMessage,
+          {
+            type: 'CREDIT_RECEIVED',
+            senderId: sender._id.toString(),
+            senderName: sender.name,
+            amount,
+            transactionId
+          }
+        );
+
+        // Save notification to database
+        await Notification.create({
+          userId: recipient._id,
+          type: 'GENERAL',
+          title: notificationTitle,
+          message: notificationMessage,
+          data: {
+            senderId: sender._id,
+            senderName: sender.name,
+            amount,
+            transactionId
+          },
+          read: false
+        });
+
+        console.log(`📬 Notification sent to ${recipient.name}`);
+      }
+    } catch (notifError) {
+      console.error('Failed to send notification:', notifError);
+      // Don't fail the transfer if notification fails
+    }
 
     res.json({
       success: true,
