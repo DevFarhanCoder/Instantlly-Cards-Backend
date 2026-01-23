@@ -5,6 +5,8 @@ import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
 import { imageCache } from "../services/imageCache";
 import User from "../models/User";
+import multer from "multer";
+import AWS from "aws-sdk";
 const jwt = require('jsonwebtoken');
 
 const router = Router();
@@ -12,6 +14,29 @@ const router = Router();
 // Simple rate limiting to prevent accidental spam
 const uploadAttempts = new Map<string, { count: number; resetTime: number }>();
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 16 * 1024 * 1024, // 16MB limit for images
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept images only
+    // if (!file.mimetype.startsWith('image/')) {
+    //   cb(new Error('Only image files are allowed'));
+    //   return;
+    // }
+    cb(null, true);
+  },
+});
+
+// Configure AWS S3
+const s3 = new AWS.S3({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
 // Cleanup old entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
@@ -76,7 +101,7 @@ router.get("/active", async (req: Request, res: Response) => {
       .sort({ priority: -1, createdAt: -1 })
       .limit(50) // Can handle more ads now (no heavy base64 payload)
       .lean()
-      // .exec();
+    // .exec();
 
     // 🔍 LOG: Database query result
     console.log('✅ [STEP 3] Database Query Complete');
@@ -94,7 +119,7 @@ router.get("/active", async (req: Request, res: Response) => {
 
     // Transform ads to include image URLs instead of base64
     const adsWithUrls = ads.map(ad => {
-       // 🧠 BACKWARD COMPATIBILITY
+      // 🧠 BACKWARD COMPATIBILITY
       const bottomType = ad.bottomMediaType || "image";
       const fullscreenType = ad.fullscreenMediaType || "image";
 
@@ -286,8 +311,8 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     });
 
     // Get GridFS file ID based on type
-    const gridfsId = type === "bottom" 
-      ? ad.bottomImageGridFS 
+    const gridfsId = type === "bottom"
+      ? ad.bottomImageGridFS
       : ad.fullscreenImageGridFS;
 
     if (!gridfsId) {
@@ -318,7 +343,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
 
     // 🔍 LOG: Preparing to stream from GridFS
     console.log('✅ [IMG STEP 4] GridFS ID Found:', gridfsId.toString());
-    
+
     // Check if file exists in GridFS before trying to download
     try {
       const fileExists = await gridfsService.fileExists(gridfsId);
@@ -334,7 +359,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
       console.error('❌ [IMG ERROR] Failed to check GridFS file existence:', checkError.message);
       // Continue anyway, let download stream handle it
     }
-    
+
     console.log('🔄 [IMG STEP 5] Buffering image from GridFS for caching');
 
     // Verify file exists in GridFS before streaming
@@ -352,7 +377,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     // Buffer the entire image first (enables caching and retry)
     const chunks: Buffer[] = [];
     let downloadStream;
-    
+
     try {
       downloadStream = gridfsService.getDownloadStream(gridfsId);
     } catch (streamError: any) {
@@ -363,7 +388,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
         message: "Failed to access image storage"
       });
     }
-    
+
     let streamTimeout: NodeJS.Timeout | null = null;
     let streamStarted = false;
 
@@ -421,7 +446,7 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
     console.error("❌ Error type:", error.name);
     console.error("❌ Error message:", error.message);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-    
+
     if (!res.headersSent) {
       // Return appropriate error code based on error type
       if (error.name === 'CastError' || error.message?.includes('Invalid')) {
@@ -430,14 +455,14 @@ router.get("/image/:id/:type", async (req: Request, res: Response) => {
           message: "Invalid ad ID format"
         });
       }
-      
+
       if (error.message?.includes('not found') || error.message?.includes('File not found')) {
         return res.status(404).json({
           success: false,
           message: "Ad image not found"
         });
       }
-      
+
       res.status(500).json({
         success: false,
         message: "Failed to fetch ad image"
@@ -490,211 +515,503 @@ router.post("/track-click/:id", async (req: Request, res: Response) => {
 
 // POST /api/ads - Create new ad (admin or mobile user with approval workflow)
 // This route is BEFORE requireAdminAuth to allow mobile users to upload with pending status
-router.post("/", async (req: Request, res: Response) => {
-  try {
-    // Check if request has admin authentication
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    let isAdmin = false;
-    let adminId = null;
+// router.post("/", async (req: Request, res: Response) => {
+//   try {
+//     // Check if request has admin authentication
+//     const token = req.headers.authorization?.replace('Bearer ', '');
+//     let isAdmin = false;
+//     let adminId = null;
 
-    // Try to verify admin token
-    if (token) {
-      try {
-        const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
-        if (decoded.role === 'admin' || decoded.role === 'super_admin') {
-          isAdmin = true;
-          adminId = decoded.id || decoded.username;
-        }
-      } catch (err) {
-        // Not an admin token, treat as mobile user
-        console.log('📱 Non-admin token detected - will create ad with pending status');
-      }
-    }
+//     // Try to verify admin token
+//     if (token) {
+//       try {
+//         const jwt = require('jsonwebtoken');
+//         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key-change-in-production');
+//         if (decoded.role === 'admin' || decoded.role === 'super_admin') {
+//           isAdmin = true;
+//           adminId = decoded.id || decoded.username;
+//         }
+//       } catch (err) {
+//         // Not an admin token, treat as mobile user
+//         console.log('📱 Non-admin token detected - will create ad with pending status');
+//       }
+//     }
 
-    // Rate limiting: Max 60 ads per minute for admins, 10 per minute for mobile users
-    const rateLimitId = adminId || req.ip || 'anonymous';
-    const maxRate = isAdmin ? 60 : 10;
+//     // Rate limiting: Max 60 ads per minute for admins, 10 per minute for mobile users
+//     const rateLimitId = adminId || req.ip || 'anonymous';
+//     const maxRate = isAdmin ? 60 : 10;
 
-    if (!checkRateLimit(rateLimitId, maxRate)) {
-      console.warn(`⚠️  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
-      return res.status(429).json({
-        success: false,
-        message: `Too many uploads. Maximum ${maxRate} ads per minute. Please wait a moment.`
-      });
-    }
+//     if (!checkRateLimit(rateLimitId, maxRate)) {
+//       console.warn(`⚠️  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
+//       return res.status(429).json({
+//         success: false,
+//         message: `Too many uploads. Maximum ${maxRate} ads per minute. Please wait a moment.`
+//       });
+//     }
 
-    console.log('📝 POST /api/ads - Creating new ad');
-    console.log('👤 User type:', isAdmin ? 'Admin' : 'Mobile User');
-    console.log('👤 User ID:', rateLimitId);
-    console.log('📊 Request body keys:', Object.keys(req.body));
+//     console.log('📝 POST /api/ads - Creating new ad');
+//     console.log('👤 User type:', isAdmin ? 'Admin' : 'Mobile User');
+//     console.log('👤 User ID:', rateLimitId);
+//     console.log('📊 Request body keys:', Object.keys(req.body));
 
-    const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
+//     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
 
-    // Detect media type from base64 data
-    const isBottomVideo = bottomImage?.startsWith('data:video/');
-    const isFullscreenVideo = fullscreenImage?.startsWith('data:video/');
-    const adType = (isBottomVideo || isFullscreenVideo) ? 'video' : 'image';
+//     // Detect media type from base64 data
+//     const isBottomVideo = bottomImage?.startsWith('data:video/');
+//     const isFullscreenVideo = fullscreenImage?.startsWith('data:video/');
+//     const adType = (isBottomVideo || isFullscreenVideo) ? 'video' : 'image';
 
-    console.log('🎬 Media type detection:', {
-      adType,
-      isBottomVideo,
-      isFullscreenVideo
-    });
+//     console.log('🎬 Media type detection:', {
+//       adType,
+//       isBottomVideo,
+//       isFullscreenVideo
+//     });
 
-    // Validation
-    console.log('🔍 Validating fields:', {
-      hasTitle: !!title,
-      hasBottomImage: !!bottomImage,
-      hasPhoneNumber: !!phoneNumber,
-      hasStartDate: !!startDate,
-      hasEndDate: !!endDate,
-      bottomImageLength: bottomImage?.length,
-      fullscreenImageLength: fullscreenImage?.length
-    });
+//     // Validation
+//     console.log('🔍 Validating fields:', {
+//       hasTitle: !!title,
+//       hasBottomImage: !!bottomImage,
+//       hasPhoneNumber: !!phoneNumber,
+//       hasStartDate: !!startDate,
+//       hasEndDate: !!endDate,
+//       bottomImageLength: bottomImage?.length,
+//       fullscreenImageLength: fullscreenImage?.length
+//     });
 
-    if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
-      console.error('❌ Validation failed - missing required fields');
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
-      });
-    }
+//     if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
+//       console.error('❌ Validation failed - missing required fields');
+//       return res.status(400).json({
+//         success: false,
+//         message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
+//       });
+//     }
 
-    // Upload images/videos to GridFS
-    console.log(`📤 Uploading media to GridFS for new ad: ${title}`);
-    console.log(`📏 Bottom ${adType} size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
-    if (fullscreenImage) {
-      console.log(`📏 Fullscreen ${adType} size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
-    }
+//     // Upload images/videos to GridFS
+//     console.log(`📤 Uploading media to GridFS for new ad: ${title}`);
+//     console.log(`📏 Bottom ${adType} size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
+//     if (fullscreenImage) {
+//       console.log(`📏 Fullscreen ${adType} size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
+//     }
 
-    let bottomImageId;
-    let fullscreenImageId = null;
-    let bottomVideoId;
-    let fullscreenVideoId = null;
-    
+//     let bottomImageId;
+//     let fullscreenImageId = null;
+//     let bottomVideoId;
+//     let fullscreenVideoId = null;
+
+//     try {
+//       if (isBottomVideo) {
+//         // Upload video using the same gridfsService (it handles both images and videos)
+//         bottomVideoId = await gridfsService.uploadBase64(
+//           bottomImage,
+//           `${Date.now()}_bottom.mp4`,
+//           { title, type: "bottom" }
+//         );
+//         console.log(`✅ Bottom video uploaded to GridFS: ${bottomVideoId}`);
+//       } else {
+//         bottomImageId = await gridfsService.uploadBase64(
+//           bottomImage,
+//           `${Date.now()}_bottom.jpg`,
+//           { title, type: "bottom" }
+//         );
+//         console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
+//       }
+//     } catch (uploadError) {
+//       console.error(`❌ Failed to upload bottom media to GridFS:`, uploadError);
+//       throw new Error(`Media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+//     }
+
+//     if (fullscreenImage && fullscreenImage.length > 0) {
+//       try {
+//         if (isFullscreenVideo) {
+//           // Upload video using the same gridfsService (it handles both images and videos)
+//           fullscreenVideoId = await gridfsService.uploadBase64(
+//             fullscreenImage,
+//             `${Date.now()}_fullscreen.mp4`,
+//             { title, type: "fullscreen" }
+//           );
+//           console.log(`✅ Fullscreen video uploaded to GridFS: ${fullscreenVideoId}`);
+//         } else {
+//           fullscreenImageId = await gridfsService.uploadBase64(
+//             fullscreenImage,
+//             `${Date.now()}_fullscreen.jpg`,
+//             { title, type: "fullscreen" }
+//           );
+//           console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+//         }
+//       } catch (uploadError) {
+//         console.error(`❌ Failed to upload fullscreen media to GridFS:`, uploadError);
+//         throw new Error(`Fullscreen media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+//       }
+//     }
+
+//     // Create ad with GridFS references and approval workflow
+//     const adData: any = {
+//       title,
+//       adType,
+//       phoneNumber,
+//       startDate: new Date(startDate),
+//       endDate: new Date(endDate),
+//       priority: priority || 5
+//     };
+
+//     // Set image/video fields based on type
+//     if (adType === 'video') {
+//       adData.bottomVideoGridFS = bottomVideoId;
+//       adData.fullscreenVideoGridFS = fullscreenVideoId;
+//       adData.bottomImage = "";
+//       adData.bottomImageGridFS = null;
+//       adData.fullscreenImage = "";
+//       adData.fullscreenImageGridFS = null;
+//     } else {
+//       adData.bottomImage = "";
+//       adData.bottomImageGridFS = bottomImageId;
+//       adData.fullscreenImage = "";
+//       adData.fullscreenImageGridFS = fullscreenImageId;
+//       adData.bottomVideoGridFS = null;
+//       adData.fullscreenVideoGridFS = null;
+//     }
+
+//     // Set approval status based on user type
+//     if (isAdmin) {
+//       // Admin uploads are auto-approved
+//       adData.status = 'approved';
+//       adData.uploadedBy = 'admin';
+//       adData.uploaderName = 'Admin';
+//       adData.approvedBy = adminId;
+//       adData.approvalDate = new Date();
+//       console.log('✅ Admin upload - auto-approved');
+//     } else {
+//       // Mobile user uploads require approval
+//       adData.status = 'pending';
+//       adData.uploadedBy = phoneNumber; // Use phone as identifier
+//       adData.uploaderName = uploaderName || 'Mobile User';
+//       adData.priority = 1; // Lower priority for pending ads
+//       console.log('📱 Mobile upload - pending approval');
+//     }
+
+//     const ad = await Ad.create(adData);
+
+//     console.log(`✅ Ad created with GridFS images: ${ad._id}, status: ${ad.status}`);
+
+//     // Different response messages for admin vs mobile user
+//     const responseMessage = isAdmin
+//       ? 'Advertisement created and published successfully'
+//       : 'Advertisement uploaded successfully. Awaiting admin approval.';
+
+//     res.status(201).json({
+//       success: true,
+//       message: responseMessage,
+//       data: ad,
+//       requiresApproval: !isAdmin
+//     });
+//   } catch (error) {
+//     console.error("❌ CREATE AD ERROR:", error);
+//     console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
+//     console.error("❌ Error details:", {
+//       name: error instanceof Error ? error.name : 'Unknown',
+//       message: error instanceof Error ? error.message : String(error)
+//     });
+
+//     res.status(500).json({
+//       success: false,
+//       message: "Failed to create ad",
+//       error: error instanceof Error ? error.message : 'Unknown error',
+//       details: process.env.NODE_ENV === 'development' ? error : undefined
+//     });
+//   }
+// });
+
+router.post(
+  "/",
+  upload.any(), // videos ke liye
+  async (req: Request, res: Response) => {
     try {
-      if (isBottomVideo) {
-        // Upload video using the same gridfsService (it handles both images and videos)
-        bottomVideoId = await gridfsService.uploadBase64(
-          bottomImage,
-          `${Date.now()}_bottom.mp4`,
-          { title, type: "bottom" }
-        );
-        console.log(`✅ Bottom video uploaded to GridFS: ${bottomVideoId}`);
-      } else {
-        bottomImageId = await gridfsService.uploadBase64(
-          bottomImage,
-          `${Date.now()}_bottom.jpg`,
-          { title, type: "bottom" }
-        );
-        console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
-      }
-    } catch (uploadError) {
-      console.error(`❌ Failed to upload bottom media to GridFS:`, uploadError);
-      throw new Error(`Media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
-    }
+      console.log("📥 POST /api/ads called");
+      console.log("📦 Request body keys:", Object.keys(req.body));
+      console.log("📁 Files count:", (req.files as any[])?.length || 0);
 
-    if (fullscreenImage && fullscreenImage.length > 0) {
-      try {
-        if (isFullscreenVideo) {
-          // Upload video using the same gridfsService (it handles both images and videos)
-          fullscreenVideoId = await gridfsService.uploadBase64(
-            fullscreenImage,
-            `${Date.now()}_fullscreen.mp4`,
-            { title, type: "fullscreen" }
+      /* ================= AUTH ================= */
+      const token = req.headers.authorization?.replace("Bearer ", "");
+      let isAdmin = false;
+      let adminId: string | null = null;
+
+      if (token) {
+        try {
+          const jwt = require("jsonwebtoken");
+          const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET || "your-secret-key-change-in-production"
           );
-          console.log(`✅ Fullscreen video uploaded to GridFS: ${fullscreenVideoId}`);
-        } else {
-          fullscreenImageId = await gridfsService.uploadBase64(
-            fullscreenImage,
-            `${Date.now()}_fullscreen.jpg`,
-            { title, type: "fullscreen" }
-          );
-          console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
+
+          if (decoded.role === "admin" || decoded.role === "super_admin") {
+            isAdmin = true;
+            adminId = decoded.id || decoded.username || null;
+            console.log("✅ Admin token verified:", adminId);
+          } else {
+            console.log("📱 Token valid but not admin");
+          }
+        } catch (err) {
+          console.log("📱 Invalid / non-admin token");
         }
-      } catch (uploadError) {
-        console.error(`❌ Failed to upload fullscreen media to GridFS:`, uploadError);
-        throw new Error(`Fullscreen media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
+      } else {
+        console.log("📱 No auth token provided");
       }
-    }
 
-    // Create ad with GridFS references and approval workflow
-    const adData: any = {
-      title,
-      adType,
-      phoneNumber,
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
-      priority: priority || 5
-    };
-    
-    // Set image/video fields based on type
-    if (adType === 'video') {
-      adData.bottomVideoGridFS = bottomVideoId;
-      adData.fullscreenVideoGridFS = fullscreenVideoId;
-      adData.bottomImage = "";
-      adData.bottomImageGridFS = null;
-      adData.fullscreenImage = "";
-      adData.fullscreenImageGridFS = null;
-    } else {
-      adData.bottomImage = "";
-      adData.bottomImageGridFS = bottomImageId;
-      adData.fullscreenImage = "";
-      adData.fullscreenImageGridFS = fullscreenImageId;
-      adData.bottomVideoGridFS = null;
-      adData.fullscreenVideoGridFS = null;
-    }
-    
-    // Set approval status based on user type
-    if (isAdmin) {
-      // Admin uploads are auto-approved
-      adData.status = 'approved';
-      adData.uploadedBy = 'admin';
-      adData.uploaderName = 'Admin';
-      adData.approvedBy = adminId;
-      adData.approvalDate = new Date();
-      console.log('✅ Admin upload - auto-approved');
-    } else {
-      // Mobile user uploads require approval
-      adData.status = 'pending';
-      adData.uploadedBy = phoneNumber; // Use phone as identifier
-      adData.uploaderName = uploaderName || 'Mobile User';
-      adData.priority = 1; // Lower priority for pending ads
-      console.log('📱 Mobile upload - pending approval');
-    }
+      /* ================= RATE LIMIT ================= */
+      const rateLimitId = adminId || req.ip || "anonymous";
+      const maxRate = isAdmin ? 60 : 10;
 
-    const ad = await Ad.create(adData);
+      console.log("⏱️ Rate limit check:", {
+        rateLimitId,
+        maxRate,
+        userType: isAdmin ? "ADMIN" : "USER",
+      });
 
-    console.log(`✅ Ad created with GridFS images: ${ad._id}, status: ${ad.status}`);
+      if (!checkRateLimit(rateLimitId, maxRate)) {
+        console.warn("⚠️ Rate limit exceeded:", rateLimitId);
+        return res.status(429).json({
+          success: false,
+          message: `Too many uploads. Max ${maxRate}/minute`,
+        });
+      }
 
-    // Different response messages for admin vs mobile user
-    const responseMessage = isAdmin
-      ? 'Advertisement created and published successfully'
-      : 'Advertisement uploaded successfully. Awaiting admin approval.';
+      /* ================= BODY ================= */
+      const {
+        title,
+        phoneNumber,
+        startDate,
+        endDate,
+        priority = 5,
+        uploaderName,
+        bottomMediaType = "image",
+        fullscreenMediaType = "image",
+        bottomImage,
+        fullscreenImage,
+      } = req.body;
 
-    res.status(201).json({
-      success: true,
-      message: responseMessage,
-      data: ad,
-      requiresApproval: !isAdmin
-    });
-  } catch (error) {
-    console.error("❌ CREATE AD ERROR:", error);
-    console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
-    console.error("❌ Error details:", {
-      name: error instanceof Error ? error.name : 'Unknown',
-      message: error instanceof Error ? error.message : String(error)
-    });
+      console.log("🧾 Parsed body:", {
+        title,
+        phoneNumber,
+        startDate,
+        endDate,
+        bottomMediaType,
+        fullscreenMediaType,
+      });
 
-    res.status(500).json({
-      success: false,
-      message: "Failed to create ad",
-      error: error instanceof Error ? error.message : 'Unknown error',
-      details: process.env.NODE_ENV === 'development' ? error : undefined
-    });
+      if (!title || !phoneNumber || !startDate || !endDate) {
+        console.error("❌ Missing required fields");
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields",
+        });
+      }
+
+      /* ================= FILES ================= */
+      const files = req.files as Express.Multer.File[];
+      const bottomVideo = files?.find(f => f.fieldname === "bottomVideo");
+      const fullscreenVideo = files?.find(f => f.fieldname === "fullscreenVideo");
+      const bottomImageFile = files?.find(f => f.fieldname === "bottomImage");
+      const fullscreenImageFile = files?.find(f => f.fieldname === "fullscreenImage");
+
+      console.log("🎞️ Media received:", {
+        hasBottomImageBase64: !!bottomImage,
+        hasFullscreenImageBase64: !!fullscreenImage,
+        hasBottomImageFile: !!bottomImageFile,
+        hasFullscreenImageFile: !!fullscreenImageFile,
+        hasBottomVideo: !!bottomVideo,
+        hasFullscreenVideo: !!fullscreenVideo,
+      });
+
+
+      /* ================= VALIDATION ================= */
+      if (
+        bottomMediaType === "image" &&
+        !bottomImage &&
+        !bottomImageFile
+      ) {
+        console.error("❌ Bottom image missing (no base64, no file)");
+        return res.status(400).json({ message: "Bottom image required" });
+      }
+
+
+      if (bottomMediaType === "video" && !bottomVideo) {
+        console.error("❌ Bottom video missing");
+        return res.status(400).json({ message: "Bottom video required" });
+      }
+
+      if (bottomVideo && !bottomVideo.mimetype.startsWith("video/")) {
+        console.error("❌ Invalid bottom video format:", bottomVideo.mimetype);
+        return res.status(400).json({ message: "Invalid bottom video format" });
+      }
+
+      if (
+        fullscreenMediaType === "video" &&
+        fullscreenVideo &&
+        !fullscreenVideo.mimetype.startsWith("video/")
+      ) {
+        console.error("❌ Invalid fullscreen video format:", fullscreenVideo.mimetype);
+        return res.status(400).json({ message: "Invalid fullscreen video format" });
+      }
+
+      /* ================= DATE ================= */
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+        console.error("❌ Invalid date range", { startDate, endDate });
+        return res.status(400).json({ message: "Invalid date range" });
+      }
+
+      console.log("📅 Date validated:", { start, end });
+
+      /* ================= GRIDFS (IMAGES) ================= */
+      gridfsService.initialize();
+
+      let bottomImageGridFS = null;
+      let fullscreenImageGridFS = null;
+
+      // ===== Bottom Image =====
+      if (bottomMediaType === "image") {
+        if (bottomImageFile) {
+          console.log("🖼️ Uploading bottom image from FILE");
+
+          const base64 = `data:${bottomImageFile.mimetype};base64,${bottomImageFile.buffer.toString("base64")}`;
+
+          bottomImageGridFS = await gridfsService.uploadBase64(
+            base64,
+            `${Date.now()}_bottom.${bottomImageFile.originalname.split('.').pop()}`,
+            { title, type: "bottom" }
+          );
+        }
+        else if (typeof bottomImage === "string") {
+          console.log("🖼️ Uploading bottom image from BASE64");
+
+          bottomImageGridFS = await gridfsService.uploadBase64(
+            bottomImage,
+            `${Date.now()}_bottom.jpg`,
+            { title, type: "bottom" }
+          );
+        }
+      }
+
+
+      /* ===== Fullscreen Image ===== */
+   // ===== Bottom Image =====
+if (fullscreenMediaType === "image") {
+  if (fullscreenImageFile) {
+    console.log("🖼️ Uploading fullscreen image from FILE");
+
+    const base64 = `data:${fullscreenImageFile.mimetype};base64,${fullscreenImageFile.buffer.toString("base64")}`;
+
+    fullscreenImageGridFS = await gridfsService.uploadBase64(
+      base64,
+      `${Date.now()}_fullscreen.${fullscreenImageFile.originalname.split('.').pop()}`,
+      { title, type: "fullscreen" }
+    );
+  } 
+  else if (typeof fullscreenImage === "string") {
+    console.log("🖼️ Uploading fullscreen image from BASE64");
+
+    fullscreenImageGridFS = await gridfsService.uploadBase64(
+      fullscreenImage,
+      `${Date.now()}_fullscreen.jpg`,
+      { title, type: "fullscreen" }
+    );
   }
-});
+}
+
+
+
+      /* ================= S3 (VIDEOS) ================= */
+      let bottomVideoUrl: string | null = null;
+      let fullscreenVideoUrl: string | null = null;
+
+      if (bottomMediaType === "video" && bottomVideo) {
+        const key = `ads/bottom/${Date.now()}-${bottomVideo.originalname}`;
+        console.log("🎥 Uploading bottom video to S3:", key);
+
+        await s3.putObject({
+          Bucket: process.env.S3_BUCKET!,
+          Key: key,
+          Body: bottomVideo.buffer,
+          ContentType: bottomVideo.mimetype,
+        }).promise();
+
+        bottomVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
+        console.log("✅ Bottom video uploaded:", bottomVideoUrl);
+      }
+
+      if (fullscreenMediaType === "video" && fullscreenVideo) {
+        const key = `ads/fullscreen/${Date.now()}-${fullscreenVideo.originalname}`;
+        console.log("🎥 Uploading fullscreen video to S3:", key);
+
+        await s3.putObject({
+          Bucket: process.env.S3_BUCKET!,
+          Key: key,
+          Body: fullscreenVideo.buffer,
+          ContentType: fullscreenVideo.mimetype,
+        }).promise();
+
+        fullscreenVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
+        console.log("✅ Fullscreen video uploaded:", fullscreenVideoUrl);
+      }
+
+      /* ================= SAVE AD ================= */
+      console.log("💾 Saving ad to database");
+
+      const ad = await Ad.create({
+        title,
+        phoneNumber,
+        startDate: start,
+        endDate: end,
+
+        adType: bottomMediaType,
+        bottomMediaType,
+        fullscreenMediaType,
+
+        bottomImageGridFS,
+        fullscreenImageGridFS,
+        bottomVideoUrl,
+        fullscreenVideoUrl,
+
+        status: isAdmin ? "approved" : "pending",
+        uploadedBy: isAdmin ? "admin" : phoneNumber,
+        uploaderName: isAdmin ? "Admin" : uploaderName || "Mobile User",
+        approvedBy: isAdmin ? adminId : null,
+        approvalDate: isAdmin ? new Date() : null,
+
+        priority: isAdmin ? priority : 1,
+        impressions: 0,
+        clicks: 0,
+      });
+
+      console.log("✅ Ad created successfully:", {
+        adId: ad._id,
+        status: ad.status,
+        uploadedBy: ad.uploadedBy,
+      });
+
+      /* ================= RESPONSE ================= */
+      res.status(201).json({
+        success: true,
+        message: isAdmin
+          ? "Advertisement created and published successfully"
+          : "Advertisement uploaded successfully. Awaiting admin approval.",
+        data: ad,
+        requiresApproval: !isAdmin,
+      });
+    } catch (error) {
+      console.error("❌ CREATE AD ERROR:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to create ad",
+      });
+    }
+  }
+);
+
+
+
 
 // GET /api/ads/my-ads - Get user's own ads by phone number (public, no auth required)
 router.get("/my-ads", async (req: Request, res: Response) => {
@@ -859,7 +1176,7 @@ router.get("/", async (req: Request, res: Response) => {
     const adsWithImageUrls = ads.map((ad: any) => {
       try {
         const adId = ad._id.toString();
-        
+
         // Detect ad type if not set (for backward compatibility)
         let detectedAdType = ad.adType;
         if (!detectedAdType) {
@@ -869,7 +1186,7 @@ router.get("/", async (req: Request, res: Response) => {
             detectedAdType = 'image';
           }
         }
-        
+
         // ALL ads (both legacy and new) now use GridFS image endpoints
         // This ensures consistent behavior and avoids sending large base64 in response
         return {
@@ -877,7 +1194,7 @@ router.get("/", async (req: Request, res: Response) => {
           _id: adId,
           adType: detectedAdType,
           // Image URLs
-          bottomImage: ad.bottomImageGridFS 
+          bottomImage: ad.bottomImageGridFS
             ? `${imageBaseUrl}/api/ads/image/${adId}/bottom`
             : `${imageBaseUrl}/api/ads/image/${adId}/bottom`, // Fallback to same endpoint
           fullscreenImage: ad.fullscreenImageGridFS
