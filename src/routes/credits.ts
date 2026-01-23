@@ -628,8 +628,8 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       console.log(`📱 Recipient pushToken: ${(recipient as any).pushToken ? 'EXISTS' : 'NOT FOUND'}`);
       
       if ((recipient as any).pushToken) {
-        const notificationTitle = "Credits Received";
-        const notificationMessage = `Credit received from ${sender.name} - ${amount} credits`;
+        const notificationTitle = "💰 Credits Received!";
+        const notificationMessage = `Received ${amount.toLocaleString('en-IN')} credits from ${sender.name}`;
         
         console.log(`📤 [CREDIT TRANSFER] Sending push notification to ${recipient.name}`);
         console.log(`   Title: ${notificationTitle}`);
