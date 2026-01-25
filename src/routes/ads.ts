@@ -174,20 +174,21 @@ router.get("/active", async (req: Request, res: Response) => {
       process.env.API_BASE_URL || "https://api.instantllycards.com";
 
     // 🔍 LOG: Response preparation
-    // console.log('🔧 [STEP 4] Preparing Response');
-    // console.log('🌐 Image Base URL:', imageBaseUrl);
-    // if (adsWithUrls.length > 0) {
-    //   console.log('📸 First ad URLs:', {
-    //     bottomImageUrl: adsWithUrls[0].bottomImageUrl,
-    //     fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
-    //     fullBottomUrl: adsWithUrls[0].bottomImageUrl
-    //       ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}`
-    //       : 'NULL',
-    //     fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl
-    //       ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}`
-    //       : 'NULL'
-    //   });
-    // }
+    console.log('🔧 [STEP 4] Preparing Response');
+    console.log('🌐 Image Base URL:', imageBaseUrl);
+    if (adsWithUrls.length > 0) {
+      console.log('📸 First ad URLs:', {
+        bottomImageUrl: adsWithUrls[0].bottomImageUrl,
+        fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
+        hasBottomImage: adsWithUrls[0].hasBottomImage,
+        fullBottomUrl: adsWithUrls[0].bottomImageUrl
+          ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}`
+          : 'NULL',
+        fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl
+          ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}`
+          : 'NULL'
+      });
+    }
 
     const responseData = {
       success: true,
