@@ -1116,11 +1116,9 @@ router.post("/send-reset-otp", async (req, res) => {
 
     if (!user) {
       // Phone not registered
-      return res
-        .status(404)
-        .json({
-          message: "Phone number is not registered / account not created",
-        });
+      return res.status(404).json({
+        message: "Phone number is not registered / account not created",
+      });
     }
 
     // At this point user exists - generate and send OTP
@@ -1249,14 +1247,12 @@ router.post("/verify-otp", async (req, res) => {
       console.error(
         "[VERIFY-OTP] JWT_SECRET not configured - cannot generate reset token",
       );
-      return res
-        .status(500)
-        .json({
-          success: true,
-          message: "OTP verified",
-          verified: true,
-          phone: normalizedPhone,
-        });
+      return res.status(500).json({
+        success: true,
+        message: "OTP verified",
+        verified: true,
+        phone: normalizedPhone,
+      });
     }
 
     const resetToken = jwt.sign(
@@ -1637,8 +1633,8 @@ router.get("/version-check", async (req, res) => {
     // ⚠️ FORCE UPDATE POLICY: Everyone must have the LATEST version
     // Simply update these versions when you publish to app stores
     const LATEST_VERSIONS = {
-      android: "1.0.64", // ← Update this when publishing new version to Play Store
-      ios: "1.0.64", // ← Update this when publishing new version to App Store
+      android: "1.0.65", // ← Update this when publishing new version to Play Store
+      ios: "1.0.65", // ← Update this when publishing new version to App Store
     };
 
     const PLAY_STORE_URL =
