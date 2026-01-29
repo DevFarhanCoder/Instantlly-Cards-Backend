@@ -76,8 +76,8 @@ app.use(cors({
     // Allow if origin in allowedOrigins
     if (allowedOrigins.includes(origin)) return callback(null, true);
 
-    // For development convenience, allow localhost origins
-    if (origin.startsWith('http://localhost')) return callback(null, true);
+    // For development convenience, allow localhost and 127.0.0.1 origins
+    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) return callback(null, true);
 
     // Otherwise deny
     return callback(new Error('Not allowed by CORS'));
@@ -114,7 +114,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   // Only set origin if it's in our allowed list
   const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost'))) {
+  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'))) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
   }
