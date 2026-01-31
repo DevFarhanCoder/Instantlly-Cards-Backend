@@ -58,6 +58,7 @@ const defaultAllowed = [
   'https://api.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
+  'https://instantllychannelpatneradmin.vercel.app', // Channel Partner Admin
   'http://localhost:3000',
   'http://localhost:3001'
 ];
