@@ -1488,4 +1488,102 @@ router.delete("/:id", async (req: AdminAuthReq, res: Response) => {
   }
 });
 
+// POST /api/ads/:id/approve - Approve an ad (ADMIN ONLY)
+router.post("/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { priority } = req.body;
+    
+    console.log(`🔐 [ADMIN] Approve ad request - ID: ${req.params.id}, Priority: ${priority}`);
+    
+    const ad = await Ad.findById(req.params.id);
+    
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: "Ad not found",
+      });
+    }
+    
+    // Update ad status to approved
+    ad.status = "approved";
+    ad.approvedBy = req.adminId; // From requireAdminAuth middleware
+    ad.approvalDate = new Date();
+    
+    // Update priority if provided
+    if (priority !== undefined && priority !== null) {
+      ad.priority = Math.min(Math.max(parseInt(priority), 1), 10); // Clamp between 1-10
+    }
+    
+    await ad.save();
+    
+    console.log(`✅ Ad ${ad._id} approved by admin ${req.adminId} with priority ${ad.priority}`);
+    
+    res.json({
+      success: true,
+      message: "Ad approved successfully",
+      ad: {
+        _id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        priority: ad.priority,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate
+      },
+    });
+  } catch (error) {
+    console.error("APPROVE AD ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to approve ad",
+    });
+  }
+});
+
+// POST /api/ads/:id/reject - Reject an ad (ADMIN ONLY)
+router.post("/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
+  try {
+    const { reason } = req.body;
+    
+    console.log(`🔐 [ADMIN] Reject ad request - ID: ${req.params.id}, Reason: ${reason}`);
+    
+    const ad = await Ad.findById(req.params.id);
+    
+    if (!ad) {
+      return res.status(404).json({
+        success: false,
+        message: "Ad not found",
+      });
+    }
+    
+    // Update ad status to rejected
+    ad.status = "rejected";
+    ad.approvedBy = req.adminId; // From requireAdminAuth middleware
+    ad.approvalDate = new Date();
+    ad.rejectionReason = reason || "No reason provided";
+    
+    await ad.save();
+    
+    console.log(`❌ Ad ${ad._id} rejected by admin ${req.adminId}`);
+    
+    res.json({
+      success: true,
+      message: "Ad rejected successfully",
+      ad: {
+        _id: ad._id,
+        title: ad.title,
+        status: ad.status,
+        rejectionReason: ad.rejectionReason,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate
+      },
+    });
+  } catch (error) {
+    console.error("REJECT AD ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reject ad",
+    });
+  }
+});
+
 export default router;
