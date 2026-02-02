@@ -1506,7 +1506,7 @@ router.post("/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res: Res
     
     // Update ad status to approved
     ad.status = "approved";
-    ad.approvedBy = req.adminId; // From requireAdminAuth middleware
+    ad.approvedBy = req.adminId as string;
     ad.approvalDate = new Date();
     
     // Update priority if provided
@@ -1557,7 +1557,7 @@ router.post("/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: Resp
     
     // Update ad status to rejected
     ad.status = "rejected";
-    ad.approvedBy = req.adminId; // From requireAdminAuth middleware
+    ad.approvedBy = req.adminId as string;
     ad.approvalDate = new Date();
     ad.rejectionReason = reason || "No reason provided";
     
