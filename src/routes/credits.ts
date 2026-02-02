@@ -3,6 +3,9 @@ import User from "../models/User";
 import Transaction from "../models/Transaction";
 import CreditConfig from "../models/CreditConfig";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { sendPushNotification } from "../services/pushNotifications";
+import Notification from "../models/Notification";
+// Force language server refresh
 // Force language server refresh
 
 const router = Router();
@@ -52,13 +55,15 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
     }
 
     const currentCredits = (user as any).credits || 0;
-    const expiryDate = (user as any).creditsExpiryDate;
+    
+    // Fixed expiry date: March 31, 2026
+    const fixedExpiryDate = new Date('2026-03-31T23:59:59');
     
     // Check if credits have expired
     let activeCredits = currentCredits;
     let isExpired = false;
     
-    if (expiryDate && new Date() > new Date(expiryDate)) {
+    if (new Date() > fixedExpiryDate) {
       // Credits expired, set to 0
       isExpired = true;
       activeCredits = 0;
@@ -74,9 +79,9 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
     res.json({
       success: true,
       credits: activeCredits,
-      creditsExpiryDate: expiryDate,
+      creditsExpiryDate: fixedExpiryDate.toISOString(),
       isExpired: isExpired,
-      daysRemaining: expiryDate ? Math.max(0, Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : null
+      daysRemaining: Math.max(0, Math.ceil((fixedExpiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     });
   } catch (error) {
     console.error("GET BALANCE ERROR", error);
@@ -206,6 +211,11 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
         return isSender ? txn : null;
       }
       
+      // For admin_adjustment, user must be the receiver (toUser)
+      if (txn.type === 'admin_adjustment') {
+        return isReceiver ? txn : null;
+      }
+      
       return null;
     }).filter((txn: any) => txn !== null);
 
@@ -223,7 +233,7 @@ router.get("/transactions", requireAuth, async (req: AuthReq, res) => {
       skip: Number(skip)
     });
   } catch (error) {
-    console.error("GET TRANSACTIONS ERROR", error);
+    console.error("GET CREDITS HISTORY ERROR", error);
     res.status(500).json({ 
       success: false,
       message: "Server error" 
@@ -362,6 +372,11 @@ router.get("/history", requireAuth, async (req: AuthReq, res) => {
       // For ad_deduction, user must be fromUser
       if (txn.type === 'ad_deduction') {
         return isSender ? txn : null;
+      }
+      
+      // For admin_adjustment, user must be the receiver (toUser)
+      if (txn.type === 'admin_adjustment') {
+        return isReceiver ? txn : null;
       }
       
       return null;
@@ -561,8 +576,8 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get recipient
-    const recipient = await User.findById(toUserId);
+    // Get recipient (include pushToken for notifications)
+    const recipient = await User.findById(toUserId).select('+pushToken');
     if (!recipient) {
       return res.status(404).json({ 
         success: false,
@@ -607,6 +622,62 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
 
     console.log(`✅ Transfer successful: ${sender.name} sent ${amount} credits to ${recipient.name} (${transactionId})`);
 
+    // Send push notification to recipient
+    try {
+      console.log('🔔 [CREDIT TRANSFER] Checking for pushToken...');
+      console.log(`📱 Recipient pushToken: ${(recipient as any).pushToken ? 'EXISTS' : 'NOT FOUND'}`);
+      
+      if ((recipient as any).pushToken) {
+        const notificationTitle = "💰 Credits Received!";
+        const notificationMessage = `Received ${amount.toLocaleString('en-IN')} credits from ${sender.name}`;
+        
+        console.log(`📤 [CREDIT TRANSFER] Sending push notification to ${recipient.name}`);
+        console.log(`   Title: ${notificationTitle}`);
+        console.log(`   Message: ${notificationMessage}`);
+        console.log(`   Token: ${(recipient as any).pushToken.substring(0, 30)}...`);
+        
+        const notificationSent = await sendPushNotification(
+          (recipient as any).pushToken,
+          notificationTitle,
+          notificationMessage,
+          {
+            type: 'CREDIT_RECEIVED',
+            senderId: sender._id.toString(),
+            senderName: sender.name,
+            amount,
+            transactionId
+          },
+          'default' // Use default channel for backward compatibility with old APKs
+        );
+
+        console.log(`📬 Push notification result: ${notificationSent ? 'SUCCESS' : 'FAILED'}`);
+
+        // Save notification to database
+        await Notification.create({
+          userId: recipient._id,
+          type: 'GENERAL',
+          title: notificationTitle,
+          message: notificationMessage,
+          data: {
+            senderId: sender._id,
+            senderName: sender.name,
+            amount,
+            transactionId
+          },
+          read: false
+        });
+
+        console.log(`✅ Notification saved to database for ${recipient.name}`);
+      } else {
+        console.log(`⚠️ [CREDIT TRANSFER] Recipient ${recipient.name} has no push token - skipping notification`);
+      }
+    } catch (notifError: any) {
+      console.error('❌ [CREDIT TRANSFER] Failed to send notification:', notifError);
+      console.error('❌ Error details:', notifError.message);
+      console.error('❌ Stack:', notifError.stack);
+      // Don't fail the transfer if notification fails
+    }
+
     res.json({
       success: true,
       message: `Successfully transferred ${amount} credits to ${recipient.name}`,
@@ -636,6 +707,193 @@ router.post("/transfer", requireAuth, async (req: AuthReq, res) => {
     res.status(500).json({ 
       success: false,
       message: "Server error during transfer" 
+    });
+  }
+});
+
+// GET /api/credits/config - Get current credit configuration (PUBLIC - no auth required)
+router.get("/config", async (req, res) => {
+  try {
+    // Find the credit config (should only be one document)
+    let config = await CreditConfig.findOne();
+    
+    // If no config exists, create default one
+    if (!config) {
+      config = await CreditConfig.create({
+        signupBonus: 200,
+        referralReward: 300,
+        lastUpdatedBy: 'system',
+        lastUpdatedAt: new Date()
+      });
+      console.log('✅ Created default credit config:', config);
+    }
+
+    res.json({
+      success: true,
+      config: {
+        signupBonus: config.signupBonus,
+        referralReward: config.referralReward,
+        lastUpdatedAt: config.lastUpdatedAt,
+        lastUpdatedBy: config.lastUpdatedBy
+      }
+    });
+  } catch (error) {
+    console.error("GET CREDIT CONFIG ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
+// GET /api/credits/referral-stats - Get user's referral stats and history (REQUIRES AUTH)
+router.get("/referral-stats", requireAuth, async (req: AuthReq, res) => {
+  try {
+    // Get current user
+    let user = await User.findById(req.userId).select('name referralCode');
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found" 
+      });
+    }
+
+    // If user doesn't have a referral code, generate one now
+    if (!(user as any).referralCode) {
+      console.log('⚠️ User missing referral code, generating now...');
+      let newReferralCode = generateReferralCode();
+      let codeExists = await User.findOne({ referralCode: newReferralCode });
+      
+      // Ensure uniqueness
+      while (codeExists) {
+        newReferralCode = generateReferralCode();
+        codeExists = await User.findOne({ referralCode: newReferralCode });
+      }
+      
+      // Update user with new referral code
+      (user as any).referralCode = newReferralCode;
+      await user.save();
+      console.log(`✅ Generated referral code for user ${req.userId}: ${newReferralCode}`);
+    }
+
+    // Count total referrals (users who used this user's referral code)
+    const referralCount = await User.countDocuments({ referredBy: req.userId });
+
+    // Get referral history with details
+    const referredUsers = await User.find({ referredBy: req.userId })
+      .select('name phone createdAt')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Get referral bonus transactions
+    const referralTransactions = await Transaction.find({
+      type: 'referral_bonus',
+      toUser: req.userId
+    })
+      .populate('fromUser', 'name phone')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Calculate total credits earned from referrals
+    const totalReferralCredits = referralTransactions.reduce((sum, tx) => sum + (tx.amount || 0), 0);
+
+    // Format referral history
+    const referralHistory = referralTransactions.map(tx => ({
+      name: (tx.fromUser as any)?.name || 'Unknown',
+      phone: (tx.fromUser as any)?.phone,
+      date: tx.createdAt,
+      credits: tx.amount,
+      status: 'credited'
+    }));
+
+    res.json({
+      success: true,
+      referralCode: (user as any).referralCode,
+      totalReferrals: referralCount,
+      totalCreditsEarned: totalReferralCredits,
+      recentReferrals: referralHistory
+    });
+  } catch (error) {
+    console.error("GET REFERRAL STATS ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
+    });
+  }
+});
+
+// PUT /api/credits/config - Update credit configuration (ADMIN ONLY)
+router.put("/config", async (req, res) => {
+  try {
+    // Simple admin authentication - check for admin key in header
+    const adminKey = req.headers['x-admin-key'] as string;
+    
+    if (adminKey !== process.env.ADMIN_SECRET_KEY && adminKey !== 'your-secure-admin-key-here') {
+      return res.status(401).json({ 
+        success: false,
+        message: "Unauthorized - Admin access required" 
+      });
+    }
+
+    const { signupBonus, referralReward, updatedBy } = req.body;
+
+    // Validation
+    if (signupBonus !== undefined && (signupBonus < 0 || !Number.isInteger(signupBonus))) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Signup bonus must be a non-negative integer" 
+      });
+    }
+
+    if (referralReward !== undefined && (referralReward < 0 || !Number.isInteger(referralReward))) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Referral reward must be a non-negative integer" 
+      });
+    }
+
+    // Find existing config or create new one
+    let config = await CreditConfig.findOne();
+    
+    if (!config) {
+      config = new CreditConfig({
+        signupBonus: signupBonus || 200,
+        referralReward: referralReward || 300,
+        lastUpdatedBy: updatedBy || 'admin',
+        lastUpdatedAt: new Date()
+      });
+    } else {
+      if (signupBonus !== undefined) config.signupBonus = signupBonus;
+      if (referralReward !== undefined) config.referralReward = referralReward;
+      config.lastUpdatedBy = updatedBy || 'admin';
+      config.lastUpdatedAt = new Date();
+    }
+
+    await config.save();
+
+    console.log(`✅ Credit config updated by ${config.lastUpdatedBy}:`, {
+      signupBonus: config.signupBonus,
+      referralReward: config.referralReward
+    });
+
+    res.json({
+      success: true,
+      message: "Credit configuration updated successfully",
+      config: {
+        signupBonus: config.signupBonus,
+        referralReward: config.referralReward,
+        lastUpdatedAt: config.lastUpdatedAt,
+        lastUpdatedBy: config.lastUpdatedBy
+      }
+    });
+  } catch (error) {
+    console.error("UPDATE CREDIT CONFIG ERROR", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Server error" 
     });
   }
 });

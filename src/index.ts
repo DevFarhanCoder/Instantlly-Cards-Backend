@@ -58,6 +58,7 @@ const defaultAllowed = [
   'https://api.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
+  'https://instantllychannelpatneradmin.vercel.app', // Channel Partner Admin
   'http://localhost:3000',
   'http://localhost:3001'
 ];
@@ -81,8 +82,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'Cache-Control', 'Pragma', 'Expires'],
-  exposedHeaders: ['Content-Length', 'Content-Type'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'Cache-Control', 'Pragma', 'Expires', 'Range'],
+  exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges'],
   maxAge: 86400 // 24 hours
 }));
 
@@ -90,12 +91,12 @@ app.use(compression()); // Enable gzip compression for faster responses
 
 // Parse JSON bodies - with type checking for various content-types
 app.use(express.json({ 
-  limit: "20mb", // Increased to 20MB to support larger card images (up to 15MB)
+  limit: "150mb", // Increased to 150MB to support video ads
   type: ['application/json', 'application/*+json', 'text/plain'] // Accept various JSON content types
 })); 
 
 // Parse URL-encoded bodies (for form submissions)
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "150mb" }));
 
 // Request logging middleware for debugging
 app.use((req, res, next) => {
@@ -117,8 +118,8 @@ app.use((req, res, next) => {
   }
   
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires');
-  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-key, Cache-Control, Pragma, Expires, Range');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
   
   // Handle preflight requests
   if (req.method === 'OPTIONS') {

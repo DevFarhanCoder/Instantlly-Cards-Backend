@@ -135,14 +135,14 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     console.log(`📱 [${userId}] Fetching contacts feed (other members only)...`);
     
     // Get all contacts who are app users (optimized query with select)
-    const myContacts = await Contact.find({ 
+    const myContacts = await Contact.find({
       userId,
-      isAppUser: true 
+      isAppUser: true
     })
-    .select('appUserId')
-    .lean()
-    .exec();
-    
+      .select('appUserId')
+      .lean()
+      .exec();
+
     // Extract contact user IDs with proper typing
     const contactUserIds = myContacts.map((contact: any) => contact.appUserId).filter(Boolean);
     
@@ -180,12 +180,12 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
       console.log(`💾 [${userId}] Client has cached version - returning 304 Not Modified`);
       return res.status(304).end();
     }
-    
+
     // Set cache headers
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
-    
-    res.json({ 
+
+    res.json({
       success: true,
       data: filteredCards,
       meta: {
@@ -197,10 +197,10 @@ r.get("/feed/contacts", async (req: AuthReq, res) => {
     });
   } catch (err) {
     console.error("❌ CONTACTS FEED ERROR", err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch contacts feed",
-      data: [] 
+      data: []
     });
   }
 });
@@ -210,6 +210,13 @@ r.post("/", async (req: AuthReq, res) => {
   try {
     const userId = req.userId!;
     let cardData = { ...req.body, userId };
+    console.log('📝 [CREATE CARD] Received data:', JSON.stringify({
+      name: cardData.name,
+      birthdate: cardData.birthdate,
+      anniversary: cardData.anniversary,
+      email: cardData.email,
+      location: cardData.location
+    }, null, 2));
     console.log('📝 [CREATE CARD] Received data:', JSON.stringify({ 
       name: cardData.name,
       birthdate: cardData.birthdate, 
@@ -241,25 +248,33 @@ r.post("/", async (req: AuthReq, res) => {
       email: doc.email,
       location: doc.location
     }, null, 2));
-    
+    console.log('✅ [CREATE CARD] Saved to DB:', JSON.stringify({
+      _id: doc._id,
+      name: doc.name,
+      birthdate: (doc as any).birthdate,
+      anniversary: (doc as any).anniversary,
+      email: doc.email,
+      location: doc.location
+    }, null, 2));
+
     // Send notifications to contacts who have this user in their contacts
     try {
       // Get user details
       const creator: any = await User.findById(userId).select('name phoneNumber').lean();
-      
+
       if (creator && creator.name) {
         // Find all contacts who have this user as a contact AND are app users
-        const myContactsWhoAreAppUsers: any[] = await Contact.find({ 
+        const myContactsWhoAreAppUsers: any[] = await Contact.find({
           appUserId: userId,
           isAppUser: true
         }).populate('userId', 'pushToken name').lean();
-        
+
         console.log(`📢 Notifying ${myContactsWhoAreAppUsers.length} contacts about new card creation`);
-        
+
         // Send notification to each contact
         for (const contact of myContactsWhoAreAppUsers) {
           const contactUser = contact.userId;
-          
+
           if (contactUser?.pushToken) {
             await sendCardCreationNotification(
               contactUser.pushToken,
@@ -275,7 +290,7 @@ r.post("/", async (req: AuthReq, res) => {
       console.error('Error sending card creation notifications:', notifError);
       // Don't fail the card creation if notifications fail
     }
-    
+
     res.status(201).json({ data: doc });
   } catch (err: any) {
     console.error("CREATE CARD ERROR", err);
@@ -292,37 +307,41 @@ r.get("/", async (req: AuthReq, res) => {
 
     console.log(`🔖 [REQ:${reqId}] GET /api/cards called - auth header present? ${!!req.header('authorization')} - resolved userId: ${userId}`);
     console.log(`📇 [${userId}] Fetching user's own cards...`);
-    
+
     // Get user's cards sorted by creation date (descending)
     const items = await Card.find({ userId })
       .sort({ createdAt: -1 })
       .lean()
       .exec();
-    
+
     const elapsed = Date.now() - startTime;
     console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
     items.forEach((card, i) => {
       console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${(card as any).businessHours}", servicesOffered="${(card as any).servicesOffered}", establishedYear="${(card as any).establishedYear}", aboutBusiness="${(card as any).aboutBusiness}"`);
+      console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${(card as any).businessHours}", servicesOffered="${(card as any).servicesOffered}", establishedYear="${(card as any).establishedYear}", aboutBusiness="${(card as any).aboutBusiness}"`);
     });
-    
+
     // DISABLED ETag caching to prevent stale data after delete
     // Generate ETag using ALL card IDs to detect deletions
     // const cardIds = items.map(c => c._id).join(',');
     // const etag = `"own-cards-${userId}-${items.length}-${cardIds.substring(0, 50)}-${items[0]?.updatedAt || 'empty'}"`;
-    
+
     // Check if client has cached version
-    // if (req.headers['if-none-match'] === etag) {
-    //   console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
-    //   return res.status(304).end();
-    // }
-    
+    // // if (req.headers['if-none-match'] === etag) {
+    // //   console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
+    // //   return res.status(304).end();
+    // // }
+
     // Force no-cache to prevent stale data issues
-    // res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    // // res.setHeader('ETag', etag);
+    // res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    
-    res.json({ 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+
+    res.json({
       success: true,
       data: items,
       meta: {
@@ -332,10 +351,10 @@ r.get("/", async (req: AuthReq, res) => {
     });
   } catch (err) {
     console.error(`❌ [${req.userId}] ERROR fetching own cards:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch cards",
-      data: [] 
+      data: []
     });
   }
 });
@@ -354,15 +373,25 @@ r.put("/:id", async (req: AuthReq, res) => {
       aboutBusiness: updateData.aboutBusiness
     });
 
+    console.log('🔧 UPDATE CARD REQUEST RECEIVED - Card ID:', req.params.id);
+    console.log('📦 NEW FIELDS in request:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
+
     // Handle Base64 image conversion if companyPhoto is provided
     if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
       try {
         const imagePath = await saveBase64Image(updateData.companyPhoto, userId);
         
+        
+
         // Get old image path before update (only if we're changing the image)
         const existingCard = await Card.findOne({ _id: req.params.id, userId }).select('companyPhoto').lean();
         const oldImagePath: string | undefined = existingCard?.companyPhoto;
-        
+
         updateData.companyPhoto = imagePath;
         
         // Clean up old image in background (non-blocking)
@@ -393,6 +422,14 @@ r.put("/:id", async (req: AuthReq, res) => {
       establishedYear: updateData.establishedYear,
       aboutBusiness: updateData.aboutBusiness
     });
+
+    // Single database query for update
+    console.log('🔧 UPDATE: Received data for new fields:', {
+      businessHours: updateData.businessHours,
+      servicesOffered: updateData.servicesOffered,
+      establishedYear: updateData.establishedYear,
+      aboutBusiness: updateData.aboutBusiness
+    });
     
     const doc = await Card.findOneAndUpdate(
       { _id: req.params.id, userId },
@@ -400,7 +437,16 @@ r.put("/:id", async (req: AuthReq, res) => {
       { new: true }
     );
     
+
     if (!doc) return res.status(404).json({ message: "Not found" });
+
+    console.log('✅ UPDATE: Saved doc has new fields:', {
+      businessHours: doc.businessHours,
+      servicesOffered: doc.servicesOffered,
+      establishedYear: doc.establishedYear,
+      aboutBusiness: doc.aboutBusiness
+    });
+
 
     console.log('✅ UPDATE: Saved doc has new fields:', {
       businessHours: doc.businessHours,
@@ -455,7 +501,7 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     const { recipientId, message } = req.body;
     const cardId = req.params.id;
     const senderId = req.userId!;
-    
+
     if (!recipientId) {
       return res.status(400).json({ message: "Recipient ID is required" });
     }
@@ -492,6 +538,7 @@ r.post("/:id/share", async (req: AuthReq, res) => {
       });
     }
 
+
     // PERFORMANCE OPTIMIZATION: Store all data in shared card (ultra denormalization)
     // This eliminates need for populate queries later
     const sharedCard = await SharedCard.create({
@@ -509,7 +556,7 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     });
 
     console.log(`📧 Card shared: ${sender.name} → ${recipient.name} (${card.companyName || card.name})`);
-    
+
     // Send push notification to recipient if they have a push token
     if (recipient.pushToken) {
       try {
@@ -520,7 +567,7 @@ r.post("/:id/share", async (req: AuthReq, res) => {
           senderId,
           cardId
         );
-        
+
         if (notificationSent) {
           console.log(`🔔 Card sharing notification sent to ${recipient.name}`);
         } else {
@@ -533,9 +580,9 @@ r.post("/:id/share", async (req: AuthReq, res) => {
     } else {
       console.log(`📱 No push token for ${recipient.name}, skipping notification`);
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Card shared successfully",
       data: {
         sharedCardId: sharedCard._id,
@@ -555,19 +602,19 @@ r.get("/sent", async (req: AuthReq, res) => {
   try {
     const senderId = req.userId!;
     const startTime = Date.now();
-    
+
     // Cursor-based pagination parameters
     const cursor = req.query.cursor as string | undefined; // Last _id from previous page
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50); // Max 50 per page
-    
+
     console.log(`📤 [${senderId}] Fetching sent cards (cursor: ${cursor || 'first'}, limit: ${limit})...`);
-    
+
     // Build query with cursor for pagination
     const query: any = { senderId };
     if (cursor) {
       query._id = { $lt: cursor }; // Get records before this cursor (pagination)
     }
-    
+
     // ULTRA-FAST QUERY: Single query, no populate, uses cached fields
     const sentCards = await SharedCard.find(query)
       .select('_id cardId recipientId recipientName cardTitle cardPhoto recipientProfilePicture sentAt status message viewedAt')
@@ -586,13 +633,13 @@ r.get("/sent", async (req: AuthReq, res) => {
 
     // Generate ETag for HTTP caching
     const etag = `"sent-${senderId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
-    
+
     // Disable ETag checking to avoid stale data
     // if (req.headers['if-none-match'] === etag) {
     //   console.log(`💾 [${senderId}] Client cache hit - returning 304`);
     //   return res.status(304).end();
     // }
-    
+
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, no-cache, must-revalidate');
 
@@ -611,7 +658,7 @@ r.get("/sent", async (req: AuthReq, res) => {
     });
   } catch (err) {
     console.error(`❌ [${req.userId}] GET SENT CARDS ERROR:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch sent cards",
       data: [],
@@ -625,19 +672,19 @@ r.get("/received", async (req: AuthReq, res) => {
   try {
     const recipientId = req.userId!;
     const startTime = Date.now();
-    
+
     // Cursor-based pagination parameters
     const cursor = req.query.cursor as string | undefined;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50); // Max 50 per page
-    
+
     // Search parameters
     const search = req.query.search as string | undefined;
     const fuzzy = req.query.fuzzy === 'true';
     const caseSensitive = req.query.case_sensitive === 'true';
     const sortBy = req.query.sort_by as string | undefined;
-    
+
     console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit}, search: "${search || 'none'}", fuzzy: ${fuzzy})...`);
-    
+
     // STEP 1: Find all senders who sent cards to this recipient
     const receivedFromSenders = await SharedCard.find({ recipientId }).distinct('senderId');
     
@@ -649,24 +696,27 @@ r.get("/received", async (req: AuthReq, res) => {
     
     console.log(`🔄 [${recipientId}] Received from ${receivedFromSenders.length} users, mutual exchange with ${mutualSenders.length} users`);
     
-    // Build query with cursor for pagination - ONLY show cards from mutual exchanges
-    const query: any = { 
+
+    // Build query with cursor for pagination - ONLY show cards from mutual exchanges - ONLY show cards from mutual exchanges
+    const query: any = {
+      
       recipientId,
       senderId: { $in: mutualSenders } // Only show if recipient has also sent card back
+   ,
     };
     if (cursor) {
       query._id = { $lt: cursor };
     }
-    
+
     // Add search functionality
     if (search && search.trim()) {
       const searchTerm = search.trim();
       const searchOptions = caseSensitive ? undefined : 'i'; // Case insensitive by default
-      
+
       if (fuzzy) {
         // Optimized fuzzy search - create broader patterns for better matching
         const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(word => word.length > 1);
-        
+
         if (searchWords.length > 0) {
           // Create flexible patterns for each word
           const patterns = searchWords.map(word => {
@@ -675,7 +725,7 @@ r.get("/received", async (req: AuthReq, res) => {
             // Create pattern that matches partial words at beginning, middle, or end
             return new RegExp(`${escapedWord}`, searchOptions);
           });
-          
+
           // Build efficient OR query across fields with AND logic for multiple words
           if (searchWords.length === 1) {
             // Single word - OR across all fields
@@ -707,7 +757,7 @@ r.get("/received", async (req: AuthReq, res) => {
         ];
       }
     }
-    
+
     // Build sort criteria
     let sortCriteria: any = { _id: -1 }; // Default sort by creation time
     if (search && sortBy === 'relevance') {
@@ -715,7 +765,7 @@ r.get("/received", async (req: AuthReq, res) => {
       // For now, we'll use a simple relevance approximation
       sortCriteria = { _id: -1 }; // MongoDB will handle relevance in $or queries
     }
-    
+
     // ULTRA-FAST QUERY: Single query, no populate, uses cached fields
     const receivedCards = await SharedCard.find(query)
       .select('_id cardId senderId senderName cardTitle cardPhoto senderProfilePicture sentAt status message viewedAt')
@@ -735,7 +785,7 @@ r.get("/received", async (req: AuthReq, res) => {
 
     const elapsed = Date.now() - startTime;
     const unviewedCount = items.filter(card => !card.isViewed).length;
-    
+
     // Enhanced logging for search queries
     if (search && search.trim()) {
       console.log(`🔍 [${recipientId}] SEARCH QUERY: "${search}" (fuzzy: ${fuzzy}) -> ${items.length} results in ${elapsed}ms`);
@@ -748,13 +798,13 @@ r.get("/received", async (req: AuthReq, res) => {
 
     // Generate ETag for HTTP caching (disable caching for search queries)
     const etag = search ? null : `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
-    
+
     // Don't use if-none-match for now to avoid stale data issues
     // if (etag && req.headers['if-none-match'] === etag) {
     //   console.log(`💾 [${recipientId}] Client cache hit - returning 304`);
     //   return res.status(304).end();
     // }
-    
+
     if (etag) {
       res.setHeader('ETag', etag);
       res.setHeader('Cache-Control', 'private, no-cache, must-revalidate'); // Changed to no-cache
@@ -779,7 +829,7 @@ r.get("/received", async (req: AuthReq, res) => {
     });
   } catch (err) {
     console.error(`❌ [${req.userId}] GET RECEIVED CARDS ERROR:`, err);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: "Failed to fetch received cards",
       data: [],
@@ -795,25 +845,25 @@ r.get("/:id", async (req: AuthReq, res) => {
     const cardId = req.params.id;
     const userId = req.userId!;
     const startTime = Date.now();
-    
+
     console.log(`🔍 [${userId}] Fetching single card: ${cardId}`);
-    
+
     // Validate ObjectId format
     if (!cardId.match(/^[0-9a-fA-F]{24}$/)) {
       console.log(`❌ [${userId}] Invalid card ID format: ${cardId}`);
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Invalid card ID format" 
+        message: "Invalid card ID format"
       });
     }
-    
+
     // First, try to find as a regular Card
     let card = await Card.findById(cardId)
       .populate('userId', 'name profilePicture')
       .lean()
       .maxTimeMS(5000)
       .exec();
-    
+
     // If not found, check if it's a SharedCard ID (mobile app might be sending wrong ID)
     if (!card) {
       console.log(`🔄 [${userId}] Not found as Card, checking SharedCard: ${cardId}`);
@@ -822,7 +872,7 @@ r.get("/:id", async (req: AuthReq, res) => {
         .lean()
         .maxTimeMS(3000)
         .exec();
-      
+
       if (sharedCard && sharedCard.cardId) {
         console.log(`🔄 [${userId}] Found SharedCard, fetching actual card: ${sharedCard.cardId}`);
         card = await Card.findById(sharedCard.cardId)
@@ -832,12 +882,12 @@ r.get("/:id", async (req: AuthReq, res) => {
           .exec();
       }
     }
-    
+
     if (!card) {
       console.log(`❌ [${userId}] Card not found: ${cardId}`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: "Card not found" 
+        message: "Card not found"
       });
     }
 
@@ -846,18 +896,18 @@ r.get("/:id", async (req: AuthReq, res) => {
 
     // Generate ETag for caching
     const etag = `"card-${card._id}-${(card as any).updatedAt}"`;
-    
+
     // Check if client has cached version
     if (req.headers['if-none-match'] === etag) {
       console.log(`💾 [${userId}] Client has cached card ${cardId} - returning 304`);
       return res.status(304).end();
     }
-    
+
     // Set cache headers
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
 
-    res.json({ 
+    res.json({
       success: true,
       data: card,
       meta: {
@@ -866,17 +916,17 @@ r.get("/:id", async (req: AuthReq, res) => {
     });
   } catch (err: any) {
     console.error(`❌ [${req.userId}] GET CARD BY ID ERROR for ${req.params.id}:`, err.message);
-    
+
     // Handle timeout gracefully
     if (err.message?.includes('timeout')) {
-      return res.status(504).json({ 
+      return res.status(504).json({
         success: false,
         message: "Request timeout - please try again",
         error: "TIMEOUT"
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       success: false,
       message: "Failed to fetch card",
       error: "INTERNAL_ERROR"
@@ -889,69 +939,69 @@ r.post("/shared/:id/view", async (req: AuthReq, res) => {
   try {
     const sharedCardId = req.params.id;
     const userId = req.userId!;
-    
+
     console.log(`👁️ Marking card as viewed: ${sharedCardId} by user: ${userId}`);
-    
+
     // Add timeout protection
     const updatedCard = await Promise.race([
       SharedCard.findOneAndUpdate(
-        { 
-          _id: sharedCardId, 
+        {
+          _id: sharedCardId,
           recipientId: userId,
           status: { $ne: 'viewed' } // Only update if not already viewed
         },
-        { 
+        {
           status: 'viewed',
           viewedAt: new Date()
         },
         { new: true }
       ).maxTimeMS(5000).lean(),
-      new Promise<null>((_, reject) => 
+      new Promise<null>((_, reject) =>
         setTimeout(() => reject(new Error('View update timeout')), 5000)
       )
     ]);
 
     if (!updatedCard) {
       console.log(`⚠️ Shared card not found or already viewed: ${sharedCardId}`);
-      
+
       // Check if card exists at all
       const cardExists = await SharedCard.findById(sharedCardId).select('_id status recipientId').maxTimeMS(3000).lean();
-      
+
       if (!cardExists) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           success: false,
           message: "Shared card not found",
           error: "CARD_NOT_FOUND"
         });
       }
-      
+
       // Card exists but either already viewed or user is not recipient
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         message: "Card already viewed or you are not the recipient",
         alreadyViewed: cardExists.status === 'viewed'
       });
     }
 
     console.log(`✅ Card marked as viewed: ${sharedCardId}`);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Card marked as viewed",
       viewedAt: updatedCard.viewedAt
     });
   } catch (err: any) {
     console.error("❌ MARK CARD VIEWED ERROR:", err.message);
-    
+
     // If timeout, return success anyway (update will complete eventually)
     if (err.message?.includes('timeout')) {
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         message: "View status updating (may take a moment)",
         pending: true
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       success: false,
       message: "Failed to mark card as viewed",
       error: "INTERNAL_ERROR"
@@ -964,7 +1014,7 @@ r.get("/shared-with/:userId", async (req: AuthReq, res) => {
   try {
     const currentUserId = req.userId!;
     const otherUserId = req.params.userId;
-    
+
     // Find all shared cards between these two users (in both directions)
     const sharedCards = await SharedCard.find({
       $or: [
@@ -972,11 +1022,11 @@ r.get("/shared-with/:userId", async (req: AuthReq, res) => {
         { senderId: otherUserId, recipientId: currentUserId }
       ]
     })
-    .populate('cardId', 'companyName name companyPhoto')
-    .populate('senderId', 'name profilePicture')
-    .populate('recipientId', 'name profilePicture')
-    .sort({ sentAt: 1 }) // Chronological order for chat timeline
-    .lean();
+      .populate('cardId', 'companyName name companyPhoto')
+      .populate('senderId', 'name profilePicture')
+      .populate('recipientId', 'name profilePicture')
+      .sort({ sentAt: 1 }) // Chronological order for chat timeline
+      .lean();
 
     // Format the response
     const formattedCards = sharedCards.map((share: any) => ({
@@ -1014,7 +1064,7 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     const { groupId, message } = req.body;
     const cardId = req.params.id;
     const senderId = req.userId!;
-    
+
     if (!groupId) {
       return res.status(400).json({ message: "Group ID is required" });
     }
@@ -1043,6 +1093,7 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
       return res.status(404).json({ message: "Sender not found" });
     }
 
+
     // Check for duplicate - prevent sharing same card to same group twice
     const existingGroupShare = await GroupSharedCard.findOne({
       cardId,
@@ -1051,7 +1102,7 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     });
 
     if (existingGroupShare) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         message: "Card already shared to group",
         error: "You have already sent this card to this group. You can only send a card once to each group."
       });
@@ -1069,9 +1120,9 @@ r.post("/:id/share-to-group", async (req: AuthReq, res) => {
     });
 
     console.log(`📧 Card shared to group: ${sender.name} → ${group.name} (${card.companyName || card.name})`);
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: "Card shared to group successfully",
       data: {
         sharedCardId: groupSharedCard._id,
@@ -1091,7 +1142,7 @@ r.get("/group/:groupId/shared", async (req: AuthReq, res) => {
   try {
     const groupId = req.params.groupId;
     const currentUserId = req.userId!;
-    
+
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
     if (!group) {
@@ -1103,7 +1154,7 @@ r.get("/group/:groupId/shared", async (req: AuthReq, res) => {
     if (!isMember) {
       return res.status(403).json({ message: "You are not a member of this group" });
     }
-    
+
     // Find all cards shared in this group
     const groupSharedCards = await GroupSharedCard.find({ groupId })
       .populate('cardId', 'companyName name companyPhoto userId')
@@ -1141,9 +1192,9 @@ r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
     const groupId = req.params.groupId;
     const currentUserId = req.userId!;
     const startTime = Date.now();
-    
+
     console.log(`📊 [${currentUserId}] Fetching group cards summary for group: ${groupId}`);
-    
+
     // Verify group exists and user is a member (lean query)
     const group = await Group.findById(groupId).select('members').lean().exec();
     if (!group) {
@@ -1155,29 +1206,29 @@ r.get("/group/:groupId/summary", async (req: AuthReq, res) => {
     if (!isMember) {
       return res.status(403).json({ success: false, message: "You are not a member of this group" });
     }
-    
+
     // Get cards sent and received in parallel for better performance
     const [sentCards, receivedCards] = await Promise.all([
       // Cards sent by current user to this group
-      GroupSharedCard.find({ 
-        groupId, 
-        senderId: currentUserId 
+      GroupSharedCard.find({
+        groupId,
+        senderId: currentUserId
       })
-      .populate('cardId', 'companyName name companyPhoto')
-      .sort({ sentAt: -1 })
-      .lean()
-      .exec(),
-      
+        .populate('cardId', 'companyName name companyPhoto')
+        .sort({ sentAt: -1 })
+        .lean()
+        .exec(),
+
       // Cards received by current user in this group (sent by others)
-      GroupSharedCard.find({ 
-        groupId, 
-        senderId: { $ne: currentUserId } 
+      GroupSharedCard.find({
+        groupId,
+        senderId: { $ne: currentUserId }
       })
-      .populate('cardId', 'companyName name companyPhoto')
-      .populate('senderId', 'name profilePicture')
-      .sort({ sentAt: -1 })
-      .lean()
-      .exec()
+        .populate('cardId', 'companyName name companyPhoto')
+        .populate('senderId', 'name profilePicture')
+        .sort({ sentAt: -1 })
+        .lean()
+        .exec()
     ]);
 
     // Format sent cards

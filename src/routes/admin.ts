@@ -1,5 +1,7 @@
 // src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
+import { GridFSBucket } from "mongodb";
 import User from "../models/User";
 import Card from "../models/Card";
 import Message from "../models/Message";
@@ -423,23 +425,51 @@ router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Resp
 
     console.log(`✅ Found ${pendingAds.length} pending ads`);
 
-    const adsWithDetails = pendingAds.map((ad) => ({
-      id: ad._id,
-      title: ad.title,
-      phoneNumber: ad.phoneNumber,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-      status: ad.status,
-      uploadedBy: ad.uploadedBy,
-      uploaderName: ad.uploaderName,
-      priority: ad.priority,
-      bottomImageId: ad.bottomImageGridFS,
-      fullscreenImageId: ad.fullscreenImageGridFS,
-      impressions: ad.impressions,
-      clicks: ad.clicks,
-      createdAt: ad.createdAt,
-      updatedAt: ad.updatedAt,
-    }));
+    const adsWithDetails = pendingAds.map((ad) => {
+      // Debug: Log raw ad document
+      console.log('Raw ad document:', {
+        id: ad._id,
+        adType: (ad as any).adType,
+        bottomVideoGridFS: (ad as any).bottomVideoGridFS,
+        fullscreenVideoGridFS: (ad as any).fullscreenVideoGridFS,
+        bottomImageGridFS: ad.bottomImageGridFS,
+        fullscreenImageGridFS: ad.fullscreenImageGridFS
+      });
+
+      // Auto-detect ad type if not set (for backward compatibility)
+      let detectedAdType = (ad as any).adType;
+      if (!detectedAdType) {
+        // If has video GridFS references, it's a video ad
+        if ((ad as any).bottomVideoGridFS || (ad as any).fullscreenVideoGridFS) {
+          detectedAdType = 'video';
+        } else {
+          detectedAdType = 'image';
+        }
+      }
+
+      return {
+        id: ad._id,
+        title: ad.title,
+        adType: detectedAdType,
+        phoneNumber: ad.phoneNumber,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+        status: ad.status,
+        uploadedBy: ad.uploadedBy,
+        uploaderName: ad.uploaderName,
+        priority: ad.priority,
+        bottomImageId: ad.bottomImageGridFS,
+        fullscreenImageId: ad.fullscreenImageGridFS,
+        bottomVideoId: (ad as any).bottomVideoGridFS,
+        fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
+        hasBottomVideo: !!(ad as any).bottomVideoGridFS,
+        hasFullscreenVideo: !!(ad as any).fullscreenVideoGridFS,
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        createdAt: ad.createdAt,
+        updatedAt: ad.updatedAt,
+      };
+    });
 
     res.json({
       success: true,
@@ -612,6 +642,58 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
       });
     }
 
+    // DELETE IMAGES/VIDEOS FROM GRIDFS WHEN REJECTED
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const imageBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adImages' });
+        const videoBucket = new (require('mongodb').GridFSBucket)(db, { bucketName: 'adVideos' });
+        
+        // Delete bottom image if exists
+        if (ad.bottomImageGridFS) {
+          try {
+            await imageBucket.delete(ad.bottomImageGridFS);
+            console.log(`🗑️ Deleted bottom image: ${ad.bottomImageGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete bottom image: ${err}`);
+          }
+        }
+        
+        // Delete fullscreen image if exists
+        if (ad.fullscreenImageGridFS) {
+          try {
+            await imageBucket.delete(ad.fullscreenImageGridFS);
+            console.log(`🗑️ Deleted fullscreen image: ${ad.fullscreenImageGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete fullscreen image: ${err}`);
+          }
+        }
+        
+        // Delete bottom video if exists
+        if ((ad as any).bottomVideoGridFS) {
+          try {
+            await videoBucket.delete((ad as any).bottomVideoGridFS);
+            console.log(`🗑️ Deleted bottom video: ${(ad as any).bottomVideoGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete bottom video: ${err}`);
+          }
+        }
+        
+        // Delete fullscreen video if exists
+        if ((ad as any).fullscreenVideoGridFS) {
+          try {
+            await videoBucket.delete((ad as any).fullscreenVideoGridFS);
+            console.log(`🗑️ Deleted fullscreen video: ${(ad as any).fullscreenVideoGridFS}`);
+          } catch (err) {
+            console.log(`⚠️ Could not delete fullscreen video: ${err}`);
+          }
+        }
+      }
+    } catch (deleteError) {
+      console.error('❌ Error deleting files:', deleteError);
+      // Continue with rejection even if deletion fails
+    }
+
     // Update ad status to rejected
     ad.status = 'rejected';
     ad.approvedBy = req.adminId || req.adminUsername || 'admin';
@@ -668,6 +750,7 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
     const adsWithDetails = ads.map((ad) => ({
       id: ad._id,
       title: ad.title,
+      adType: (ad as any).adType || 'image',
       phoneNumber: ad.phoneNumber,
       startDate: ad.startDate,
       endDate: ad.endDate,
@@ -680,6 +763,10 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
       priority: ad.priority,
       bottomImageId: ad.bottomImageGridFS,
       fullscreenImageId: ad.fullscreenImageGridFS,
+      bottomVideoId: (ad as any).bottomVideoGridFS,
+      fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
+      hasBottomVideo: !!(ad as any).bottomVideoGridFS,
+      hasFullscreenVideo: !!(ad as any).fullscreenVideoGridFS,
       impressions: ad.impressions,
       clicks: ad.clicks,
       createdAt: ad.createdAt,
@@ -840,7 +927,7 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
     await recipient.save();
 
     // Create transaction record
-    const transferDesc = description || `Admin credit - ${amount.toLocaleString('en-IN')} credits`;
+    const transferDesc = description || `Credited by Instantlly`;
     
     await Transaction.create({
       type: 'admin_adjustment',
@@ -872,6 +959,100 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
     res.status(500).json({ 
       success: false,
       message: "Server error during transfer" 
+    });
+  }
+});
+
+// PUT /api/admin/users/:userId/update-credits - Admin update user credits directly
+router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { credits, reason } = req.body;
+
+    console.log('💰 Update Credits Request:', { userId, credits, reason });
+
+    // Validate inputs
+    if (credits === undefined || credits === null || credits < 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Credits must be 0 or greater' 
+      });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+
+    const oldCredits = (user as any).credits || 0;
+    const newCredits = parseInt(credits);
+    const creditDifference = newCredits - oldCredits;
+
+    // Update user credits
+    user.set({ credits: newCredits });
+    await user.save();
+
+    // Create transaction record for the adjustment
+    const transactionDescription = creditDifference >= 0 
+      ? 'Added by Instantlly Cards'
+      : 'Deducted by Instantlly Cards';
+    
+    await Transaction.create({
+      type: 'admin_adjustment',
+      toUser: user._id,
+      amount: creditDifference, // Keep the sign: positive for add, negative for deduct
+      description: transactionDescription,
+      note: reason || undefined,
+      balanceBefore: oldCredits,
+      balanceAfter: newCredits,
+      status: 'completed'
+    });
+
+    // Emit Socket.IO event to notify user's mobile app
+    try {
+      const io = (global as any).io;
+      if (io) {
+        io.emit(`credits_updated_${userId}`, {
+          userId: userId,
+          oldCredits,
+          newCredits,
+          creditDifference,
+          timestamp: new Date()
+        });
+        console.log(`📡 Emitted credits_updated event for user ${userId}`);
+      }
+    } catch (socketError) {
+      console.log('⚠️ Socket.IO not available for credit update notification');
+    }
+    
+    console.log(`✅ Credits updated for ${user.name}:`, {
+      old: oldCredits,
+      new: newCredits,
+      difference: creditDifference
+    });
+    
+    res.json({ 
+      success: true,
+      message: `Credits ${creditDifference >= 0 ? 'increased' : 'decreased'} successfully from ${oldCredits.toLocaleString('en-IN')} to ${newCredits.toLocaleString('en-IN')}`,
+      user: {
+        id: user._id,
+        name: user.name,
+        phone: user.phone,
+        oldCredits: oldCredits,
+        newCredits: newCredits,
+        creditDifference: creditDifference
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error updating credits:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to update credits'
     });
   }
 });
@@ -911,7 +1092,7 @@ router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) 
     await recipient.save();
 
     // Create transaction record
-    const transferDesc = reason || `Admin credit transfer - ${amount.toLocaleString('en-IN')} credits`;
+    const transferDesc = reason || `Credited by Instantlly`;
     
     await Transaction.create({
       type: 'admin_adjustment',

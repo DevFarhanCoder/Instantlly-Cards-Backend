@@ -44,8 +44,11 @@ class GridFSService {
       throw new Error("GridFS bucket not initialized");
     }
 
-    // Remove data:image prefix if present
-    const base64Clean = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    // Detect if it's a video or image from data URL
+    const isVideo = base64Data.startsWith('data:video/');
+    
+    // Remove data:image/video prefix if present
+    const base64Clean = base64Data.replace(/^data:(image|video)\/\w+;base64,/, "");
 
     // Convert base64 to buffer
     const buffer = Buffer.from(base64Clean, "base64");
@@ -213,7 +216,11 @@ class GridFSService {
       png: "image/png",
       gif: "image/gif",
       webp: "image/webp",
-      svg: "image/svg+xml"
+      svg: "image/svg+xml",
+      mp4: "video/mp4",
+      webm: "video/webm",
+      mov: "video/quicktime",
+      avi: "video/x-msvideo"
     };
     return mimeTypes[ext || ""] || "image/jpeg";
   }
