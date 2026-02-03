@@ -159,12 +159,12 @@ router.post("/signup", async (req, res) => {
     const creditsExpiryDate = new Date();
     creditsExpiryDate.setMonth(creditsExpiryDate.getMonth() + 1);
 
-    // Create user data object with 500,000 credits valid for 1 month
+    // Create user data object with 300 credits valid for 1 month
     const userData: any = {
       name: cleanName,
       phone: cleanPhone,
       password: hashedPassword,
-      credits: 500000, // 5 lac credits
+      credits: 300, // 300 credits
       creditsExpiryDate: creditsExpiryDate, // Expire after 1 month
       referralCode: newReferralCode
     };
@@ -236,10 +236,10 @@ router.post("/signup", async (req, res) => {
     await Transaction.create({
       type: 'signup_bonus',
       toUser: savedUser._id,
-      amount: 500000,
-      description: 'Signup bonus - 5 lac credits',
+      amount: 300,
+      description: 'Signup bonus - 300 credits',
       balanceBefore: 0,
-      balanceAfter: 500000,
+      balanceAfter: 300,
       status: 'completed'
     });
 
