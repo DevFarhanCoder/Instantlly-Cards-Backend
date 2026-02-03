@@ -729,6 +729,43 @@ router.put("/update-profile", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// POST /api/auth/update-service-type - Update user's service type during first-time setup
+router.post("/update-service-type", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { serviceType } = req.body;
+    const userId = req.userId;
+
+    console.log('📝 [SERVICE-TYPE] Update request:', { userId, serviceType });
+
+    // Validate service type
+    if (!serviceType || !['home-based', 'business-visiting'].includes(serviceType)) {
+      return res.status(400).json({ message: "Invalid service type. Must be 'home-based' or 'business-visiting'" });
+    }
+
+    // Update user's service type
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { serviceType },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    console.log('✅ [SERVICE-TYPE] Service type updated successfully:', { userId, serviceType });
+
+    res.json({ 
+      success: true,
+      message: "Service type updated successfully",
+      serviceType: user.serviceType 
+    });
+  } catch (error) {
+    console.error("UPDATE SERVICE TYPE ERROR", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // POST /api/auth/upload-profile-picture - Upload profile picture
 router.post("/upload-profile-picture", requireAuth, upload.single('profilePicture'), async (req: AuthReq, res) => {
   try {
