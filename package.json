@@ -19,7 +19,7 @@
     "@types/socket.io": "^3.0.1",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
-    "aws-sdk": "^2.1693.0",
+    "aws-sdk": "^1.18.0",
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
     "compression": "^1.8.1",
@@ -41,6 +41,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/aws-sdk": "^0.0.42",
     "@types/bcryptjs": "^2.4.2",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",

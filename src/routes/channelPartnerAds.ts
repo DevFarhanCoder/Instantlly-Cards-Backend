@@ -95,10 +95,12 @@ router.post(
           required: ['title', 'phoneNumber', 'startDate', 'endDate'],
         });
       }
-      const bottomImage = files.find(f => f.fieldname === "bottomImage");
-      const bottomVideo = files.find(f => f.fieldname === "bottomVideo");
-      const fullscreenImage = files.find(f => f.fieldname === "fullscreenImage");
-      const fullscreenVideo = files.find(f => f.fieldname === "fullscreenVideo");
+      // Support BOTH 'bottomImage' AND 'images' fieldnames (mobile app sends 'images')
+      const allImages = files?.filter(f => f.fieldname === "images" || f.fieldname === "bottomImage" || f.fieldname === "fullscreenImage") || [];
+      const bottomImage = files?.find(f => f.fieldname === "bottomImage") || allImages[0];
+      const fullscreenImage = files?.find(f => f.fieldname === "fullscreenImage") || allImages[1];
+      const bottomVideo = files?.find(f => f.fieldname === "bottomVideo");
+      const fullscreenVideo = files?.find(f => f.fieldname === "fullscreenVideo");
 
        if (bottomMediaType === "image" && !bottomImage) {
         return res.status(400).json({ message: "Bottom image required" });
@@ -1062,6 +1064,46 @@ router.post(
 );
 
 /**
+ * GET /api/channel-partner/ads/design-requests/all
+ * Get all design requests (admin)
+ */
+router.get('/design-requests/all', async (req: Request, res: Response) => {
+  try {
+    console.log('Fetching all design requests...');
+    const designRequests = await DesignRequest.find({}).sort({ createdAt: -1 }).limit(500);
+    console.log('Found ' + designRequests.length + ' design requests');
+    res.json({
+      success: true,
+      count: designRequests.length,
+      designRequests: designRequests.map(dr => ({
+        _id: dr._id,
+        businessName: dr.businessName || '',
+        email: dr.email || '',
+        webLinks: dr.webLinks || [],
+        phoneNumber: dr.phoneNumber || '',
+        adText: dr.adText || '',
+        businessAddress: dr.businessAddress || '',
+        adType: dr.adType,
+        channelType: dr.channelType,
+        referenceImagesGridFS: dr.referenceImagesGridFS || [],
+        referenceVideosGridFS: dr.referenceVideosGridFS || [],
+        uploaderPhone: dr.uploaderPhone,
+        uploaderName: dr.uploaderName,
+        userId: dr.userId || '',
+        status: dr.status,
+        adminNotes: dr.adminNotes || '',
+        completedAdId: dr.completedAdId || null,
+        createdAt: dr.createdAt,
+        updatedAt: dr.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching all design requests:', error);
+    res.status(500).json({ message: 'Failed to fetch design requests' });
+  }
+});
+
+/**
  * GET /api/channel-partner/ads/design-requests
  * Get design requests for a user by phone
  */
@@ -1161,3 +1203,4 @@ router.delete('/:id', async (req: Request, res: Response) => {
 });
 
 export default router;
+
