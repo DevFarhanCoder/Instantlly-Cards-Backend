@@ -60,11 +60,32 @@ const upload = multer({
   }
 });
 
+// Track active signup requests to detect duplicates
+const activeSignups = new Map<string, number>();
+
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
+  const startTimestamp = Date.now();
+  const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || `auto-${startTimestamp}`;
+  const phoneKey = req.body?.phone?.trim();
+  
   try {
-    const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || 'no-req-id';
-    console.log(`🔖 [REQ:${reqId}] 🚀 Starting simple signup process...`);
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`🔖 [REQ:${reqId}] 🚀 SIGNUP REQUEST RECEIVED at ${new Date().toISOString()}`);
+    console.log(`🔖 [REQ:${reqId}] Phone: ${phoneKey}`);
+    
+    // Check if there's already an active signup for this phone
+    if (phoneKey && activeSignups.has(phoneKey)) {
+      const prevReqTime = activeSignups.get(phoneKey)!;
+      const timeSincePrev = startTimestamp - prevReqTime;
+      console.warn(`🔖 [REQ:${reqId}] ⚠️⚠️⚠️ DUPLICATE SIGNUP DETECTED! Phone ${phoneKey} already has active signup from ${timeSincePrev}ms ago`);
+    }
+    
+    // Track this signup request
+    if (phoneKey) {
+      activeSignups.set(phoneKey, startTimestamp);
+      console.log(`🔖 [REQ:${reqId}] Tracking signup request (${activeSignups.size} active)`);
+    }
     
     const { name, phone, password, referralCode } = req.body;
     
@@ -393,8 +414,20 @@ router.post("/signup", async (req, res) => {
       defaultCard: defaultCard || null
     });
     console.log(`🔖 [REQ:${reqId}] ✅ Response sent for signup - defaultCard present:`, !!defaultCard);
+    
+    // Clean up tracking
+    if (phoneKey) {
+      activeSignups.delete(phoneKey);
+      console.log(`🔖 [REQ:${reqId}] Cleaned up tracking (${activeSignups.size} active)`);
+    }
 
   } catch (error: any) {
+    // Clean up tracking on error
+    if (phoneKey) {
+      activeSignups.delete(phoneKey);
+      console.log(`🔖 [REQ:${reqId}] Cleaned up tracking after error (${activeSignups.size} active)`);
+    }
+    
     console.error('💥 Signup error:', error);
     console.error('💥 Error details:', {
       name: error.name,
@@ -1404,54 +1437,6 @@ router.get("/version-check", async (req, res) => {
       success: false,
       updateRequired: false, // Don't block users on error
       message: "Error checking version"
-    });
-  }
-});
-
-// POST /api/auth/update-service-type - Update user's service type after signup
-router.post("/update-service-type", requireAuth, async (req: AuthReq, res) => {
-  try {
-    const userId = req.userId;
-    const { serviceType } = req.body;
-
-    console.log(`📝 [SERVICE-TYPE] Updating service type for user ${userId}: ${serviceType}`);
-
-    // Validate service type
-    const validServiceTypes = ['home-based', 'shop-based', 'both'];
-    if (!serviceType || !validServiceTypes.includes(serviceType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid service type. Must be one of: home-based, shop-based, both'
-      });
-    }
-
-    // Update user's service type
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { serviceType },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    console.log(`✅ [SERVICE-TYPE] Service type updated successfully for user ${userId}: ${serviceType}`);
-
-    res.json({
-      success: true,
-      message: 'Service type updated successfully',
-      serviceType: user.serviceType
-    });
-  } catch (error: any) {
-    console.error('❌ [SERVICE-TYPE] Error updating service type:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update service type',
-      error: error.message
     });
   }
 });
