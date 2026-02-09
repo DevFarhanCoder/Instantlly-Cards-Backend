@@ -201,17 +201,45 @@ router.post("/signup", async (req, res) => {
         console.log(`🔖 [REQ:${reqId}] ℹ️ Default card already exists for user, skipping creation:`, savedUser._id);
         defaultCard = existingCard;
       } else {
-        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+        // Extract country code and phone number from cleanPhone
+        let personalCountryCode = '';
+        let personalPhone = '';
+        
+        if (cleanPhone.startsWith('+')) {
+          const phoneWithoutPlus = cleanPhone.substring(1);
+          if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
+            // Indian number
+            personalCountryCode = '91';
+            personalPhone = phoneWithoutPlus.substring(2);
+          } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
+            // US/Canada number
+            personalCountryCode = '1';
+            personalPhone = phoneWithoutPlus.substring(1);
+          } else {
+            // Generic: take first 2-3 digits as country code
+            const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
+            if (match) {
+              personalCountryCode = match[1];
+              personalPhone = match[2];
+            } else {
+              personalPhone = phoneWithoutPlus;
+            }
+          }
+        } else {
+          personalPhone = (savedUser.phone || '').replace(/\D/g, '');
+        }
+
         const cardData: any = {
           userId: savedUser._id.toString(),
           name: savedUser.name || cleanName,
-          personalPhone: phoneDigits,
+          personalCountryCode: personalCountryCode,
+          personalPhone: personalPhone,
         };
 
         // Create card; ensure created object is converted to plain object for response
         const createdCard = await Card.create(cardData);
         defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
-        console.log(`🔖 [REQ:${reqId}] 🆕 Default card created for user:`, savedUser._id, 'phone:', phoneDigits);
+        console.log(`🔖 [REQ:${reqId}] 🆕 Default card created for user:`, savedUser._id, 'phone:', `+${personalCountryCode}${personalPhone}`);
       }
     } catch (cardError) {
       console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
@@ -243,70 +271,8 @@ router.post("/signup", async (req, res) => {
       status: 'completed'
     });
 
-    // 🎴 AUTO-CREATE FIRST CARD: Create a default card with name and phone number
-    try {
-      console.log('🎴 Creating default card for new user...');
-      
-      // Extract country code and phone number from fullPhone
-      let personalCountryCode = '';
-      let personalPhone = '';
-      
-      if (cleanPhone.startsWith('+')) {
-        // Extract country code (e.g., +91 from +919876543210)
-        const phoneWithoutPlus = cleanPhone.substring(1);
-        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-          // Indian number
-          personalCountryCode = '91';
-          personalPhone = phoneWithoutPlus.substring(2);
-        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-          // US/Canada number
-          personalCountryCode = '1';
-          personalPhone = phoneWithoutPlus.substring(1);
-        } else {
-          // Generic: take first 2-3 digits as country code
-          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
-          if (match) {
-            personalCountryCode = match[1];
-            personalPhone = match[2];
-          }
-        }
-      }
-      
-      const defaultCard = await Card.create({
-        userId: savedUser._id.toString(),
-        name: cleanName,
-        personalCountryCode: personalCountryCode,
-        personalPhone: personalPhone,
-        // All other fields will use default empty values from the schema
-        gender: '',
-        email: '',
-        location: '',
-        mapsLink: '',
-        companyName: '',
-        designation: '',
-        companyCountryCode: '',
-        companyPhone: '',
-        companyEmail: '',
-        companyWebsite: '',
-        companyAddress: '',
-        companyMapsLink: '',
-        message: '',
-        companyPhoto: '',
-        linkedin: '',
-        twitter: '',
-        instagram: '',
-        facebook: '',
-        youtube: '',
-        whatsapp: '',
-        telegram: ''
-      });
-      
-      console.log('✅ Default card created successfully with ID:', defaultCard._id);
-      console.log('📇 Card details - Name:', defaultCard.name, 'Phone:', `+${personalCountryCode}${personalPhone}`);
-    } catch (cardError) {
-      console.error('⚠️ Failed to create default card:', cardError);
-      // Don't fail signup if card creation fails
-    }
+    // NOTE: Default card is already created above (around line 196-226) with duplicate check
+    // DO NOT create another card here - it was causing duplicate cards bug
 
     // If referred by someone, give referrer 20% bonus (100,000 credits)
     if (referrer) {
@@ -1417,6 +1383,54 @@ router.get("/version-check", async (req, res) => {
       success: false,
       updateRequired: false, // Don't block users on error
       message: "Error checking version"
+    });
+  }
+});
+
+// POST /api/auth/update-service-type - Update user's service type after signup
+router.post("/update-service-type", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    const { serviceType } = req.body;
+
+    console.log(`📝 [SERVICE-TYPE] Updating service type for user ${userId}: ${serviceType}`);
+
+    // Validate service type
+    const validServiceTypes = ['home-based', 'shop-based', 'both'];
+    if (!serviceType || !validServiceTypes.includes(serviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid service type. Must be one of: home-based, shop-based, both'
+      });
+    }
+
+    // Update user's service type
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { serviceType },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    console.log(`✅ [SERVICE-TYPE] Service type updated successfully for user ${userId}: ${serviceType}`);
+
+    res.json({
+      success: true,
+      message: 'Service type updated successfully',
+      serviceType: user.serviceType
+    });
+  } catch (error: any) {
+    console.error('❌ [SERVICE-TYPE] Error updating service type:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update service type',
+      error: error.message
     });
   }
 });
