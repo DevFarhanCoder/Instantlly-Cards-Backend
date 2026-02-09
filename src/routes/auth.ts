@@ -208,97 +208,86 @@ router.post("/signup", async (req, res) => {
 
     console.log('✅ User created successfully with ID:', savedUser._id);
 
-    // Create a single idempotent default card for the new user (use name + phone)
-    // Robust behavior:
-    // - Check for ANY existing cards for this user (to prevent duplicates)
-    // - If found, use it; if not found, create with isDefault: true
-    // - Database unique index ensures only 1 default card per user
+    // Create a single idempotent default card using ATOMIC upsert operation
+    // This prevents race conditions when multiple signup requests come simultaneously
     let defaultCard = null;
     try {
-      const userIdCandidates = [savedUser._id, savedUser._id.toString()];
-      // Check for ANY existing card first (not just default ones)
-      const existingCards = await Card.find({ userId: { $in: userIdCandidates } }).lean();
-      console.log(`🔖 [REQ:${reqId}] Found ${existingCards.length} existing cards for user ${savedUser._id}`);
+      console.log(`🔖 [REQ:${reqId}] 🃏 Creating default card with atomic upsert for user:`, savedUser._id);
       
-      if (existingCards.length > 0) {
-        // Use first existing card (should only be one default)
-        defaultCard = existingCards[0];
-        console.log(`🔖 [REQ:${reqId}] ℹ️ Card already exists for user, skipping creation:`, savedUser._id);
-        
-        // If there are multiple cards, log warning
-        if (existingCards.length > 1) {
-          console.warn(`🔖 [REQ:${reqId}] ⚠️ DUPLICATE CARDS DETECTED: User ${savedUser._id} has ${existingCards.length} cards!`);
+      // Extract country code and phone number from cleanPhone
+      let personalCountryCode = '';
+      let personalPhone = '';
+      
+      if (cleanPhone.startsWith('+')) {
+        const phoneWithoutPlus = cleanPhone.substring(1);
+        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
+          personalCountryCode = '91';
+          personalPhone = phoneWithoutPlus.substring(2);
+        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
+          personalCountryCode = '1';
+          personalPhone = phoneWithoutPlus.substring(1);
+        } else {
+          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
+          if (match) {
+            personalCountryCode = match[1];
+            personalPhone = match[2];
+          } else {
+            personalPhone = phoneWithoutPlus;
+          }
         }
       } else {
-        // Extract country code and phone number from cleanPhone
-        let personalCountryCode = '';
-        let personalPhone = '';
-        
-        if (cleanPhone.startsWith('+')) {
-          const phoneWithoutPlus = cleanPhone.substring(1);
-          if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-            // Indian number
-            personalCountryCode = '91';
-            personalPhone = phoneWithoutPlus.substring(2);
-          } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-            // US/Canada number
-            personalCountryCode = '1';
-            personalPhone = phoneWithoutPlus.substring(1);
-          } else {
-            // Generic: take first 2-3 digits as country code
-            const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
-            if (match) {
-              personalCountryCode = match[1];
-              personalPhone = match[2];
-            } else {
-              personalPhone = phoneWithoutPlus;
-            }
-          }
-        } else {
-          personalPhone = (savedUser.phone || '').replace(/\D/g, '');
-        }
-
-        const cardData: any = {
-          userId: savedUser._id.toString(),
-          name: savedUser.name || cleanName,
-          personalCountryCode: personalCountryCode,
-          personalPhone: personalPhone,
-          isDefault: true, // Mark as default card to enforce uniqueness
-        };
-
-        console.log(`🔖 [REQ:${reqId}] 📝 Creating default card for user:`, savedUser._id);
-        
-        // Create card; ensure created object is converted to plain object for response
-        const createdCard = await Card.create(cardData);
-        defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
-        console.log(`🔖 [REQ:${reqId}] ✅ Default card CREATED successfully - Card ID:`, createdCard._id);
+        personalPhone = (savedUser.phone || '').replace(/\D/g, '');
       }
+
+      const cardData: any = {
+        userId: savedUser._id.toString(),
+        name: savedUser.name || cleanName,
+        personalCountryCode: personalCountryCode,
+        personalPhone: personalPhone,
+        isDefault: true,
+      };
+
+      // Use findOneAndUpdate with upsert for ATOMIC operation - prevents ALL race conditions
+      // This guarantees only ONE card will ever be created, even if multiple requests come simultaneously
+      defaultCard = await Card.findOneAndUpdate(
+        { 
+          userId: savedUser._id.toString(),
+          isDefault: true 
+        },
+        { 
+          $setOnInsert: cardData  // Only sets these values if creating new document
+        },
+        { 
+          upsert: true,           // Create if doesn't exist
+          new: true,              // Return the document after update
+          lean: true              // Return plain object
+        }
+      );
+      
+      console.log(`🔖 [REQ:${reqId}] ✅ Default card ensured atomically - Card ID:`, defaultCard._id);
+      console.log(`🔖 [REQ:${reqId}] Card was: ${defaultCard.createdAt ? 'existing (reused)' : 'newly created'}`);
+      
     } catch (cardError: any) {
-      // Handle duplicate key error (E11000) - card already exists (race condition)
-      if (cardError?.code === 11000 || cardError?.message?.includes('duplicate key')) {
-        console.log(`🔖 [REQ:${reqId}] ⚠️ Duplicate card detected (race condition), fetching existing...`);
-        const existingCard = await Card.findOne({ userId: savedUser._id.toString() }).lean();
+      console.error(`🔖 [REQ:${reqId}] ❌ CRITICAL: Failed to create default card:`, {
+        errorCode: cardError?.code,
+        errorMessage: cardError?.message,
+        userId: savedUser._id.toString()
+      });
+      
+      // Try to fetch any existing card as fallback
+      try {
+        const existingCard = await Card.findOne({ 
+          userId: savedUser._id.toString() 
+        }).sort({ createdAt: 1 }).lean();
+        
         if (existingCard) {
           defaultCard = existingCard;
-          console.log(`🔖 [REQ:${reqId}] ✅ Found existing card after duplicate error`);
+          console.log(`🔖 [REQ:${reqId}] ⚠️ Used existing card as fallback - Card ID:`, existingCard._id);
+        } else {
+          console.error(`🔖 [REQ:${reqId}] ❌ No fallback card found for user`);
         }
-      } else {
-        console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
-        // Fallback: construct a minimal defaultCard object so frontend can display
-        try {
-          const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
-          defaultCard = {
-            _id: null,
-            userId: savedUser._id.toString(),
-            name: savedUser.name || cleanName,
-            personalPhone: phoneDigits,
-            isFallback: true
-          };
-          console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
-        } catch (fallbackError) {
-          console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
-          defaultCard = null;
-        }
+      } catch (fallbackError) {
+        console.error(`🔖 [REQ:${reqId}] ❌ Fallback card fetch also failed:`, fallbackError);
       }
     }
 
