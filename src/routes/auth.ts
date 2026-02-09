@@ -189,17 +189,25 @@ router.post("/signup", async (req, res) => {
 
     // Create a single idempotent default card for the new user (use name + phone)
     // Robust behavior:
-    // - Search by both ObjectId and string forms of userId (some records store string)
-    // - Save userId as string when creating the card to avoid mismatches
-    // - If card creation fails, return a fallback defaultCard object so client can
-    //   immediately show a card UI with name + phone while background repairs occur
+    // - Check for ANY existing cards for this user (to prevent duplicates)
+    // - If found, use it; if not found, create with isDefault: true
+    // - Database unique index ensures only 1 default card per user
     let defaultCard = null;
     try {
       const userIdCandidates = [savedUser._id, savedUser._id.toString()];
-      const existingCard = await Card.findOne({ userId: { $in: userIdCandidates } }).lean();
-      if (existingCard) {
-        console.log(`🔖 [REQ:${reqId}] ℹ️ Default card already exists for user, skipping creation:`, savedUser._id);
-        defaultCard = existingCard;
+      // Check for ANY existing card first (not just default ones)
+      const existingCards = await Card.find({ userId: { $in: userIdCandidates } }).lean();
+      console.log(`🔖 [REQ:${reqId}] Found ${existingCards.length} existing cards for user ${savedUser._id}`);
+      
+      if (existingCards.length > 0) {
+        // Use first existing card (should only be one default)
+        defaultCard = existingCards[0];
+        console.log(`🔖 [REQ:${reqId}] ℹ️ Card already exists for user, skipping creation:`, savedUser._id);
+        
+        // If there are multiple cards, log warning
+        if (existingCards.length > 1) {
+          console.warn(`🔖 [REQ:${reqId}] ⚠️ DUPLICATE CARDS DETECTED: User ${savedUser._id} has ${existingCards.length} cards!`);
+        }
       } else {
         // Extract country code and phone number from cleanPhone
         let personalCountryCode = '';
@@ -234,29 +242,42 @@ router.post("/signup", async (req, res) => {
           name: savedUser.name || cleanName,
           personalCountryCode: personalCountryCode,
           personalPhone: personalPhone,
+          isDefault: true, // Mark as default card to enforce uniqueness
         };
 
+        console.log(`🔖 [REQ:${reqId}] 📝 Creating default card for user:`, savedUser._id);
+        
         // Create card; ensure created object is converted to plain object for response
         const createdCard = await Card.create(cardData);
         defaultCard = (createdCard && typeof createdCard.toObject === 'function') ? createdCard.toObject() : createdCard;
-        console.log(`🔖 [REQ:${reqId}] 🆕 Default card created for user:`, savedUser._id, 'phone:', `+${personalCountryCode}${personalPhone}`);
+        console.log(`🔖 [REQ:${reqId}] ✅ Default card CREATED successfully - Card ID:`, createdCard._id);
       }
-    } catch (cardError) {
-      console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
-      // Fallback: construct a minimal defaultCard object so frontend can display
-      try {
-        const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
-        defaultCard = {
-          _id: null,
-          userId: savedUser._id.toString(),
-          name: savedUser.name || cleanName,
-          personalPhone: phoneDigits,
-          isFallback: true
-        };
-        console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
-      } catch (fallbackError) {
-        console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
-        defaultCard = null;
+    } catch (cardError: any) {
+      // Handle duplicate key error (E11000) - card already exists (race condition)
+      if (cardError?.code === 11000 || cardError?.message?.includes('duplicate key')) {
+        console.log(`🔖 [REQ:${reqId}] ⚠️ Duplicate card detected (race condition), fetching existing...`);
+        const existingCard = await Card.findOne({ userId: savedUser._id.toString() }).lean();
+        if (existingCard) {
+          defaultCard = existingCard;
+          console.log(`🔖 [REQ:${reqId}] ✅ Found existing card after duplicate error`);
+        }
+      } else {
+        console.error(`🔖 [REQ:${reqId}] ❌ Failed to ensure default card for new user:`, cardError);
+        // Fallback: construct a minimal defaultCard object so frontend can display
+        try {
+          const phoneDigits = (savedUser.phone || '').replace(/\D/g, '');
+          defaultCard = {
+            _id: null,
+            userId: savedUser._id.toString(),
+            name: savedUser.name || cleanName,
+            personalPhone: phoneDigits,
+            isFallback: true
+          };
+          console.log(`🔖 [REQ:${reqId}] ⚠️ Using fallback defaultCard for response (client will see a provisional card)`);
+        } catch (fallbackError) {
+          console.error(`🔖 [REQ:${reqId}] ❌ Failed to create fallback defaultCard:`, fallbackError);
+          defaultCard = null;
+        }
       }
     }
 
