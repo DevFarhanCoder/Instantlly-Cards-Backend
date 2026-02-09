@@ -61,7 +61,7 @@ const upload = multer({
 });
 
 // Track active signup requests to detect duplicates
-const activeSignups = new Map<string, number>();
+const activeSignups = new Map<string, { reqId: string; timestamp: number }>();
 
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
@@ -73,17 +73,26 @@ router.post("/signup", async (req, res) => {
     console.log(`\n${"=".repeat(80)}`);
     console.log(`🔖 [REQ:${reqId}] 🚀 SIGNUP REQUEST RECEIVED at ${new Date().toISOString()}`);
     console.log(`🔖 [REQ:${reqId}] Phone: ${phoneKey}`);
+    console.log(`🔖 [REQ:${reqId}] Headers:`, {
+      'content-type': req.get('content-type'),
+      'user-agent': req.get('user-agent')?.substring(0, 50),
+      'x-req-id': reqId
+    });
     
     // Check if there's already an active signup for this phone
     if (phoneKey && activeSignups.has(phoneKey)) {
-      const prevReqTime = activeSignups.get(phoneKey)!;
-      const timeSincePrev = startTimestamp - prevReqTime;
-      console.warn(`🔖 [REQ:${reqId}] ⚠️⚠️⚠️ DUPLICATE SIGNUP DETECTED! Phone ${phoneKey} already has active signup from ${timeSincePrev}ms ago`);
+      const prevReq = activeSignups.get(phoneKey)!;
+      const timeSincePrev = startTimestamp - prevReq.timestamp;
+      console.warn(`🔖 [REQ:${reqId}] ⚠️⚠️⚠️ DUPLICATE SIGNUP DETECTED!`);
+      console.warn(`🔖 [REQ:${reqId}]    Phone: ${phoneKey}`);
+      console.warn(`🔖 [REQ:${reqId}]    Previous request: ${prevReq.reqId}`);
+      console.warn(`🔖 [REQ:${reqId}]    Time since previous: ${timeSincePrev}ms`);
+      console.warn(`🔖 [REQ:${reqId}]    This indicates FRONTEND is calling signup MULTIPLE TIMES!`);
     }
     
     // Track this signup request
     if (phoneKey) {
-      activeSignups.set(phoneKey, startTimestamp);
+      activeSignups.set(phoneKey, { reqId, timestamp: startTimestamp });
       console.log(`🔖 [REQ:${reqId}] Tracking signup request (${activeSignups.size} active)`);
     }
     
@@ -264,8 +273,26 @@ router.post("/signup", async (req, res) => {
         }
       );
       
-      console.log(`🔖 [REQ:${reqId}] ✅ Default card ensured atomically - Card ID:`, defaultCard._id);
-      console.log(`🔖 [REQ:${reqId}] Card was: ${defaultCard.createdAt ? 'existing (reused)' : 'newly created'}`);
+      if (defaultCard) {
+        console.log(`🔖 [REQ:${reqId}] ✅ Default card ensured atomically - Card ID:`, defaultCard._id);
+        console.log(`🔖 [REQ:${reqId}] Card was: ${defaultCard.createdAt ? 'existing (reused)' : 'newly created'}`);
+        
+        // VERIFICATION: Count total cards for this user to detect duplicates
+        const totalCards = await Card.countDocuments({ userId: savedUser._id.toString() });
+        console.log(`🔖 [REQ:${reqId}] 🔍 VERIFICATION: User ${savedUser._id} now has ${totalCards} card(s)`);
+        if (totalCards > 1) {
+          console.error(`🔖 [REQ:${reqId}] 🚨🚨🚨 CRITICAL BUG: User has ${totalCards} cards! DUPLICATE DETECTED!`);
+          // List all cards for this user
+          const allCards = await Card.find({ userId: savedUser._id.toString() }).lean();
+          console.error(`🔖 [REQ:${reqId}] All cards:`, allCards.map(c => ({ 
+            id: c._id, 
+            createdAt: c.createdAt,
+            isDefault: c.isDefault
+          })));
+        }
+      } else {
+        console.error(`🔖 [REQ:${reqId}] ⚠️ Warning: Atomic upsert returned null`);
+      }
       
     } catch (cardError: any) {
       console.error(`🔖 [REQ:${reqId}] ❌ CRITICAL: Failed to create default card:`, {
