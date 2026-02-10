@@ -234,103 +234,147 @@ router.post("/signup", async (req, res) => {
 
     console.log('✅ User created successfully with ID:', savedUser._id);
 
-    // Create DEFAULT CARD - NUCLEAR OPTION: Delete everything and create fresh
+    // Create DEFAULT CARD - BULLETPROOF ATOMIC APPROACH
     let defaultCard = null;
     try {
-      console.log(`🔖 [REQ:${reqId}] 🃏 CARD CREATION START - User:`, savedUser._id);
+      console.log(`🔖 [REQ:${reqId}] 🃏 ATOMIC CARD CREATION START - User:`, savedUser._id);
       
       const userIdStr = savedUser._id.toString();
       
-      // STEP 1: Check if default card already exists for this user
-      const existingDefaultCard = await Card.findOne({ 
+      // STEP 1: Parse phone components first
+      let personalCountryCode = '';
+      let personalPhone = '';
+      
+      if (cleanPhone.startsWith('+')) {
+        const phoneWithoutPlus = cleanPhone.substring(1);
+        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
+          personalCountryCode = '91';
+          personalPhone = phoneWithoutPlus.substring(2);
+        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
+          personalCountryCode = '1';
+          personalPhone = phoneWithoutPlus.substring(1);
+        } else {
+          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
+          if (match) {
+            personalCountryCode = match[1];
+            personalPhone = match[2];
+          } else {
+            personalPhone = phoneWithoutPlus;
+          }
+        }
+      } else {
+        personalPhone = cleanPhone.replace(/\D/g, '');
+      }
+      
+      console.log(`🔖 [REQ:${reqId}] 📱 Parsed phone - CountryCode: '${personalCountryCode}', Phone: '${personalPhone}'`);
+      
+      // STEP 2: ATOMIC UPSERT - Create or find default card atomically
+      // This prevents race conditions by using MongoDB's atomic findOneAndUpdate
+      console.log(`🔖 [REQ:${reqId}] ⚛️ Attempting atomic upsert for default card`);
+      
+      const cardFilter = {
+        userId: userIdStr,
+        isDefault: true
+      };
+      
+      const cardUpdate = {
+        $setOnInsert: {
+          // Only set these fields when inserting (creating new)
+          userId: userIdStr,
+          name: savedUser.name || cleanName,
+          personalCountryCode: personalCountryCode,
+          personalPhone: personalPhone,
+          isDefault: true,
+          // All other fields get default values from schema
+          gender: "",
+          birthdate: "",
+          anniversary: "",
+          email: "",
+          location: "",
+          mapsLink: "",
+          companyName: "",
+          designation: "",
+          companyCountryCode: "",
+          companyPhone: "",
+          companyEmail: "",
+          companyWebsite: "",
+          companyAddress: "",
+          companyMapsLink: "",
+          message: "",
+          companyPhoto: "",
+          businessHours: "",
+          servicesOffered: "",
+          establishedYear: "",
+          aboutBusiness: "",
+          linkedin: "",
+          twitter: "",
+          instagram: "",
+          facebook: "",
+          youtube: "",
+          whatsapp: "",
+          telegram: "",
+          keywords: "",
+          companyPhones: []
+        }
+      };
+      
+      const upsertOptions = {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true
+      };
+      
+      const upsertResult = await Card.findOneAndUpdate(
+        cardFilter,
+        cardUpdate,
+        upsertOptions
+      );
+      
+      if (!upsertResult) {
+        throw new Error('Failed to create or find default card - upsert returned null');
+      }
+      
+      defaultCard = upsertResult.toObject();
+      
+      console.log(`🔖 [REQ:${reqId}] ✅ Atomic upsert completed - Card ID: ${defaultCard._id}`);
+      console.log(`🔖 [REQ:${reqId}]    isDefault: ${defaultCard.isDefault}`);
+      console.log(`🔖 [REQ:${reqId}]    personalCountryCode: '${defaultCard.personalCountryCode}'`);
+      console.log(`🔖 [REQ:${reqId}]    personalPhone: '${defaultCard.personalPhone}'`);
+      
+      // STEP 3: CLEANUP - Remove any non-default cards (race condition cleanup)
+      console.log(`🔖 [REQ:${reqId}] 🧹 Cleaning up any extra cards...`);
+      
+      const cleanupResult = await Card.deleteMany({
+        userId: userIdStr,
+        isDefault: { $ne: true }  // Delete all cards that are NOT default
+      });
+      
+      if (cleanupResult.deletedCount > 0) {
+        console.log(`🔖 [REQ:${reqId}] 🗑️ Cleaned up ${cleanupResult.deletedCount} extra card(s)`);
+      } else {
+        console.log(`🔖 [REQ:${reqId}] ✨ No extra cards to clean up`);
+      }
+      
+      // STEP 4: FINAL VERIFICATION
+      const finalCount = await Card.countDocuments({ userId: userIdStr });
+      console.log(`🔖 [REQ:${reqId}] 🔍 FINAL VERIFICATION: ${finalCount} card(s) total`);
+      
+      const defaultCount = await Card.countDocuments({ 
         userId: userIdStr, 
         isDefault: true 
       });
+      console.log(`🔖 [REQ:${reqId}] 🔍 Default cards: ${defaultCount}`);
       
-      if (existingDefaultCard) {
-        console.log(`🔖 [REQ:${reqId}] ✅ Default card already exists - ID: ${existingDefaultCard._id}`);
-        console.log(`🔖 [REQ:${reqId}]    Likely from previous signup request - using existing card`);
-        defaultCard = existingDefaultCard.toObject();
-      } else {
-        console.log(`🔖 [REQ:${reqId}] 📝 No default card exists - creating new one`);
+      if (finalCount !== 1 || defaultCount !== 1) {
+        console.error(`🔖 [REQ:${reqId}] 🚨 ATOMICITY VIOLATION: Expected 1 total card and 1 default card`);
+        console.error(`🔖 [REQ:${reqId}]    Actual: ${finalCount} total, ${defaultCount} default`);
         
-        // STEP 2: Parse phone components
-        let personalCountryCode = '';
-        let personalPhone = '';
-        
-        if (cleanPhone.startsWith('+')) {
-          const phoneWithoutPlus = cleanPhone.substring(1);
-          if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-            personalCountryCode = '91';
-            personalPhone = phoneWithoutPlus.substring(2);
-          } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-            personalCountryCode = '1';
-            personalPhone = phoneWithoutPlus.substring(1);
-          } else {
-            const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
-            if (match) {
-              personalCountryCode = match[1];
-              personalPhone = match[2];
-            } else {
-              personalPhone = phoneWithoutPlus;
-            }
-          }
-        } else {
-          personalPhone = cleanPhone.replace(/\D/g, '');
-        }
-
-        // STEP 3: Create exactly ONE new card with atomic operation
-        console.log(`🔖 [REQ:${reqId}] 📝 Creating ONE new card with isDefault: true`);
-        
-        try {
-          const newCard = new Card({
-            userId: userIdStr,
-            name: savedUser.name || cleanName,
-            personalCountryCode: personalCountryCode,
-            personalPhone: personalPhone,
-            isDefault: true
-          });
-          
-          const savedCard = await newCard.save();
-          defaultCard = savedCard.toObject();
-          
-          console.log(`🔖 [REQ:${reqId}] ✅ Card created successfully - ID: ${defaultCard._id}`);
-          console.log(`🔖 [REQ:${reqId}]    isDefault: ${defaultCard.isDefault}`);
-          console.log(`🔖 [REQ:${reqId}]    createdAt: ${defaultCard.createdAt}`);
-          
-        } catch (cardSaveError: any) {
-          // If card creation fails due to duplicate key (another request created it)
-          if (cardSaveError.code === 11000) {
-            console.log(`🔖 [REQ:${reqId}] ⚠️ Duplicate key error - another request created default card`);
-            const existingCard = await Card.findOne({ 
-              userId: userIdStr, 
-              isDefault: true 
-            });
-            if (existingCard) {
-              console.log(`🔖 [REQ:${reqId}] ✅ Using existing default card - ID: ${existingCard._id}`);
-              defaultCard = existingCard.toObject();
-            }
-          } else {
-            throw cardSaveError; // Re-throw if it's not a duplicate key error
-          }
-        }
-      }
-      
-      // STEP 4: VERIFICATION - Count total cards and clean up any extras
-      const finalCount = await Card.countDocuments({ userId: userIdStr });
-      console.log(`🔖 [REQ:${reqId}] 🔍 FINAL COUNT: ${finalCount} card(s) for user`);
-      
-      if (finalCount > 1) {
-        console.error(`🔖 [REQ:${reqId}] 🚨 WARNING: Found ${finalCount} cards, cleaning up extras`);
-        
-        // Keep only the default card, remove any extras
-        await Card.deleteMany({ 
-          userId: userIdStr, 
+        // Emergency fix: Keep only the default card
+        await Card.deleteMany({
+          userId: userIdStr,
           isDefault: { $ne: true }
         });
-        
-        const cleanupCount = await Card.countDocuments({ userId: userIdStr });
-        console.log(`🔖 [REQ:${reqId}] 🗑️ Cleanup completed - ${cleanupCount} card(s) remain`);
+        console.log(`🔖 [REQ:${reqId}] 🩹 Emergency cleanup applied`);
       }
       
     } catch (cardError: any) {
