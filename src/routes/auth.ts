@@ -89,9 +89,12 @@ router.post("/signup", async (req, res) => {
       console.warn(`🔖 [REQ:${reqId}]    Time since previous: ${timeSincePrev}ms`);
       console.warn(`🔖 [REQ:${reqId}]    This indicates FRONTEND is calling signup MULTIPLE TIMES!`);
       
-      // BLOCK this duplicate request if the previous one is still active (< 10 seconds)
-      if (timeSincePrev < 10000) {
+      // BLOCK this duplicate request if the previous one is still active (< 30 seconds)
+      // Increased from 10s to 30s for better duplicate prevention
+      if (timeSincePrev < 30000) {
         console.error(`🔖 [REQ:${reqId}] 🚨 BLOCKING DUPLICATE SIGNUP - Previous request still active`);
+        // Clean up this phone key from tracking since we're rejecting the request
+        activeSignups.delete(phoneKey);
         return res.status(429).json({ 
           message: 'Signup already in progress. Please wait.' 
         });
@@ -236,69 +239,98 @@ router.post("/signup", async (req, res) => {
     try {
       console.log(`🔖 [REQ:${reqId}] 🃏 CARD CREATION START - User:`, savedUser._id);
       
-      // STEP 1: NUCLEAR DELETE - Remove ALL cards for this user (no conditions)
       const userIdStr = savedUser._id.toString();
-      const deleteResult = await Card.deleteMany({ userId: userIdStr });
-      console.log(`🔖 [REQ:${reqId}] 🗑️ Deleted ${deleteResult.deletedCount} existing card(s)`);
       
-      // STEP 2: Parse phone components
-      let personalCountryCode = '';
-      let personalPhone = '';
-      
-      if (cleanPhone.startsWith('+')) {
-        const phoneWithoutPlus = cleanPhone.substring(1);
-        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-          personalCountryCode = '91';
-          personalPhone = phoneWithoutPlus.substring(2);
-        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-          personalCountryCode = '1';
-          personalPhone = phoneWithoutPlus.substring(1);
-        } else {
-          const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
-          if (match) {
-            personalCountryCode = match[1];
-            personalPhone = match[2];
-          } else {
-            personalPhone = phoneWithoutPlus;
-          }
-        }
-      } else {
-        personalPhone = cleanPhone.replace(/\D/g, '');
-      }
-
-      // STEP 3: Create exactly ONE new card
-      console.log(`🔖 [REQ:${reqId}] 📝 Creating ONE new card with isDefault: true`);
-      
-      const newCard = new Card({
-        userId: userIdStr,
-        name: savedUser.name || cleanName,
-        personalCountryCode: personalCountryCode,
-        personalPhone: personalPhone,
-        isDefault: true
+      // STEP 1: Check if default card already exists for this user
+      const existingDefaultCard = await Card.findOne({ 
+        userId: userIdStr, 
+        isDefault: true 
       });
       
-      const savedCard = await newCard.save();
-      defaultCard = savedCard.toObject();
+      if (existingDefaultCard) {
+        console.log(`🔖 [REQ:${reqId}] ✅ Default card already exists - ID: ${existingDefaultCard._id}`);
+        console.log(`🔖 [REQ:${reqId}]    Likely from previous signup request - using existing card`);
+        defaultCard = existingDefaultCard.toObject();
+      } else {
+        console.log(`🔖 [REQ:${reqId}] 📝 No default card exists - creating new one`);
+        
+        // STEP 2: Parse phone components
+        let personalCountryCode = '';
+        let personalPhone = '';
+        
+        if (cleanPhone.startsWith('+')) {
+          const phoneWithoutPlus = cleanPhone.substring(1);
+          if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
+            personalCountryCode = '91';
+            personalPhone = phoneWithoutPlus.substring(2);
+          } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
+            personalCountryCode = '1';
+            personalPhone = phoneWithoutPlus.substring(1);
+          } else {
+            const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
+            if (match) {
+              personalCountryCode = match[1];
+              personalPhone = match[2];
+            } else {
+              personalPhone = phoneWithoutPlus;
+            }
+          }
+        } else {
+          personalPhone = cleanPhone.replace(/\D/g, '');
+        }
+
+        // STEP 3: Create exactly ONE new card with atomic operation
+        console.log(`🔖 [REQ:${reqId}] 📝 Creating ONE new card with isDefault: true`);
+        
+        try {
+          const newCard = new Card({
+            userId: userIdStr,
+            name: savedUser.name || cleanName,
+            personalCountryCode: personalCountryCode,
+            personalPhone: personalPhone,
+            isDefault: true
+          });
+          
+          const savedCard = await newCard.save();
+          defaultCard = savedCard.toObject();
+          
+          console.log(`🔖 [REQ:${reqId}] ✅ Card created successfully - ID: ${defaultCard._id}`);
+          console.log(`🔖 [REQ:${reqId}]    isDefault: ${defaultCard.isDefault}`);
+          console.log(`🔖 [REQ:${reqId}]    createdAt: ${defaultCard.createdAt}`);
+          
+        } catch (cardSaveError: any) {
+          // If card creation fails due to duplicate key (another request created it)
+          if (cardSaveError.code === 11000) {
+            console.log(`🔖 [REQ:${reqId}] ⚠️ Duplicate key error - another request created default card`);
+            const existingCard = await Card.findOne({ 
+              userId: userIdStr, 
+              isDefault: true 
+            });
+            if (existingCard) {
+              console.log(`🔖 [REQ:${reqId}] ✅ Using existing default card - ID: ${existingCard._id}`);
+              defaultCard = existingCard.toObject();
+            }
+          } else {
+            throw cardSaveError; // Re-throw if it's not a duplicate key error
+          }
+        }
+      }
       
-      console.log(`🔖 [REQ:${reqId}] ✅ Card created - ID: ${defaultCard._id}`);
-      console.log(`🔖 [REQ:${reqId}]    isDefault: ${defaultCard.isDefault}`);
-      console.log(`🔖 [REQ:${reqId}]    createdAt: ${defaultCard.createdAt}`);
-      
-      // STEP 4: CRITICAL VERIFICATION - Count cards
+      // STEP 4: VERIFICATION - Count total cards and clean up any extras
       const finalCount = await Card.countDocuments({ userId: userIdStr });
       console.log(`🔖 [REQ:${reqId}] 🔍 FINAL COUNT: ${finalCount} card(s) for user`);
       
-      if (finalCount !== 1) {
-        console.error(`🔖 [REQ:${reqId}] 🚨🚨🚨 CRITICAL BUG: Expected 1 card but got ${finalCount}!`);
-        console.error(`🔖 [REQ:${reqId}]    This means card was created while we were creating!`);
-        console.error(`🔖 [REQ:${reqId}]    Possible cause: DUPLICATE SIGNUP REQUEST!`);
+      if (finalCount > 1) {
+        console.error(`🔖 [REQ:${reqId}] 🚨 WARNING: Found ${finalCount} cards, cleaning up extras`);
         
-        // Emergency cleanup - keep only the one we just created
+        // Keep only the default card, remove any extras
         await Card.deleteMany({ 
           userId: userIdStr, 
-          _id: { $ne: defaultCard._id } 
+          isDefault: { $ne: true }
         });
-        console.log(`🔖 [REQ:${reqId}] 🗑️ Emergency cleanup completed`);
+        
+        const cleanupCount = await Card.countDocuments({ userId: userIdStr });
+        console.log(`🔖 [REQ:${reqId}] 🗑️ Cleanup completed - ${cleanupCount} card(s) remain`);
       }
       
     } catch (cardError: any) {
