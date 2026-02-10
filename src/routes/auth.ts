@@ -284,7 +284,6 @@ router.post("/signup", async (req, res) => {
           name: savedUser.name || cleanName,
           personalCountryCode: personalCountryCode,
           personalPhone: personalPhone,
-          isDefault: true,
           // All other fields get default values from schema
           gender: "",
           birthdate: "",
@@ -315,6 +314,10 @@ router.post("/signup", async (req, res) => {
           telegram: "",
           keywords: "",
           companyPhones: []
+        },
+        $set: {
+          // ALWAYS set isDefault to true (whether inserting OR finding existing)
+          isDefault: true
         }
       };
       
