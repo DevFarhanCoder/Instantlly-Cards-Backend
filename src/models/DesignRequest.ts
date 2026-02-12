@@ -11,6 +11,8 @@ export interface IDesignRequest extends Document {
   channelType: 'withChannel' | 'withoutChannel';
   referenceImagesGridFS?: mongoose.Types.ObjectId[];
   referenceVideosGridFS?: mongoose.Types.ObjectId[];
+  referenceImagesS3?: Array<{ url: string; key: string }>;
+  referenceVideosS3?: Array<{ url: string; key: string }>;
   uploaderPhone: string;
   uploaderName: string;
   userId?: string;
@@ -63,6 +65,20 @@ const DesignRequestSchema = new Schema<IDesignRequest>(
     },
     referenceVideosGridFS: {
       type: [Schema.Types.ObjectId],
+      default: [],
+    },
+    referenceImagesS3: {
+      type: [{
+        url: { type: String, required: true },
+        key: { type: String, required: true },
+      }],
+      default: [],
+    },
+    referenceVideosS3: {
+      type: [{
+        url: { type: String, required: true },
+        key: { type: String, required: true },
+      }],
       default: [],
     },
     uploaderPhone: {

@@ -13,6 +13,7 @@ import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
 import Transaction from "../models/Transaction";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
+import { movePendingToApproved } from "../services/s3Service";
 
 const router = express.Router();
 
@@ -560,6 +561,67 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
         }
       } else {
         console.log(`⚠️ Could not find user with phone ${ad.uploadedBy} for credits deduction`);
+      }
+    }
+
+    // 📦 Move media files from pending-ads to approved-ads in S3
+    const uploaderPhone = ad.uploadedBy || 'unknown';
+    const mediaFiles: Array<{ filename: string; type: 'bottom_image' | 'fullscreen_image' | 'bottom_video' | 'fullscreen_video' }> = [];
+
+    // Collect all S3 media files that need to be moved
+    if ((ad as any).bottomImageS3?.key) {
+      const filename = (ad as any).bottomImageS3.key.split('/').pop() || 'bottom_image.jpg';
+      mediaFiles.push({ filename, type: 'bottom_image' });
+    }
+
+    if ((ad as any).fullscreenImageS3?.key) {
+      const filename = (ad as any).fullscreenImageS3.key.split('/').pop() || 'fullscreen_image.jpg';
+      mediaFiles.push({ filename, type: 'fullscreen_image' });
+    }
+
+    if ((ad as any).bottomVideoS3?.key) {
+      const filename = (ad as any).bottomVideoS3.key.split('/').pop() || 'bottom_video.mp4';
+      mediaFiles.push({ filename, type: 'bottom_video' });
+    }
+
+    if ((ad as any).fullscreenVideoS3?.key) {
+      const filename = (ad as any).fullscreenVideoS3.key.split('/').pop() || 'fullscreen_video.mp4';
+      mediaFiles.push({ filename, type: 'fullscreen_video' });
+    }
+
+    // Move files from pending to approved in S3
+    if (mediaFiles.length > 0) {
+      console.log(`📦 Moving ${mediaFiles.length} media files from pending to approved in S3...`);
+      
+      try {
+        const approvedFiles = await movePendingToApproved(id, uploaderPhone, mediaFiles);
+        
+        // Update ad with new approved S3 URLs
+        for (const file of approvedFiles) {
+          switch (file.type) {
+            case 'bottom_image':
+              (ad as any).bottomImageS3 = { url: file.url, key: file.key };
+              console.log(`✅ Bottom image moved: ${file.url}`);
+              break;
+            case 'fullscreen_image':
+              (ad as any).fullscreenImageS3 = { url: file.url, key: file.key };
+              console.log(`✅ Fullscreen image moved: ${file.url}`);
+              break;
+            case 'bottom_video':
+              (ad as any).bottomVideoS3 = { url: file.url, key: file.key };
+              console.log(`✅ Bottom video moved: ${file.url}`);
+              break;
+            case 'fullscreen_video':
+              (ad as any).fullscreenVideoS3 = { url: file.url, key: file.key };
+              console.log(`✅ Fullscreen video moved: ${file.url}`);
+              break;
+          }
+        }
+        
+        console.log(`✅ Successfully moved all media to approved-ads/${id}/`);
+      } catch (error) {
+        console.error('❌ Failed to move S3 media files:', error);
+        // Continue with approval even if S3 move fails (files can be moved manually)
       }
     }
 
