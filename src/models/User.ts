@@ -3,17 +3,17 @@ import { Schema, model, models } from "mongoose";
 const UserSchema = new Schema(
   {
     name: { type: String, required: true },
-    phone: { 
-      type: String, 
-      required: true, 
-      unique: true, 
+    phone: {
+      type: String,
+      required: true,
+      unique: true,
       index: true,
       validate: {
-        validator: function(v: string) {
+        validator: function (v: string) {
           return /^\+?[\d\s\-\(\)]{10,15}$/.test(v);
         },
-        message: 'Phone number must be between 10-15 digits'
-      }
+        message: "Phone number must be between 10-15 digits",
+      },
     },
     password: { type: String, required: false, select: false }, // Optional - not currently used
     // Email is completely optional - no constraints at all
@@ -30,39 +30,42 @@ const UserSchema = new Schema(
     credits: { type: Number, default: 200 },
     creditsExpiryDate: { type: Date }, // Credits expire 1 month after signup
     referralCode: { type: String, unique: true, sparse: true, index: true },
-    referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    referredBy: { type: Schema.Types.ObjectId, ref: "User" },
     // Service type - Selected during first-time account setup
-    serviceType: { 
-      type: String, 
-      enum: ['home-based', 'business-visiting'],
-      default: null 
+    serviceType: {
+      type: String,
+      enum: ["home-based", "business-visiting"],
+      default: null,
     },
     // Quiz progress tracking - supports all 30 questions
     quizProgress: {
       completed: { type: Boolean, default: false },
       currentQuestionIndex: { type: Number, default: 0 },
-      answeredQuestions: { 
-        type: [String], 
+      answeredQuestions: {
+        type: [String],
         default: [],
         validate: {
-          validator: function(v: string[]) {
+          validator: function (v: string[]) {
             return v.length <= 30; // Maximum 30 questions
           },
-          message: 'Cannot have more than 30 answered questions'
-        }
+          message: "Cannot have more than 30 answered questions",
+        },
       }, // Array of question keys (e.g., ['married', 'haveBike'])
       answers: {
         type: Map,
         of: String,
-        default: {}
+        default: {},
       }, // Map of questionKey -> answer (stores all 30 Q&A pairs)
       creditsEarned: { type: Number, default: 0 },
       creditsRecordedInTransactions: { type: Number, default: 0 }, // Credits already saved in transactions
       startedAt: { type: Date },
-      completedAt: { type: Date }
-    }
+      completedAt: { type: Date },
+    },
+    parentId: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    level: { type: Number, default: 0, min: 0 },
+    directCount: { type: Number, default: 0, min: 0 },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 export default models.User || model("User", UserSchema);
