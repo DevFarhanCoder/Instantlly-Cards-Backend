@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
@@ -7,6 +7,8 @@ import AWS from "aws-sdk";
 import User from '../models/User';
 import Transaction from '../models/Transaction';
 import DesignRequest from '../models/DesignRequest';
+
+import { uploadPendingAdMedia, uploadDesignRequestMedia } from '../services/s3Service';
 
 import { Readable } from 'stream';
 
@@ -936,64 +938,50 @@ router.post(
         throw new Error('Database connection not established');
       }
 
-      const bucket = new GridFSBucket(db, { bucketName: 'adImages' });
-      
-      const referenceImageIds: ObjectId[] = [];
-      const referenceVideoIds: ObjectId[] = [];
+      // Arrays to store S3 media
+      const referenceImagesS3: { url: string; key: string }[] = [];
+      const referenceVideosS3: { url: string; key: string }[] = [];
 
-      // Upload multiple reference images if provided
+      // Generate a temporary request ID for S3 key organization
+      const tempRequestId = new ObjectId().toString();
+
+      // Upload multiple reference images to S3 if provided
       if (hasImages) {
         for (let i = 0; i < files.referenceImages.length; i++) {
           const imageFile = files.referenceImages[i];
-          const imageReadable = new Readable();
-          imageReadable.push(imageFile.buffer);
-          imageReadable.push(null);
+          const filename = `reference_img_${Date.now()}_${i}${imageFile.originalname.substring(imageFile.originalname.lastIndexOf('.'))}`;
 
-          const imageStream = bucket.openUploadStream(`design_ref_img_${Date.now()}_${i}.jpg`, {
-            contentType: imageFile.mimetype,
-            metadata: {
-              type: 'design-reference-image',
-              originalName: imageFile.originalname,
-            },
-          });
+          const s3Result = await uploadDesignRequestMedia(
+            imageFile.buffer,
+            filename,
+            userId || 'unknown',
+            uploaderPhone,
+            tempRequestId,
+            imageFile.mimetype
+          );
 
-          const imageId = await new Promise<ObjectId>((resolve, reject) => {
-            imageReadable
-              .pipe(imageStream)
-              .on('finish', () => resolve(imageStream.id as ObjectId))
-              .on('error', reject);
-          });
-
-          referenceImageIds.push(imageId);
-          console.log(`✅ Uploaded reference image ${i + 1} to GridFS: ${imageId}`);
+          referenceImagesS3.push(s3Result);
+          console.log(`✅ Uploaded reference image ${i + 1} to S3:`, s3Result.key);
         }
       }
 
-      // Upload multiple reference videos if provided
+      // Upload multiple reference videos to S3 if provided
       if (hasVideos) {
         for (let i = 0; i < files.referenceVideos.length; i++) {
           const videoFile = files.referenceVideos[i];
-          const videoReadable = new Readable();
-          videoReadable.push(videoFile.buffer);
-          videoReadable.push(null);
+          const filename = `reference_vid_${Date.now()}_${i}${videoFile.originalname.substring(videoFile.originalname.lastIndexOf('.'))}`;
 
-          const videoStream = bucket.openUploadStream(`design_ref_vid_${Date.now()}_${i}.mp4`, {
-            contentType: videoFile.mimetype,
-            metadata: {
-              type: 'design-reference-video',
-              originalName: videoFile.originalname,
-            },
-          });
+          const s3Result = await uploadDesignRequestMedia(
+            videoFile.buffer,
+            filename,
+            userId || 'unknown',
+            uploaderPhone,
+            tempRequestId,
+            videoFile.mimetype
+          );
 
-          const videoId = await new Promise<ObjectId>((resolve, reject) => {
-            videoReadable
-              .pipe(videoStream)
-              .on('finish', () => resolve(videoStream.id as ObjectId))
-              .on('error', reject);
-          });
-
-          referenceVideoIds.push(videoId);
-          console.log(`✅ Uploaded reference video ${i + 1} to GridFS: ${videoId}`);
+          referenceVideosS3.push(s3Result);
+          console.log(`✅ Uploaded reference video ${i + 1} to S3:`, s3Result.key);
         }
       }
 
@@ -1007,8 +995,8 @@ router.post(
         businessAddress: businessAddress?.trim() || '',
         adType: adType || 'image',
         channelType: channelType || 'withoutChannel',
-        referenceImagesGridFS: referenceImageIds,
-        referenceVideosGridFS: referenceVideoIds,
+        referenceImagesS3: referenceImagesS3,
+        referenceVideosS3: referenceVideosS3,
         uploaderPhone,
         uploaderName: uploaderName || 'Mobile User',
         userId: userId || '',
@@ -1025,8 +1013,8 @@ router.post(
         hasPhoneNumber,
         hasAdText,
         hasBusinessAddress,
-        imagesCount: referenceImageIds.length,
-        videosCount: referenceVideoIds.length,
+        imagesCount: referenceImagesS3.length,
+        videosCount: referenceVideosS3.length,
       });
 
       res.status(201).json({
@@ -1042,8 +1030,8 @@ router.post(
           businessAddress: designRequest.businessAddress,
           adType: designRequest.adType,
           channelType: designRequest.channelType,
-          referenceImagesCount: referenceImageIds.length,
-          referenceVideosCount: referenceVideoIds.length,
+          referenceImagesCount: referenceImagesS3.length,
+          referenceVideosCount: referenceVideosS3.length,
           status: designRequest.status,
           createdAt: designRequest.createdAt,
         },
@@ -1087,6 +1075,8 @@ router.get('/design-requests/all', async (req: Request, res: Response) => {
         channelType: dr.channelType,
         referenceImagesGridFS: dr.referenceImagesGridFS || [],
         referenceVideosGridFS: dr.referenceVideosGridFS || [],
+        referenceImagesS3: dr.referenceImagesS3 || [],
+        referenceVideosS3: dr.referenceVideosS3 || [],
         uploaderPhone: dr.uploaderPhone,
         uploaderName: dr.uploaderName,
         userId: dr.userId || '',
@@ -1130,8 +1120,8 @@ router.get('/design-requests', async (req: Request, res: Response) => {
         businessAddress: dr.businessAddress || '',
         adType: dr.adType,
         channelType: dr.channelType,
-        referenceImagesCount: dr.referenceImagesGridFS?.length || 0,
-        referenceVideosCount: dr.referenceVideosGridFS?.length || 0,
+        referenceImagesCount: (dr.referenceImagesGridFS?.length || 0) + (dr.referenceImagesS3?.length || 0),
+        referenceVideosCount: (dr.referenceVideosGridFS?.length || 0) + (dr.referenceVideosS3?.length || 0),
         status: dr.status,
         adminNotes: dr.adminNotes,
         createdAt: dr.createdAt,
