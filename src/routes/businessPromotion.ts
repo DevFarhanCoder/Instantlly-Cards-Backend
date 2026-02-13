@@ -28,29 +28,54 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
       state,
       gstNumber,
       panNumber,
-      status,
       currentStep,
+      progress,
+      stepIndex,
       promotionId, // Optional: if updating existing promotion
     } = req.body;
+
 
     console.log(`📝 [BUSINESS-PROMOTION] ${promotionId ? 'Updating' : 'Creating'} promotion for user: ${userId}`);
 
     let promotion;
+    if (!promotionId) {
+      const existing = await BusinessPromotion.findOne({
+        userId,
+        status: { $in: ['draft', 'submitted'] }
+      });
+
+      if (existing) {
+        return res.json({
+          success: true,
+          promotion: {
+            _id: existing._id,
+            businessName: existing.businessName,
+            ownerName: existing.ownerName,
+            status: existing.status,
+            currentStep: existing.currentStep,
+            createdAt: existing.createdAt,
+            updatedAt: existing.updatedAt,
+          }
+        });
+      }
+    }
+
 
     if (promotionId) {
       // Update existing promotion
       promotion = await BusinessPromotion.findOne({ _id: promotionId, userId });
-      
+
       if (!promotion) {
         console.log(`❌ [BUSINESS-PROMOTION] Promotion not found or unauthorized: ${promotionId}`);
-        return res.status(404).json({ 
+        return res.status(404).json({
           success: false,
-          message: 'Promotion not found or unauthorized' 
+          message: 'Promotion not found or unauthorized'
         });
       }
 
       // Update fields
-      Object.assign(promotion, {
+      // Never allow client to directly change these
+      const SAFE_FIELDS = {
         businessName,
         ownerName,
         description,
@@ -70,9 +95,14 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
         state,
         gstNumber,
         panNumber,
-        status,
         currentStep,
-      });
+      };
+
+      Object.assign(promotion, SAFE_FIELDS);
+
+      if (currentStep === 'location') {
+        promotion.status = 'submitted';
+      }
 
       await promotion.save();
       console.log(`✅ [BUSINESS-PROMOTION] Promotion updated: ${promotionId}`);
@@ -100,7 +130,7 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
         state,
         gstNumber,
         panNumber,
-        status: status || 'draft',
+        status: 'draft',
         currentStep: currentStep || 'business',
       });
 
@@ -124,12 +154,152 @@ router.post("/", requireAuth, async (req: AuthReq, res) => {
 
   } catch (error) {
     console.error('❌ [BUSINESS-PROMOTION] ERROR creating/updating promotion:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Server error while saving business promotion' 
+      message: 'Server error while saving business promotion'
     });
   }
 });
+
+// POST /api/business-promotion/:id/activate-free
+router.post("/:id/activate-free", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    const promotion = await BusinessPromotion.findOne({ _id: id, userId });
+
+    if (!promotion) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    if (promotion.status === 'active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Active listing cannot be edited'
+      });
+    }
+
+    if (promotion.status !== 'submitted') {
+      return res.status(400).json({
+        success: false,
+        message: 'Complete business profile before activation'
+      });
+    }
+
+
+
+    promotion.listingType = 'free';
+    promotion.plan = null;
+    promotion.paymentStatus = 'not_required';
+    promotion.status = 'active';
+    promotion.isActive = true;
+    promotion.expiryDate = null;
+    promotion.visibility.priorityScore = 10;
+
+    await promotion.save();
+
+    res.json({
+      success: true,
+      message: 'Free listing activated',
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// POST /api/business-promotion/:id/activate-promoted
+router.post("/:id/activate-promoted", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+    const { planName, price, durationDays, paymentId } = req.body;
+
+    const promotion = await BusinessPromotion.findOne({ _id: id, userId });
+
+    if (!promotion) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    if (promotion.paymentStatus === 'paid' && promotion.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Listing already promoted'
+      });
+    }
+    if (promotion.status !== 'submitted') {
+      return res.status(400).json({
+        success: false,
+        message: 'Complete business profile before activation'
+      });
+    }
+
+    if (!['basic', 'plus', 'max'].includes(planName)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid plan selected'
+      });
+    }
+
+    if (!durationDays || durationDays <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid plan duration'
+      });
+    }
+
+
+    const activatedAt = new Date();
+
+    promotion.listingType = 'promoted';
+    promotion.plan = {
+      name: planName,
+      price,
+      durationDays,
+      activatedAt,
+    };
+
+    promotion.paymentStatus = 'paid';
+    promotion.paymentId = paymentId;
+    promotion.status = 'active';
+    promotion.isActive = true;
+    promotion.expiryDate = new Date(
+      activatedAt.getTime() + durationDays * 24 * 60 * 60 * 1000
+    );
+
+    // Priority logic
+    promotion.visibility.priorityScore =
+      planName === 'max' ? 80 : planName === 'plus' ? 60 : 50;
+
+    await promotion.save();
+
+    res.json({
+      success: true,
+      message: 'Promoted listing activated',
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/business-promotion/in-progress
+router.get('/in-progress', requireAuth, async (req: AuthReq, res) => {
+  const userId = req.userId;
+
+  const promotion = await BusinessPromotion.findOne({
+    userId,
+    status: { $in: ['draft', 'submitted'] }
+  }).sort({ updatedAt: -1 });
+
+  res.json({
+    success: true,
+    promotion: promotion || null
+  });
+});
+
+
 
 // GET /api/business-promotion - Get all user's business promotions
 router.get("/", requireAuth, async (req: AuthReq, res) => {
@@ -145,6 +315,7 @@ router.get("/", requireAuth, async (req: AuthReq, res) => {
     }
 
     const promotions = await BusinessPromotion.find(query)
+      .select('-__v')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -157,9 +328,9 @@ router.get("/", requireAuth, async (req: AuthReq, res) => {
 
   } catch (error) {
     console.error('❌ [BUSINESS-PROMOTION] ERROR fetching promotions:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Server error while fetching promotions' 
+      message: 'Server error while fetching promotions'
     });
   }
 });
@@ -176,9 +347,9 @@ router.get("/:id", requireAuth, async (req: AuthReq, res) => {
 
     if (!promotion) {
       console.log(`❌ [BUSINESS-PROMOTION] Promotion not found or unauthorized: ${id}`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Promotion not found or unauthorized' 
+        message: 'Promotion not found or unauthorized'
       });
     }
 
@@ -191,9 +362,9 @@ router.get("/:id", requireAuth, async (req: AuthReq, res) => {
 
   } catch (error) {
     console.error('❌ [BUSINESS-PROMOTION] ERROR fetching promotion:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Server error while fetching promotion' 
+      message: 'Server error while fetching promotion'
     });
   }
 });
@@ -210,9 +381,9 @@ router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
 
     if (!promotion) {
       console.log(`❌ [BUSINESS-PROMOTION] Promotion not found or unauthorized: ${id}`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Promotion not found or unauthorized' 
+        message: 'Promotion not found or unauthorized'
       });
     }
 
@@ -225,11 +396,20 @@ router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
 
   } catch (error) {
     console.error('❌ [BUSINESS-PROMOTION] ERROR deleting promotion:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: 'Server error while deleting promotion' 
+      message: 'Server error while deleting promotion'
     });
   }
 });
 
 export default router;
+
+
+// Later cron job:
+// if (expiryDate < now) {
+//   status = 'expired';
+//   isActive = false;
+//   paymentStatus = 'expired';
+// }
+// TODO: validate price against server-side plan config
