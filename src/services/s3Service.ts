@@ -16,6 +16,30 @@ const bucket = process.env.S3_BUCKET || 'instantlly-media-prod';
 const cloudfrontHost = process.env.CLOUDFRONT_HOST || 'd1rjsfuv5lw0hw.cloudfront.net';
 
 /**
+ * Encode S3 key for use in CloudFront/HTTP URLs.
+ * Encodes each path segment (especially + → %2B) while preserving /
+ */
+function encodeS3KeyForUrl(key: string): string {
+  return key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
+/**
+ * Sanitize an existing CloudFront URL to ensure + is encoded as %2B
+ */
+export function sanitizeCloudFrontUrl(url: string): string {
+  if (!url) return url;
+  try {
+    const urlObj = new URL(url);
+    // Re-encode the pathname: split by /, encode each segment, rejoin
+    urlObj.pathname = urlObj.pathname.split('/').map(segment => encodeURIComponent(decodeURIComponent(segment))).join('/');
+    return urlObj.toString();
+  } catch {
+    // Fallback: just replace + with %2B
+    return url.replace(/\+/g, '%2B');
+  }
+}
+
+/**
  * Generate S3 key (file path) based on type and identifiers
  */
 export function generateS3Key(
@@ -31,15 +55,18 @@ export function generateS3Key(
   const timestamp = Date.now();
   const sanitizedFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
+  // Remove + and other special chars from phone numbers for clean S3 paths
+  const sanitizePhone = (phone: string) => phone.replace(/[^a-zA-Z0-9]/g, '');
+
   switch (type) {
     case 'design-request':
-      const userFolder = identifiers.phone || identifiers.userId || 'unknown';
+      const userFolder = sanitizePhone(identifiers.phone || identifiers.userId || 'unknown');
       const requestFolder = identifiers.requestId || 'unknown';
       const mediaType = filename.match(/\.(mp4|mov|avi|webm)$/i) ? 'videos' : 'images';
       return `design-requests/${userFolder}/${requestFolder}/${mediaType}/${timestamp}_${sanitizedFilename}`;
 
     case 'pending-ad':
-      const uploaderPhone = identifiers.phone || 'unknown';
+      const uploaderPhone = sanitizePhone(identifiers.phone || 'unknown');
       const pendingAdId = identifiers.adId || 'unknown';
       return `pending-ads/${uploaderPhone}/${pendingAdId}/${sanitizedFilename}`;
 
@@ -76,8 +103,8 @@ export async function uploadToS3(
 
     await upload.done();
 
-    // Return CloudFront URL for fast delivery
-    const cloudfrontUrl = `https://${cloudfrontHost}/${key}`;
+    // Return CloudFront URL for fast delivery (encode path segments so + becomes %2B etc.)
+    const cloudfrontUrl = `https://${cloudfrontHost}/${encodeS3KeyForUrl(key)}`;
 
     console.log(`✅ Uploaded successfully: ${cloudfrontUrl}`);
 
@@ -115,7 +142,7 @@ export async function uploadStreamToS3(
 
     await upload.done();
 
-    const cloudfrontUrl = `https://${cloudfrontHost}/${key}`;
+    const cloudfrontUrl = `https://${cloudfrontHost}/${encodeS3KeyForUrl(key)}`;
 
     console.log(`✅ Stream uploaded successfully: ${cloudfrontUrl}`);
 
@@ -186,10 +213,10 @@ export async function getSignedS3Url(key: string, expiresIn: number = 3600): Pro
 }
 
 /**
- * Get CloudFront URL from S3 key
+ * Get CloudFront URL from S3 key (encodes path segments so + becomes %2B)
  */
 export function getCloudfrontUrl(key: string): string {
-  return `https://${cloudfrontHost}/${key}`;
+  return `https://${cloudfrontHost}/${encodeS3KeyForUrl(key)}`;
 }
 
 /**
@@ -321,4 +348,5 @@ export default {
   uploadPendingAdMedia,
   uploadApprovedAdMedia,
   movePendingToApproved,
+  sanitizeCloudFrontUrl,
 };
