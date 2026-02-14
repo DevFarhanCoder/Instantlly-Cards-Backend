@@ -1,4 +1,4 @@
-﻿import express, { Request, Response } from 'express';
+import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
@@ -82,7 +82,7 @@ router.post(
   upload.any(), // Max 5 images
   async (req: Request, res: Response) => {
     try {
-      console.log('📤 Ad upload request (no auth):', {
+      console.log('?? Ad upload request (no auth):', {
         body: req.body,
         filesCount: (req.files as Express.Multer.File[])?.length || 0,
       });
@@ -131,6 +131,10 @@ router.post(
       let fullscreenImageId = null;
       let bottomVideoUrl = null;
       let fullscreenVideoUrl = null;
+      let bottomImageS3Result: { url: string; key: string } | null = null;
+      let fullscreenImageS3Result: { url: string; key: string } | null = null;
+      let bottomVideoS3Result: { url: string; key: string } | null = null;
+      let fullscreenVideoS3Result: { url: string; key: string } | null = null;
       // Validate dates
       const start = new Date(startDate);
       const end = new Date(endDate);
@@ -147,7 +151,7 @@ router.post(
       // Use main database User model for credits
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
 
-      console.log('🔍 Looking for user with phone:', uploaderPhone);
+      console.log('?? Looking for user with phone:', uploaderPhone);
 
       // Connect to Channel Partner database (separate database named 'channelpartner')
       // const channelPartnerDB = mongoose.connection.useDb('channelpartner');
@@ -167,23 +171,23 @@ router.post(
       // // If not found, try without country code prefix
       // if (!user && uploaderPhone.startsWith('+91')) {
       //   const phoneWithoutPrefix = uploaderPhone.substring(3);
-      //   console.log('🔄 Trying without +91 prefix:', phoneWithoutPrefix);
+      //   console.log('?? Trying without +91 prefix:', phoneWithoutPrefix);
       //   user = await ChannelPartnerUser.findOne({ phone: phoneWithoutPrefix });
       // }
 
       // // If still not found, try WITH country code prefix
       // if (!user && !uploaderPhone.startsWith('+')) {
       //   const phoneWithPrefix = '+91' + uploaderPhone;
-      //   console.log('🔄 Trying with +91 prefix:', phoneWithPrefix);
+      //   console.log('?? Trying with +91 prefix:', phoneWithPrefix);
       //   user = await ChannelPartnerUser.findOne({ phone: phoneWithPrefix });
       // }
 
-      // console.log('👤 Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
+      // console.log('?? Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
 
       // if (!user) {
       //   // Try to find any user to see what's in the database
       //   const allUsers = await ChannelPartnerUser.find({}).limit(5);
-      //   console.log('📋 Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
+      //   console.log('?? Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
       //   return res.status(404).json({
       //     message: 'User not found. Please ensure you are logged in.',
       //     searchedPhone: uploaderPhone,
@@ -212,70 +216,34 @@ router.post(
       // });
       // await user.save();
 
-      // console.log(`✅ Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
+      // console.log(`? Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
 
-      // Upload images to GridFS
-      const db = mongoose.connection.db;
-      if (!db) {
-        throw new Error('Database connection not established');
-      }
+      // ---- IMAGES → S3 ----
+      const tempAdId = Date.now().toString();
 
-      const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
-
-      // Upload bottom image (required)
-      // const bottomImageFile = files[0];
-      // const bottomImageStream = bucket.openUploadStream(bottomImageFile.originalname, {
-      //   contentType: bottomImageFile.mimetype,
-      // });
-
-      // const bottomReadable = Readable.from(bottomImageFile.buffer);
-      // await new Promise<ObjectId>((resolve, reject) => {
-      //   bottomReadable
-      //     .pipe(bottomImageStream)
-      //     .on('finish', () => resolve(bottomImageStream.id as ObjectId))
-      //     .on('error', reject);
-      // });
-
-      // console.log(`✅ Uploaded bottom image to GridFS: ${bottomImageId}`);
-
-      // Upload fullscreen image (optional)
-      // ObjectId | undefined;
-      // if (files.length > 1) {
-      //   const fullscreenFile = files[1];
-      //   const fullscreenStream = bucket.openUploadStream(fullscreenFile.originalname, {
-      //     contentType: fullscreenFile.mimetype,
-      //   });
-
-      // const fullscreenReadable = Readable.from(fullscreenFile.buffer);
-      // fullscreenImageId = await new Promise<ObjectId>((resolve, reject) => {
-      //   fullscreenReadable
-      //     .pipe(fullscreenStream)
-      //     .on('finish', () => resolve(fullscreenStream.id as ObjectId))
-      //     .on('error', reject);
-      // });
       if (bottomMediaType === "image" && bottomImage) {
-        bottomImageId = await new Promise<ObjectId>((resolve, reject) => {
-          const stream = bucket.openUploadStream(bottomImage.originalname);
-          Readable.from(bottomImage.buffer)
-            .pipe(stream)
-            .on("finish", () => resolve(stream.id))
-            .on("error", reject);
-        });
+        bottomImageS3Result = await uploadPendingAdMedia(
+          bottomImage.buffer,
+          bottomImage.originalname,
+          uploaderPhone,
+          tempAdId,
+          bottomImage.mimetype
+        );
+        console.log('✅ Bottom image uploaded to S3:', bottomImageS3Result.url);
       }
-       console.log(`✅ Uploaded bottom image to GridFS: ${bottomImageId}`);
-
 
       if (fullscreenMediaType === "image" && fullscreenImage) {
-        fullscreenImageId = await new Promise<ObjectId>((resolve, reject) => {
-          const stream = bucket.openUploadStream(fullscreenImage.originalname);
-          Readable.from(fullscreenImage.buffer)
-            .pipe(stream)
-            .on("finish", () => resolve(stream.id))
-            .on("error", reject);
-        });
+        fullscreenImageS3Result = await uploadPendingAdMedia(
+          fullscreenImage.buffer,
+          fullscreenImage.originalname,
+          uploaderPhone,
+          tempAdId,
+          fullscreenImage.mimetype
+        );
+        console.log('✅ Fullscreen image uploaded to S3:', fullscreenImageS3Result.url);
       }
-      
-      // ---- VIDEO → S3 ----
+
+      // ---- VIDEO ? S3 ----
       if (bottomMediaType === "video" && bottomVideo) {
         const key = `ads/bottom/${Date.now()}-${bottomVideo.originalname}`;
         await s3.putObject({
@@ -287,6 +255,7 @@ router.post(
         }).promise();
 
         bottomVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
+        bottomVideoS3Result = { url: bottomVideoUrl, key };
       }
       console.log('Bottom video uploaded to S3:', bottomVideoUrl);
 
@@ -301,6 +270,7 @@ router.post(
         }).promise();
 
         fullscreenVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
+        fullscreenVideoS3Result = { url: fullscreenVideoUrl, key };
       }
       console.log('Fullscreen video uploaded to S3:', fullscreenVideoUrl);
       // ---- SAVE AD ----
@@ -321,13 +291,17 @@ router.post(
         fullscreenMediaType,
         bottomImageGridFS: bottomImageId,
         fullscreenImageGridFS: fullscreenImageId,
+        bottomImageS3: bottomImageS3Result || undefined,
+        fullscreenImageS3: fullscreenImageS3Result || undefined,
+        bottomVideoS3: bottomVideoS3Result || undefined,
+        fullscreenVideoS3: fullscreenVideoS3Result || undefined,
         bottomVideoUrl,
         fullscreenVideoUrl,
       });
 
       await ad.save();
 
-      console.log(`✅ Ad created with pending status (1020 credits deducted):`, {
+      console.log(`? Ad created with pending status (1020 credits deducted):`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
@@ -336,11 +310,11 @@ router.post(
       });
 
       res.status(201).json({
-        message: 'Ad submitted successfully! 1020 credits deducted. Admin will review your ad. You will need to pay ₹180 after approval.',
+        message: 'Ad submitted successfully! 1020 credits deducted. Admin will review your ad. You will need to pay ?180 after approval.',
         creditsDeducted: 1020,
         // remainingCredits: user.credits,
         cashPaymentRequired: 180,
-        totalCost: '1020 credits + ₹180 cash',
+        totalCost: '1020 credits + ?180 cash',
         ad: {
           id: ad._id,
           title: ad.title,
@@ -351,13 +325,17 @@ router.post(
           uploadedBy: ad.uploadedBy,
           uploaderName: ad.uploaderName,
           priority: ad.priority,
-          hasBottomImage: !!bottomImageId,
-          hasFullscreenImage: !!fullscreenImageId,
+          hasBottomImage: !!bottomImageId || !!bottomImageS3Result,
+          hasFullscreenImage: !!fullscreenImageId || !!fullscreenImageS3Result,
+          bottomImageS3Url: bottomImageS3Result?.url || null,
+          fullscreenImageS3Url: fullscreenImageS3Result?.url || null,
+          bottomVideoS3Url: bottomVideoS3Result?.url || null,
+          fullscreenVideoS3Url: fullscreenVideoS3Result?.url || null,
           createdAt: ad.createdAt,
         },
       });
     } catch (error) {
-      console.error('❌ Channel partner ad upload error:', error);
+      console.error('? Channel partner ad upload error:', error);
 
       if (error instanceof Error) {
         return res.status(500).json({
@@ -381,12 +359,13 @@ router.post(
   uploadVideos.array('videos', 2), // Max 2 videos (bottom + fullscreen)
   async (req: Request, res: Response) => {
     try {
-      console.log('📤 Video Ad upload request (no auth):', {
+      console.log('?? Video Ad upload request (no auth):', {
         body: req.body,
         filesCount: (req.files as Express.Multer.File[])?.length || 0,
       });
 
       const { title, phoneNumber, startDate, endDate, uploaderName, priority } = req.body;
+      const uploaderPhone = req.body.uploaderPhone || phoneNumber;
       const files = req.files as Express.Multer.File[];
 
       // Validation
@@ -418,10 +397,10 @@ router.post(
       }
 
       // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
-      const uploaderPhone = req.body.uploaderPhone || phoneNumber;
+      // uploaderPhone already declared above
       const userId = req.body.userId;
       
-      console.log('🔍 Looking for user - phone:', uploaderPhone, 'userId:', userId);
+      console.log('?? Looking for user - phone:', uploaderPhone, 'userId:', userId);
       
       let user = null;
       
@@ -429,9 +408,9 @@ router.post(
       if (userId && userId.length > 0) {
         try {
           user = await User.findById(userId);
-          console.log('👤 Found by userId:', user ? user.name : 'NOT FOUND');
+          console.log('?? Found by userId:', user ? user.name : 'NOT FOUND');
         } catch (e) {
-          console.log('⚠️ Invalid userId format');
+          console.log('?? Invalid userId format');
         }
       }
       
@@ -439,7 +418,7 @@ router.post(
       if (!user) {
         // Clean phone number - extract only digits
         const cleanPhone = uploaderPhone.replace(/[^0-9]/g, '');
-        console.log('🔍 Cleaned phone (digits only):', cleanPhone);
+        console.log('?? Cleaned phone (digits only):', cleanPhone);
       
         // Find user in main database - try multiple methods
         user = await User.findOne({ phone: uploaderPhone });
@@ -465,18 +444,18 @@ router.post(
         // Try regex search - match phones ending with these digits
         if (!user && cleanPhone.length >= 10) {
           const last10Digits = cleanPhone.slice(-10);
-          console.log('🔄 Trying regex search with last 10 digits:', last10Digits);
+          console.log('?? Trying regex search with last 10 digits:', last10Digits);
           user = await User.findOne({ phone: { $regex: last10Digits + '$' } });
         }
 
         // Last resort - search by contains
         if (!user && cleanPhone.length >= 8) {
-          console.log('🔄 Trying contains search with digits:', cleanPhone);
+          console.log('?? Trying contains search with digits:', cleanPhone);
           user = await User.findOne({ phone: { $regex: cleanPhone } });
         }
       }
       
-      console.log('👤 Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
+      console.log('?? Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
       
       if (!user) {
         return res.status(404).json({ 
@@ -511,7 +490,7 @@ router.post(
         status: 'completed'
       });
 
-      console.log(`✅ Deducted 1200 credits from ${user.name} (${uploaderPhone}). Remaining: ${(user as any).credits}`);
+      console.log(`? Deducted 1200 credits from ${user.name} (${uploaderPhone}). Remaining: ${(user as any).credits}`);
 
       // Upload videos to GridFS
       const db = mongoose.connection.db;
@@ -540,7 +519,7 @@ router.post(
           .on('error', reject);
       });
 
-      console.log(`✅ Uploaded bottom video to GridFS: ${bottomVideoId}`);
+      console.log(`? Uploaded bottom video to GridFS: ${bottomVideoId}`);
 
       // Upload fullscreen video (optional)
       let fullscreenVideoId: ObjectId | undefined;
@@ -562,7 +541,7 @@ router.post(
             .on('error', reject);
         });
 
-        console.log(`✅ Uploaded fullscreen video to GridFS: ${fullscreenVideoId}`);
+        console.log(`? Uploaded fullscreen video to GridFS: ${fullscreenVideoId}`);
       }
 
       // Create ad with pending status and video type
@@ -586,7 +565,7 @@ router.post(
 
       await ad.save();
 
-      console.log(`✅ Video Ad created with pending status:`, {
+      console.log(`? Video Ad created with pending status:`, {
         id: ad._id,
         title: ad.title,
         adType: 'video',
@@ -616,7 +595,7 @@ router.post(
         },
       });
     } catch (error) {
-      console.error('❌ Video ad upload error:', error);
+      console.error('? Video ad upload error:', error);
 
       if (error instanceof Error) {
         return res.status(500).json({
@@ -680,11 +659,62 @@ router.get('/video/:id', async (req: Request, res: Response) => {
       bucket.openDownloadStream(new ObjectId(id)).pipe(res);
     }
   } catch (error) {
-    console.error('❌ Video streaming error:', error);
+    console.error('? Video streaming error:', error);
     res.status(500).json({ message: 'Failed to stream video' });
   }
 });
 
+/**
+ * GET /api/channel-partner/ads/image/:id
+ * Stream an image from GridFS by its ObjectId
+ */
+router.get('/image/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    console.log('Image request for GridFS ID:', id);
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid image ID' });
+    }
+
+    const db = mongoose.connection.db;
+    if (!db) throw new Error('Database connection not established');
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+
+    const bucketNames = ['adImages', 'fs', 'images', 'uploads'];
+    let foundBucket: GridFSBucket | null = null;
+
+    for (const bucketName of bucketNames) {
+      try {
+        const bucket = bucketName === 'fs'
+          ? new GridFSBucket(db)
+          : new GridFSBucket(db, { bucketName });
+        const files = await bucket.find({ _id: new ObjectId(id) }).toArray();
+        if (files.length > 0) {
+          foundBucket = bucket;
+          break;
+        }
+      } catch (e) { /* continue */ }
+    }
+
+    if (!foundBucket) {
+      return res.status(404).json({ message: 'Image not found in any bucket' });
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    const downloadStream = foundBucket.openDownloadStream(new ObjectId(id));
+    downloadStream.pipe(res);
+    downloadStream.on('error', (err) => {
+      console.error('GridFS stream error:', err);
+      if (!res.headersSent) res.status(500).json({ message: 'Failed to stream image' });
+    });
+  } catch (error) {
+    console.error('Image serving error:', error);
+    if (!res.headersSent) res.status(500).json({ message: 'Failed to serve image' });
+  }
+});
 /**
  * GET /api/channel-partner/ads
  * Get all ads - NO AUTH REQUIRED
@@ -694,50 +724,63 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const { phone } = req.query;
 
-    console.log('📋 Fetching ads (no auth):', phone ? `for phone ${phone}` : 'all ads');
+    console.log('?? Fetching ads (no auth):', phone ? `for phone ${phone}` : 'all ads');
 
     const filter = phone ? { uploadedBy: phone } : {};
     const ads = await Ad.find(filter)
       .sort({ createdAt: -1 }) // Most recent first
       .select('-__v');
 
-    console.log(`✅ Found ${ads.length} ads`);
+    console.log(`? Found ${ads.length} ads`);
 
     // Transform ads for response
-    const adsWithDetails = ads.map((ad) => ({
-      id: ad._id,
-      title: ad.title,
-      adType: (ad as any).adType || 'image',
-      phoneNumber: ad.phoneNumber,
-      startDate: ad.startDate,
-      endDate: ad.endDate,
-      status: ad.status,
-      uploadedBy: ad.uploadedBy,
-      uploaderName: ad.uploaderName,
-      approvedBy: ad.approvedBy,
-      approvalDate: ad.approvalDate,
-      rejectionReason: ad.rejectionReason,
-      priority: ad.priority,
-      bottomImageId: ad.bottomImageGridFS,
-      fullscreenImageId: ad.fullscreenImageGridFS,
-      bottomVideoId: (ad as any).bottomVideoGridFS,
-      fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
-      hasBottomImage: !!ad.bottomImageGridFS,
-      hasFullscreenImage: !!ad.fullscreenImageGridFS,
-      hasBottomVideo: !!(ad as any).bottomVideoGridFS,
-      hasFullscreenVideo: !!(ad as any).fullscreenVideoGridFS,
-      impressions: ad.impressions,
-      clicks: ad.clicks,
-      createdAt: ad.createdAt,
-      updatedAt: ad.updatedAt,
-    }));
+    const adsWithDetails = ads.map((ad) => {
+      // S3/CloudFront URLs (preferred over GridFS)
+      const bottomS3Url = (ad as any).bottomImageS3?.url || null;
+      const fullscreenS3Url = (ad as any).fullscreenImageS3?.url || null;
+      const bottomVidS3Url = (ad as any).bottomVideoS3?.url || null;
+      const fullscreenVidS3Url = (ad as any).fullscreenVideoS3?.url || null;
+
+      return {
+        id: ad._id,
+        title: ad.title,
+        adType: (ad as any).adType || 'image',
+        phoneNumber: ad.phoneNumber,
+        startDate: ad.startDate,
+        endDate: ad.endDate,
+        status: ad.status,
+        uploadedBy: ad.uploadedBy,
+        uploaderName: ad.uploaderName,
+        approvedBy: ad.approvedBy,
+        approvalDate: ad.approvalDate,
+        rejectionReason: ad.rejectionReason,
+        priority: ad.priority,
+        bottomImageId: ad.bottomImageGridFS,
+        fullscreenImageId: ad.fullscreenImageGridFS,
+        bottomVideoId: (ad as any).bottomVideoGridFS,
+        fullscreenVideoId: (ad as any).fullscreenVideoGridFS,
+        // S3/CloudFront URLs
+        bottomImageS3Url: bottomS3Url,
+        fullscreenImageS3Url: fullscreenS3Url,
+        bottomVideoS3Url: bottomVidS3Url,
+        fullscreenVideoS3Url: fullscreenVidS3Url,
+        hasBottomImage: !!(ad.bottomImageGridFS || bottomS3Url),
+        hasFullscreenImage: !!(ad.fullscreenImageGridFS || fullscreenS3Url),
+        hasBottomVideo: !!((ad as any).bottomVideoGridFS || bottomVidS3Url),
+        hasFullscreenVideo: !!((ad as any).fullscreenVideoGridFS || fullscreenVidS3Url),
+        impressions: ad.impressions,
+        clicks: ad.clicks,
+        createdAt: ad.createdAt,
+        updatedAt: ad.updatedAt,
+      };
+    });
 
     res.json({
       count: adsWithDetails.length,
       ads: adsWithDetails,
     });
   } catch (error) {
-    console.error('❌ Error fetching channel partner ads:', error);
+    console.error('? Error fetching channel partner ads:', error);
     res.status(500).json({ message: 'Failed to fetch ads' });
   }
 });
@@ -810,7 +853,7 @@ router.put(
             await bucket.delete(imageId);
           } catch (error) {
             
-            console.warn(`⚠️ Failed to delete old image ${imageId}:`, error);
+            console.warn(`?? Failed to delete old image ${imageId}:`, error);
           }
         }
 
@@ -859,7 +902,7 @@ router.put(
 
       await ad.save();
 
-      console.log(`✅ Ad updated and reset to pending: ${id}`);
+      console.log(`? Ad updated and reset to pending: ${id}`);
 
       res.json({
         message: 'Ad updated successfully. Awaiting admin re-approval.',
@@ -874,7 +917,7 @@ router.put(
         },
       });
     } catch (error) {
-      console.error('❌ Error updating ad:', error);
+      console.error('? Error updating ad:', error);
       res.status(500).json({ message: 'Failed to update ad' });
     }
   }
@@ -894,7 +937,7 @@ router.post(
   ]),
   async (req: Request, res: Response) => {
     try {
-      console.log('📤 Design Request submission:', {
+      console.log('?? Design Request submission:', {
         body: req.body,
         files: req.files,
       });
@@ -961,7 +1004,7 @@ router.post(
           );
 
           referenceImagesS3.push(s3Result);
-          console.log(`✅ Uploaded reference image ${i + 1} to S3:`, s3Result.key);
+          console.log(`? Uploaded reference image ${i + 1} to S3:`, s3Result.key);
         }
       }
 
@@ -981,7 +1024,7 @@ router.post(
           );
 
           referenceVideosS3.push(s3Result);
-          console.log(`✅ Uploaded reference video ${i + 1} to S3:`, s3Result.key);
+          console.log(`? Uploaded reference video ${i + 1} to S3:`, s3Result.key);
         }
       }
 
@@ -1005,7 +1048,7 @@ router.post(
 
       await designRequest.save();
 
-      console.log(`✅ Design Request created:`, {
+      console.log(`? Design Request created:`, {
         id: designRequest._id,
         uploaderPhone: designRequest.uploaderPhone,
         uploaderName: designRequest.uploaderName,
@@ -1037,7 +1080,7 @@ router.post(
         },
       });
     } catch (error) {
-      console.error('❌ Design request submission error:', error);
+      console.error('? Design request submission error:', error);
 
       if (error instanceof Error) {
         return res.status(500).json({
@@ -1129,7 +1172,7 @@ router.get('/design-requests', async (req: Request, res: Response) => {
       })),
     });
   } catch (error) {
-    console.error('❌ Error fetching design requests:', error);
+    console.error('? Error fetching design requests:', error);
     res.status(500).json({ message: 'Failed to fetch design requests' });
   }
 });
@@ -1176,18 +1219,18 @@ router.delete('/:id', async (req: Request, res: Response) => {
         try {
           await bucket.delete(imageId);
         } catch (error) {
-          console.warn(`⚠️ Failed to delete image ${imageId}:`, error);
+          console.warn(`?? Failed to delete image ${imageId}:`, error);
         }
       }
     }
 
     await ad.deleteOne();
 
-    console.log(`✅ Deleted pending ad: ${id}`);
+    console.log(`? Deleted pending ad: ${id}`);
 
     res.json({ message: 'Ad deleted successfully' });
   } catch (error) {
-    console.error('❌ Error deleting ad:', error);
+    console.error('? Error deleting ad:', error);
     res.status(500).json({ message: 'Failed to delete ad' });
   }
 });

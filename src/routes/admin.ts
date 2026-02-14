@@ -12,6 +12,7 @@ import Notification from "../models/Notification";
 import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
 import Transaction from "../models/Transaction";
+import Designer from "../models/Designer";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { movePendingToApproved } from "../services/s3Service";
 
@@ -1465,6 +1466,87 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
       success: false,
       message: error.message || "Failed to fetch referral chain"
     });
+  }
+});
+
+/**
+ * GET /api/admin/designers
+ * Get all designer accounts
+ */
+router.get('/designers', async (req: Request, res: Response) => {
+  try {
+    const designers = await Designer.find({}).select('-password').sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      designers: designers.map(d => ({
+        _id: d._id,
+        username: d.username,
+        createdAt: d.createdAt,
+        updatedAt: d.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching designers:', error);
+    res.status(500).json({ message: 'Failed to fetch designers' });
+  }
+});
+
+/**
+ * POST /api/admin/designers
+ * Create a new designer account
+ */
+router.post('/designers', async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required' });
+    }
+
+    // Check if username already exists
+    const existing = await Designer.findOne({ username });
+    if (existing) {
+      return res.status(409).json({ message: 'Username already exists' });
+    }
+
+    const designer = new Designer({ username, password });
+    await designer.save();
+
+    console.log(`✅ Designer created: ${username}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Designer account created successfully',
+      designer: {
+        _id: designer._id,
+        username: designer.username,
+        createdAt: designer.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error('Error creating designer:', error);
+    res.status(500).json({ message: 'Failed to create designer account' });
+  }
+});
+
+/**
+ * DELETE /api/admin/designers/:id
+ * Delete a designer account
+ */
+router.delete('/designers/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid designer ID' });
+    }
+    const result = await Designer.findByIdAndDelete(id);
+    if (!result) {
+      return res.status(404).json({ message: 'Designer not found' });
+    }
+    res.json({ success: true, message: 'Designer deleted' });
+  } catch (error) {
+    console.error('Error deleting designer:', error);
+    res.status(500).json({ message: 'Failed to delete designer' });
   }
 });
 
