@@ -1,6 +1,8 @@
 import express, { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
+import https from 'https';
+import http from 'http';
 import Designer from '../models/Designer';
 import DesignRequest from '../models/DesignRequest';
 import DesignerUpload from '../models/DesignerUpload';
@@ -213,6 +215,41 @@ router.get('/completed', designerAuth, async (req: DesignerRequest, res: Respons
   } catch (error) {
     console.error('Error fetching completed work:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Proxy download for S3/CloudFront files (bypasses CORS)
+router.get('/proxy-download', (req: Request, res: Response) => {
+  const fileUrl = req.query.url as string;
+  if (!fileUrl) {
+    return res.status(400).json({ message: 'url parameter required' });
+  }
+
+  // Only allow downloads from our CloudFront/S3 domains
+  const allowedHosts = ['d1rjsfuv5lw0hw.cloudfront.net', 'instantlly-media-prod.s3.amazonaws.com', 'instantlly-media-prod.s3.ap-south-1.amazonaws.com'];
+  try {
+    const parsedUrl = new URL(fileUrl);
+    if (!allowedHosts.some(h => parsedUrl.hostname.includes(h))) {
+      return res.status(403).json({ message: 'Domain not allowed' });
+    }
+
+    const client = parsedUrl.protocol === 'https:' ? https : http;
+    client.get(fileUrl, (proxyRes) => {
+      if (proxyRes.statusCode !== 200) {
+        return res.status(proxyRes.statusCode || 500).json({ message: 'Failed to fetch file' });
+      }
+      res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment');
+      if (proxyRes.headers['content-length']) {
+        res.setHeader('Content-Length', proxyRes.headers['content-length']);
+      }
+      proxyRes.pipe(res);
+    }).on('error', (err) => {
+      console.error('Proxy download error:', err);
+      res.status(500).json({ message: 'Download failed' });
+    });
+  } catch (e) {
+    res.status(400).json({ message: 'Invalid URL' });
   }
 });
 
