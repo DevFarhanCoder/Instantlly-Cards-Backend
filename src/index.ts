@@ -59,14 +59,14 @@ const io = new Server(server, {
 
 // CORS Configuration - Allow requests from Vercel and admin dashboards
 const defaultAllowed = [
-  'https://api.instantllycards.com',
-  'https://api-test.instantllycards.com',
-  'https://instantlly-ads.vercel.app',
-  'https://instantlly-admin.vercel.app',
-  'https://instantllychannelpatneradmin.vercel.app', // Channel Partner Admin
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:5500',
+  "https://api.instantllycards.com",
+  "https://api-test.instantllycards.com",
+  "https://instantlly-ads.vercel.app",
+  "https://instantlly-admin.vercel.app",
+  "https://instantllychannelpatneradmin.vercel.app", // Channel Partner Admin
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5500",
 ];
 
 const adminOrigin = process.env.ADMIN_WEB_ORIGIN; // e.g. https://instantllychannelpatneradmin.vercel.app
@@ -83,8 +83,12 @@ app.use(
       // Allow if origin in allowedOrigins
       if (allowedOrigins.includes(origin)) return callback(null, true);
 
-    // For development convenience, allow localhost and 127.0.0.1 origins
-    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) return callback(null, true);
+      // For development convenience, allow localhost and 127.0.0.1 origins
+      if (
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("http://127.0.0.1")
+      )
+        return callback(null, true);
 
       // Otherwise deny
       return callback(new Error("Not allowed by CORS"));
@@ -141,9 +145,14 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   // Only set origin if it's in our allowed list
   const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'))) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
+  if (
+    origin &&
+    (allowedOrigins.includes(origin) ||
+      origin.startsWith("http://localhost") ||
+      origin.startsWith("http://127.0.0.1"))
+  ) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
   }
 
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -312,13 +321,21 @@ async function startServer() {
       "✅ Mounted /api/quiz routes (quiz progress, answer submission)",
     );
     app.use("/api/business-promotion", businessPromotionRouter);
-    console.log("✅ Mounted /api/business-promotion routes (business promotion forms)");
+    console.log(
+      "✅ Mounted /api/business-promotion routes (business promotion forms)",
+    );
     app.use("/api/mlm", mlmRouter);
-    console.log("✅ Mounted /api/mlm routes (MLM credits, vouchers, commissions)");
+    console.log(
+      "✅ Mounted /api/mlm routes (MLM credits, vouchers, commissions)",
+    );
     app.use("/api/business-listings", businessListing);
-    console.log("✅ Mounted /api/business-listing routes (business listing search)");
+    console.log(
+      "✅ Mounted /api/business-listing routes (business listing search)",
+    );
     app.use("/api/designer", designerRouter);
-    console.log("✅ Mounted /api/designer routes (designer login, requests, uploads)");
+    console.log(
+      "✅ Mounted /api/designer routes (designer login, requests, uploads)",
+    );
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);

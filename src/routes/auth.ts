@@ -66,19 +66,22 @@ const activeSignups = new Map<string, { reqId: string; timestamp: number }>();
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   const startTimestamp = Date.now();
-  const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || `auto-${startTimestamp}`;
+  const reqId =
+    req.get("x-req-id") || req.get("X-REQ-ID") || `auto-${startTimestamp}`;
   const phoneKey = req.body?.phone?.trim();
-  
+
   try {
     console.log(`\n${"=".repeat(80)}`);
-    console.log(`🔖 [REQ:${reqId}] 🚀 SIGNUP REQUEST RECEIVED at ${new Date().toISOString()}`);
+    console.log(
+      `🔖 [REQ:${reqId}] 🚀 SIGNUP REQUEST RECEIVED at ${new Date().toISOString()}`,
+    );
     console.log(`🔖 [REQ:${reqId}] Phone: ${phoneKey}`);
     console.log(`🔖 [REQ:${reqId}] Headers:`, {
-      'content-type': req.get('content-type'),
-      'user-agent': req.get('user-agent')?.substring(0, 50),
-      'x-req-id': reqId
+      "content-type": req.get("content-type"),
+      "user-agent": req.get("user-agent")?.substring(0, 50),
+      "x-req-id": reqId,
     });
-    
+
     // Check if there's already an active signup for this phone
     if (phoneKey && activeSignups.has(phoneKey)) {
       const prevReq = activeSignups.get(phoneKey)!;
@@ -86,27 +89,35 @@ router.post("/signup", async (req, res) => {
       console.warn(`🔖 [REQ:${reqId}] ⚠️⚠️⚠️ DUPLICATE SIGNUP DETECTED!`);
       console.warn(`🔖 [REQ:${reqId}]    Phone: ${phoneKey}`);
       console.warn(`🔖 [REQ:${reqId}]    Previous request: ${prevReq.reqId}`);
-      console.warn(`🔖 [REQ:${reqId}]    Time since previous: ${timeSincePrev}ms`);
-      console.warn(`🔖 [REQ:${reqId}]    This indicates FRONTEND is calling signup MULTIPLE TIMES!`);
-      
+      console.warn(
+        `🔖 [REQ:${reqId}]    Time since previous: ${timeSincePrev}ms`,
+      );
+      console.warn(
+        `🔖 [REQ:${reqId}]    This indicates FRONTEND is calling signup MULTIPLE TIMES!`,
+      );
+
       // BLOCK this duplicate request if the previous one is still active (< 30 seconds)
       // Increased from 10s to 30s for better duplicate prevention
       if (timeSincePrev < 30000) {
-        console.error(`🔖 [REQ:${reqId}] 🚨 BLOCKING DUPLICATE SIGNUP - Previous request still active`);
+        console.error(
+          `🔖 [REQ:${reqId}] 🚨 BLOCKING DUPLICATE SIGNUP - Previous request still active`,
+        );
         // Clean up this phone key from tracking since we're rejecting the request
         activeSignups.delete(phoneKey);
-        return res.status(429).json({ 
-          message: 'Signup already in progress. Please wait.' 
+        return res.status(429).json({
+          message: "Signup already in progress. Please wait.",
         });
       }
     }
-    
+
     // Track this signup request
     if (phoneKey) {
       activeSignups.set(phoneKey, { reqId, timestamp: startTimestamp });
-      console.log(`🔖 [REQ:${reqId}] Tracking signup request (${activeSignups.size} active)`);
+      console.log(
+        `🔖 [REQ:${reqId}] Tracking signup request (${activeSignups.size} active)`,
+      );
     }
-    
+
     const { name, phone, password, referralCode } = req.body;
 
     console.log(`🔖 [REQ:${reqId}] 📝 Raw signup data received:`, {
@@ -166,14 +177,14 @@ router.post("/signup", async (req, res) => {
         phone: existingUser.phone,
         hasEmail: !!existingUser.email,
       });
-      
+
       // Clean up tracking before returning
       if (phoneKey) {
         activeSignups.delete(phoneKey);
       }
-      
-      return res.status(409).json({ 
-        message: 'Phone number already registered' 
+
+      return res.status(409).json({
+        message: "Phone number already registered",
       });
     }
     console.log("✅ Phone number is available");
@@ -255,21 +266,30 @@ router.post("/signup", async (req, res) => {
     // Create DEFAULT CARD - BULLETPROOF ATOMIC APPROACH
     let defaultCard = null;
     try {
-      console.log(`🔖 [REQ:${reqId}] 🃏 ATOMIC CARD CREATION START - User:`, savedUser._id);
-      
+      console.log(
+        `🔖 [REQ:${reqId}] 🃏 ATOMIC CARD CREATION START - User:`,
+        savedUser._id,
+      );
+
       const userIdStr = savedUser._id.toString();
-      
+
       // STEP 1: Parse phone components first
-      let personalCountryCode = '';
-      let personalPhone = '';
-      
-      if (cleanPhone.startsWith('+')) {
+      let personalCountryCode = "";
+      let personalPhone = "";
+
+      if (cleanPhone.startsWith("+")) {
         const phoneWithoutPlus = cleanPhone.substring(1);
-        if (phoneWithoutPlus.startsWith('91') && phoneWithoutPlus.length === 12) {
-          personalCountryCode = '91';
+        if (
+          phoneWithoutPlus.startsWith("91") &&
+          phoneWithoutPlus.length === 12
+        ) {
+          personalCountryCode = "91";
           personalPhone = phoneWithoutPlus.substring(2);
-        } else if (phoneWithoutPlus.startsWith('1') && phoneWithoutPlus.length === 11) {
-          personalCountryCode = '1';
+        } else if (
+          phoneWithoutPlus.startsWith("1") &&
+          phoneWithoutPlus.length === 11
+        ) {
+          personalCountryCode = "1";
           personalPhone = phoneWithoutPlus.substring(1);
         } else {
           const match = phoneWithoutPlus.match(/^(\d{1,3})(\d{7,})$/);
@@ -281,20 +301,24 @@ router.post("/signup", async (req, res) => {
           }
         }
       } else {
-        personalPhone = cleanPhone.replace(/\D/g, '');
+        personalPhone = cleanPhone.replace(/\D/g, "");
       }
-      
-      console.log(`🔖 [REQ:${reqId}] 📱 Parsed phone - CountryCode: '${personalCountryCode}', Phone: '${personalPhone}'`);
-      
+
+      console.log(
+        `🔖 [REQ:${reqId}] 📱 Parsed phone - CountryCode: '${personalCountryCode}', Phone: '${personalPhone}'`,
+      );
+
       // STEP 2: ATOMIC UPSERT - Create or find default card atomically
       // This prevents race conditions by using MongoDB's atomic findOneAndUpdate
-      console.log(`🔖 [REQ:${reqId}] ⚛️ Attempting atomic upsert for default card`);
-      
+      console.log(
+        `🔖 [REQ:${reqId}] ⚛️ Attempting atomic upsert for default card`,
+      );
+
       const cardFilter = {
         userId: userIdStr,
-        isDefault: true
+        isDefault: true,
       };
-      
+
       const cardUpdate = {
         $setOnInsert: {
           // Only set these fields when inserting (creating new)
@@ -331,94 +355,120 @@ router.post("/signup", async (req, res) => {
           whatsapp: "",
           telegram: "",
           keywords: "",
-          companyPhones: []
+          companyPhones: [],
         },
         $set: {
           // ALWAYS set isDefault to true (whether inserting OR finding existing)
-          isDefault: true
-        }
+          isDefault: true,
+        },
       };
-      
+
       const upsertOptions = {
         upsert: true,
         new: true,
-        setDefaultsOnInsert: true
+        setDefaultsOnInsert: true,
       };
-      
+
       const upsertResult = await Card.findOneAndUpdate(
         cardFilter,
         cardUpdate,
-        upsertOptions
+        upsertOptions,
       );
-      
+
       if (!upsertResult) {
-        throw new Error('Failed to create or find default card - upsert returned null');
+        throw new Error(
+          "Failed to create or find default card - upsert returned null",
+        );
       }
-      
+
       defaultCard = upsertResult.toObject();
-      
-      console.log(`🔖 [REQ:${reqId}] ✅ Atomic upsert completed - Card ID: ${defaultCard._id}`);
+
+      console.log(
+        `🔖 [REQ:${reqId}] ✅ Atomic upsert completed - Card ID: ${defaultCard._id}`,
+      );
       console.log(`🔖 [REQ:${reqId}]    isDefault: ${defaultCard.isDefault}`);
-      console.log(`🔖 [REQ:${reqId}]    personalCountryCode: '${defaultCard.personalCountryCode}'`);
-      console.log(`🔖 [REQ:${reqId}]    personalPhone: '${defaultCard.personalPhone}'`);
-      
+      console.log(
+        `🔖 [REQ:${reqId}]    personalCountryCode: '${defaultCard.personalCountryCode}'`,
+      );
+      console.log(
+        `🔖 [REQ:${reqId}]    personalPhone: '${defaultCard.personalPhone}'`,
+      );
+
       // STEP 3: CLEANUP - Remove any non-default cards (race condition cleanup)
       console.log(`🔖 [REQ:${reqId}] 🧹 Cleaning up any extra cards...`);
-      
+
       const cleanupResult = await Card.deleteMany({
         userId: userIdStr,
-        isDefault: { $ne: true }  // Delete all cards that are NOT default
+        isDefault: { $ne: true }, // Delete all cards that are NOT default
       });
-      
+
       if (cleanupResult.deletedCount > 0) {
-        console.log(`🔖 [REQ:${reqId}] 🗑️ Cleaned up ${cleanupResult.deletedCount} extra card(s)`);
+        console.log(
+          `🔖 [REQ:${reqId}] 🗑️ Cleaned up ${cleanupResult.deletedCount} extra card(s)`,
+        );
       } else {
         console.log(`🔖 [REQ:${reqId}] ✨ No extra cards to clean up`);
       }
-      
+
       // STEP 4: FINAL VERIFICATION
       const finalCount = await Card.countDocuments({ userId: userIdStr });
-      console.log(`🔖 [REQ:${reqId}] 🔍 FINAL VERIFICATION: ${finalCount} card(s) total`);
-      
-      const defaultCount = await Card.countDocuments({ 
-        userId: userIdStr, 
-        isDefault: true 
+      console.log(
+        `🔖 [REQ:${reqId}] 🔍 FINAL VERIFICATION: ${finalCount} card(s) total`,
+      );
+
+      const defaultCount = await Card.countDocuments({
+        userId: userIdStr,
+        isDefault: true,
       });
       console.log(`🔖 [REQ:${reqId}] 🔍 Default cards: ${defaultCount}`);
-      
+
       if (finalCount !== 1 || defaultCount !== 1) {
-        console.error(`🔖 [REQ:${reqId}] 🚨 ATOMICITY VIOLATION: Expected 1 total card and 1 default card`);
-        console.error(`🔖 [REQ:${reqId}]    Actual: ${finalCount} total, ${defaultCount} default`);
-        
+        console.error(
+          `🔖 [REQ:${reqId}] 🚨 ATOMICITY VIOLATION: Expected 1 total card and 1 default card`,
+        );
+        console.error(
+          `🔖 [REQ:${reqId}]    Actual: ${finalCount} total, ${defaultCount} default`,
+        );
+
         // Emergency fix: Keep only the default card
         await Card.deleteMany({
           userId: userIdStr,
-          isDefault: { $ne: true }
+          isDefault: { $ne: true },
         });
         console.log(`🔖 [REQ:${reqId}] 🩹 Emergency cleanup applied`);
       }
-      
     } catch (cardError: any) {
-      console.error(`🔖 [REQ:${reqId}] ❌ CRITICAL: Failed to create default card:`, {
-        errorCode: cardError?.code,
-        errorMessage: cardError?.message,
-        userId: savedUser._id.toString()
-      });
-      
+      console.error(
+        `🔖 [REQ:${reqId}] ❌ CRITICAL: Failed to create default card:`,
+        {
+          errorCode: cardError?.code,
+          errorMessage: cardError?.message,
+          userId: savedUser._id.toString(),
+        },
+      );
+
       // Try to fetch any existing card as fallback
       try {
-        const existingCard = await Card.findOne({ 
-          userId: savedUser._id.toString() 
-        }).sort({ createdAt: 1 }).lean();
-        
+        const existingCard = await Card.findOne({
+          userId: savedUser._id.toString(),
+        })
+          .sort({ createdAt: 1 })
+          .lean();
+
         if (existingCard) {
           defaultCard = existingCard;
-          console.log(`🔖 [REQ:${reqId}] ⚠️ Used existing card as fallback - Card ID:`, existingCard._id);
+          console.log(
+            `🔖 [REQ:${reqId}] ⚠️ Used existing card as fallback - Card ID:`,
+            existingCard._id,
+          );
         } else {
           console.error(`🔖 [REQ:${reqId}] ❌ No fallback card found for user`);
         }
       } catch (fallbackError) {
-        console.error(`🔖 [REQ:${reqId}] ❌ Fallback card fetch also failed:`, fallbackError);
+        console.error(
+          `🔖 [REQ:${reqId}] ❌ Fallback card fetch also failed:`,
+          fallbackError,
+        );
       }
     }
 
@@ -550,23 +600,29 @@ router.post("/signup", async (req, res) => {
       user: userResponse,
       defaultCard: defaultCard || null,
     });
-    console.log(`🔖 [REQ:${reqId}] ✅ Response sent for signup - defaultCard present:`, !!defaultCard);
-    
+    console.log(
+      `🔖 [REQ:${reqId}] ✅ Response sent for signup - defaultCard present:`,
+      !!defaultCard,
+    );
+
     // Clean up tracking
     if (phoneKey) {
       activeSignups.delete(phoneKey);
-      console.log(`🔖 [REQ:${reqId}] Cleaned up tracking (${activeSignups.size} active)`);
+      console.log(
+        `🔖 [REQ:${reqId}] Cleaned up tracking (${activeSignups.size} active)`,
+      );
     }
-
   } catch (error: any) {
     // Clean up tracking on error
     if (phoneKey) {
       activeSignups.delete(phoneKey);
-      console.log(`🔖 [REQ:${reqId}] Cleaned up tracking after error (${activeSignups.size} active)`);
+      console.log(
+        `🔖 [REQ:${reqId}] Cleaned up tracking after error (${activeSignups.size} active)`,
+      );
     }
-    
-    console.error('💥 Signup error:', error);
-    console.error('💥 Error details:', {
+
+    console.error("💥 Signup error:", error);
+    console.error("💥 Error details:", {
       name: error.name,
       code: error.code,
       message: error.message,
