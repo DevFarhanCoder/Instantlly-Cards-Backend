@@ -192,6 +192,19 @@ router.post("/signup", async (req, res) => {
 
     console.log("✅ User created successfully with ID:", savedUser._id);
 
+    // Update downline counts for all ancestors in the MLM tree
+    if (savedUser.parentId) {
+      try {
+        const { updateAncestorDownlineCounts } =
+          await import("../services/mlm/downlineService");
+        await updateAncestorDownlineCounts(savedUser._id.toString());
+        console.log("✅ Updated downline counts for ancestors");
+      } catch (downlineError) {
+        console.error("⚠️ Failed to update downline counts:", downlineError);
+        // Don't fail signup if downline count update fails
+      }
+    }
+
     // Create a single idempotent default card for the new user (use name + phone)
     // Robust behavior:
     // - Search by both ObjectId and string forms of userId (some records store string)
@@ -842,12 +855,10 @@ router.post("/update-service-type", requireAuth, async (req: AuthReq, res) => {
       !serviceType ||
       !["home-based", "business-visiting"].includes(serviceType)
     ) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Invalid service type. Must be 'home-based' or 'business-visiting'",
-        });
+      return res.status(400).json({
+        message:
+          "Invalid service type. Must be 'home-based' or 'business-visiting'",
+      });
     }
 
     // Update user's service type
@@ -1150,11 +1161,9 @@ router.post("/send-reset-otp", async (req, res) => {
 
     if (!user) {
       // Phone not registered
-      return res
-        .status(404)
-        .json({
-          message: "Phone number is not registered / account not created",
-        });
+      return res.status(404).json({
+        message: "Phone number is not registered / account not created",
+      });
     }
 
     // At this point user exists - generate and send OTP
@@ -1275,14 +1284,12 @@ router.post("/verify-otp", async (req, res) => {
       console.error(
         "[VERIFY-OTP] JWT_SECRET not configured - cannot generate reset token",
       );
-      return res
-        .status(500)
-        .json({
-          success: true,
-          message: "OTP verified",
-          verified: true,
-          phone: normalizedPhone,
-        });
+      return res.status(500).json({
+        success: true,
+        message: "OTP verified",
+        verified: true,
+        phone: normalizedPhone,
+      });
     }
 
     const resetToken = jwt.sign(

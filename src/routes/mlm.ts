@@ -3,27 +3,32 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
 import Voucher from "../models/Voucher";
-import CommissionTransaction from "../models/CommissionTransaction";
-import Withdrawal from "../models/Withdrawal";
-import { getStructuralCreditPool, MLM_BASE_ENTRY_VALUE } from "../utils/mlm";
+import { getStructuralCreditPool, MLM_BASE_MRP } from "../utils/mlm";
 import {
   addCredits,
-  addCommission,
   getOrCreateWallet,
-  subtractCommission,
+  subtractCredits,
 } from "../services/mlm/walletService";
 import { assignCreditUsage } from "../services/mlm/creditLifecycleService";
-import { distributeCommission } from "../services/mlm/commissionService";
 import { generateVouchers } from "../services/mlm/voucherService";
 import { buildNetworkTree } from "../services/mlm/treeService";
 import { getCreditDashboard } from "../services/mlm/creditDashboardService";
-import { getCommissionSummary } from "../services/mlm/commissionSummaryService";
 import { getDirectBuyers } from "../services/mlm/directBuyersService";
+import {
+  getUserDiscountInfo,
+  getDiscountSummary,
+  calculatePurchaseDiscount,
+} from "../services/mlm/discountService";
+import { updateAncestorDownlineCounts } from "../services/mlm/downlineService";
 
 const router = Router();
 
 const CREDIT_EXPIRY_MINUTES = 60;
 const TRANSFER_EXPIRY_HOURS = 48;
+
+// ============================================
+// WALLET & CREDITS
+// ============================================
 
 router.get("/wallet", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -55,6 +60,7 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
   try {
     const { receiverId, amount } = req.body;
     const creditCount = Number(amount) || 1;
+
     if (!receiverId) {
       return res
         .status(400)
@@ -62,9 +68,10 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
     }
 
     if (creditCount <= 0 || creditCount > 5) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid credit amount" });
+      return res.status(400).json({
+        success: false,
+        message: "Transfer amount must be between 1 and 5 credits",
+      });
     }
 
     if (receiverId === req.userId) {
@@ -74,16 +81,20 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
     }
 
     const senderWallet = await getOrCreateWallet(req.userId as string);
-    const senderUser = await User.findById(req.userId).select("level");
+    const senderUser = await User.findById(req.userId).select(
+      "level downlineCount",
+    );
+
     if (!senderUser) {
       return res
         .status(404)
         .json({ success: false, message: "Sender not found" });
     }
+
     if (senderWallet.creditBalance < creditCount) {
       return res
         .status(400)
-        .json({ success: false, message: "No credits available" });
+        .json({ success: false, message: "Insufficient credit balance" });
     }
 
     const receiver = await User.findById(receiverId);
@@ -93,6 +104,7 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
         .json({ success: false, message: "Receiver not found" });
     }
 
+    // Link receiver to sender if not already linked
     if (receiver.parentId && receiver.parentId.toString() !== req.userId) {
       return res.status(400).json({
         success: false,
@@ -106,9 +118,14 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
       receiver.directCount = receiver.directCount || 0;
       await receiver.save();
 
+      // Update sender's direct count
       await User.findByIdAndUpdate(req.userId, { $inc: { directCount: 1 } });
+
+      // Update downline counts for all ancestors
+      await updateAncestorDownlineCounts(receiverId);
     }
 
+    // Create credits (payment pending state)
     const createdCredits: Array<{ creditId: string; expiresAt: Date }> = [];
     for (let i = 0; i < creditCount; i += 1) {
       const sourceCredit = await assignCreditUsage(req.userId as string);
@@ -119,12 +136,15 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
       const expiresAt = new Date(
         Date.now() + CREDIT_EXPIRY_MINUTES * 60 * 1000,
       );
+
       const credit = await MlmCredit.create({
         senderId: req.userId,
         receiverId,
         expiresAt,
+        paymentStatus: "pending", // Receiver must confirm payment
         sourceCreditId: sourceCredit._id,
       });
+
       createdCredits.push({ creditId: credit._id.toString(), expiresAt });
     }
 
@@ -135,13 +155,18 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    res.json({ success: true, credits: createdCredits });
+    res.json({
+      success: true,
+      credits: createdCredits,
+      message: "Credits transferred. Waiting for receiver to confirm payment.",
+    });
   } catch (error) {
     console.error("MLM CREDIT TRANSFER ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
+// ✅ NEW: Receiver confirms "I Have Paid" → changes to waiting_approval
 router.post(
   "/credits/:creditId/confirm-payment",
   requireAuth,
@@ -162,33 +187,62 @@ router.post(
           .json({ success: false, message: "Not authorized" });
       }
 
-      if (credit.paymentStatus === "paid") {
-        return res.json({ success: true, message: "Already paid" });
+      if (credit.paymentStatus !== "pending") {
+        return res.json({
+          success: true,
+          message: `Payment already in ${credit.paymentStatus} state`,
+        });
       }
 
-      credit.paymentStatus = "paid";
-      credit.status = "active";
-      credit.activatedAt = new Date();
-      credit.transferExpiresAt = new Date(
-        Date.now() + TRANSFER_EXPIRY_HOURS * 60 * 60 * 1000,
-      );
+      // Update to waiting for admin approval
+      credit.paymentStatus = "waiting_approval";
+      credit.paymentConfirmedByReceiver = true;
+      credit.paymentConfirmedAt = new Date();
       await credit.save();
 
-      await addCredits(req.userId as string, credit.quantity);
-      const vouchers = await generateVouchers(
-        req.userId as string,
-        credit._id.toString(),
-        credit.quantity,
-      );
-      await distributeCommission(req.userId as string, credit._id.toString());
-
-      res.json({ success: true, vouchersGenerated: vouchers.length });
+      res.json({
+        success: true,
+        message: "Payment confirmation received. Waiting for admin approval.",
+        credit: {
+          id: credit._id.toString(),
+          status: credit.status,
+          paymentStatus: credit.paymentStatus,
+        },
+      });
     } catch (error) {
       console.error("MLM PAYMENT CONFIRM ERROR", error);
       res.status(500).json({ success: false, message: "Server error" });
     }
   },
 );
+
+// ============================================
+// DISCOUNT INFO (REPLACES COMMISSION)
+// ============================================
+
+router.get("/discount/info", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const discountInfo = await getUserDiscountInfo(req.userId as string);
+    res.json({ success: true, discountInfo });
+  } catch (error) {
+    console.error("MLM DISCOUNT INFO ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+router.get("/discount/summary", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const summary = await getDiscountSummary(req.userId as string);
+    res.json({ success: true, summary });
+  } catch (error) {
+    console.error("MLM DISCOUNT SUMMARY ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================
+// VOUCHERS
+// ============================================
 
 router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -252,91 +306,187 @@ router.post(
   },
 );
 
-router.get("/commissions/summary", requireAuth, async (req: AuthReq, res) => {
-  try {
-    const summary = await getCommissionSummary(req.userId as string);
-    res.json({ success: true, summary });
-  } catch (error) {
-    console.error("MLM COMMISSION SUMMARY ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-router.get(
-  "/commissions/transactions",
+router.post(
+  "/vouchers/:voucherId/transfer",
   requireAuth,
   async (req: AuthReq, res) => {
     try {
-      const { limit = 50, skip = 0 } = req.query;
-      const transactions = await CommissionTransaction.find({
-        toUserId: req.userId,
-      })
-        .sort({ createdAt: -1 })
-        .skip(Number(skip))
-        .limit(Number(limit))
-        .lean();
+      const { voucherId } = req.params;
+      const { recipientPhone } = req.body;
 
-      res.json({ success: true, transactions });
+      if (!recipientPhone) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Recipient phone is required" });
+      }
+
+      // Find voucher
+      const voucher = await Voucher.findOne({
+        _id: voucherId,
+        userId: req.userId,
+      });
+
+      if (!voucher) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Voucher not found" });
+      }
+
+      if (voucher.redeemedStatus !== "unredeemed") {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot transfer ${voucher.redeemedStatus} voucher`,
+        });
+      }
+
+      if (voucher.expiryDate < new Date()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Cannot transfer expired voucher" });
+      }
+
+      // Find recipient by phone
+      const recipient = await User.findOne({ phone: recipientPhone });
+      if (!recipient) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Recipient not found" });
+      }
+
+      if (recipient._id.toString() === req.userId) {
+        return res.status(400).json({
+          success: false,
+          message: "Cannot transfer voucher to yourself",
+        });
+      }
+
+      // Transfer voucher
+      const previousOwner = voucher.userId;
+      voucher.userId = recipient._id as any;
+      voucher.source = "transfer";
+      voucher.transferredFrom = previousOwner;
+      voucher.transferredAt = new Date();
+      voucher.transferHistory.push({
+        from: previousOwner,
+        to: recipient._id as any,
+        transferredAt: new Date(),
+      });
+
+      await voucher.save();
+
+      // Populate recipient info for response
+      await voucher.populate("userId", "name phone");
+
+      res.json({
+        success: true,
+        message: `Voucher transferred to ${recipient.name}`,
+        voucher,
+      });
     } catch (error) {
-      console.error("MLM COMMISSION TRANSACTIONS ERROR", error);
+      console.error("MLM VOUCHER TRANSFER ERROR", error);
       res.status(500).json({ success: false, message: "Server error" });
     }
   },
 );
 
-router.post("/withdrawals/request", requireAuth, async (req: AuthReq, res) => {
+router.get("/vouchers/history", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid amount" });
-    }
+    const { limit = 50, skip = 0 } = req.query;
 
-    const lastWithdrawal = (await Withdrawal.findOne({ userId: req.userId })
-      .sort({ requestedAt: -1 })
-      .lean()) as any;
-
-    if (
-      lastWithdrawal &&
-      Date.now() - new Date((lastWithdrawal as any).requestedAt).getTime() <
-        24 * 60 * 60 * 1000
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Only one withdrawal per day" });
-    }
-
-    const wallet = await getOrCreateWallet(req.userId as string);
-    if (wallet.commissionAvailableBalance < amount) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Insufficient balance" });
-    }
-
-    const withdrawal = await Withdrawal.create({ userId: req.userId, amount });
-    await subtractCommission(req.userId as string, amount);
-
-    res.json({ success: true, withdrawal });
-  } catch (error) {
-    console.error("MLM WITHDRAWAL REQUEST ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-router.get("/withdrawals/history", requireAuth, async (req: AuthReq, res) => {
-  try {
-    const withdrawals = await Withdrawal.find({ userId: req.userId })
-      .sort({ requestedAt: -1 })
-      .limit(50)
+    // Get all vouchers where user is original owner OR received via transfer
+    const vouchers = await Voucher.find({
+      $or: [
+        { originalOwner: req.userId },
+        { userId: req.userId },
+        { "transferHistory.from": req.userId },
+        { "transferHistory.to": req.userId },
+      ],
+    })
+      .populate("userId", "name phone")
+      .populate("originalOwner", "name phone")
+      .populate("transferredFrom", "name phone")
+      .sort({ createdAt: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
       .lean();
 
-    res.json({ success: true, withdrawals });
+    // Categorize vouchers
+    const purchased = vouchers.filter(
+      (v: any) =>
+        v.originalOwner?._id?.toString() === req.userId &&
+        v.source === "purchase",
+    );
+    const received = vouchers.filter(
+      (v: any) =>
+        v.userId?._id?.toString() === req.userId && v.source === "transfer",
+    );
+    const sent = vouchers.filter((v: any) =>
+      v.transferHistory?.some(
+        (t: any) =>
+          t.from?.toString() === req.userId && t.to?.toString() !== req.userId,
+      ),
+    );
+
+    res.json({
+      success: true,
+      history: {
+        purchased: purchased.length,
+        received: received.length,
+        sent: sent.length,
+        all: vouchers,
+      },
+    });
   } catch (error) {
-    console.error("MLM WITHDRAWAL HISTORY ERROR", error);
+    console.error("MLM VOUCHER HISTORY ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+router.get("/vouchers/received", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { limit = 20, skip = 0 } = req.query;
+
+    const vouchers = await Voucher.find({
+      userId: req.userId,
+      source: "transfer",
+    })
+      .populate("transferredFrom", "name phone")
+      .sort({ transferredAt: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .lean();
+
+    res.json({ success: true, vouchers });
+  } catch (error) {
+    console.error("MLM VOUCHERS RECEIVED ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+router.get("/vouchers/sent", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { limit = 20, skip = 0 } = req.query;
+
+    const vouchers = await Voucher.find({
+      "transferHistory.from": req.userId,
+    })
+      .populate("userId", "name phone")
+      .populate("transferredFrom", "name phone")
+      .sort({ transferredAt: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .lean();
+
+    res.json({ success: true, vouchers });
+  } catch (error) {
+    console.error("MLM VOUCHERS SENT ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================
+// NETWORK TREE & MEMBERS
+// ============================================
 
 router.get("/network/tree", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -361,7 +511,7 @@ router.get("/network/children", requireAuth, async (req: AuthReq, res) => {
     const targetParent = (parentId as string) || (req.userId as string);
 
     const children = await User.find({ parentId: targetParent })
-      .select("name phone level directCount createdAt")
+      .select("name phone level directCount downlineCount createdAt")
       .sort({ createdAt: -1 })
       .skip(Number(skip))
       .limit(Number(limit))
@@ -373,6 +523,7 @@ router.get("/network/children", requireAuth, async (req: AuthReq, res) => {
       phone: child.phone,
       level: child.level || 0,
       directCount: child.directCount || 0,
+      downlineCount: child.downlineCount || 0,
       joinedDate: child.createdAt,
       structuralCreditPool: getStructuralCreditPool(child.level || 1),
     }));
@@ -396,6 +547,87 @@ router.get("/network/direct-buyers", requireAuth, async (req: AuthReq, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+router.get(
+  "/network/structural-pool",
+  requireAuth,
+  async (req: AuthReq, res) => {
+    try {
+      const user = await User.findById(req.userId).select("level");
+      if (!user) {
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
+      }
+
+      const pool = getStructuralCreditPool(user.level || 1);
+      res.json({ success: true, structuralCreditPool: pool });
+    } catch (error) {
+      console.error("MLM STRUCTURAL POOL ERROR", error);
+      res.status(500).json({ success: false, message: "Server error" });
+    }
+  },
+);
+
+// ============================================
+// OVERVIEW DASHBOARD
+// ============================================
+
+router.get("/overview", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const user = await User.findById(req.userId).select(
+      "name phone level directCount downlineCount parentId createdAt",
+    );
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    const wallet = await getOrCreateWallet(req.userId as string);
+    const creditDashboard = await getCreditDashboard(req.userId as string);
+    const discountSummary = await getDiscountSummary(req.userId as string);
+
+    const totalNetworkUsers = await User.countDocuments({
+      parentId: req.userId,
+    });
+    const structuralCreditPool = getStructuralCreditPool(user.level || 1);
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        phone: user.phone,
+        level: user.level || 0,
+        directCount: user.directCount || 0,
+        downlineCount: (user as any).downlineCount || 0,
+        parentId: user.parentId,
+        joinedDate: user.createdAt,
+      },
+      wallet,
+      creditDashboard,
+      discountSummary, // Replaces commission summary
+      metrics: {
+        availableCredits: wallet.creditBalance,
+        totalVouchersTransferred: creditDashboard.totalCreditsTransferred || 0,
+        totalNetworkUsers,
+        virtualCommission: discountSummary.virtualCommission || 0, // Discount equivalent
+        currentDiscountPercent: discountSummary.discountPercent || 0,
+      },
+      structuralCreditPool,
+      baseMrp: MLM_BASE_MRP,
+    });
+  } catch (error) {
+    console.error("MLM OVERVIEW ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================
+// ADMIN ENDPOINTS
+// ============================================
 
 router.post("/admin/credits/seed", async (req, res) => {
   try {
@@ -422,7 +654,8 @@ router.post("/admin/credits/seed", async (req, res) => {
   }
 });
 
-router.post("/admin/withdrawals/:withdrawalId/approve", async (req, res) => {
+// ✅ NEW: Admin approves payment (activates vouchers & applies discount)
+router.post("/admin/credits/:creditId/approve-payment", async (req, res) => {
   try {
     const adminKey = req.headers["x-admin-key"] as string;
     if (
@@ -432,121 +665,148 @@ router.post("/admin/withdrawals/:withdrawalId/approve", async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    const { withdrawalId } = req.params;
-    const withdrawal = await Withdrawal.findById(withdrawalId);
-    if (!withdrawal) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
+    const { creditId } = req.params;
+    const { adminId } = req.body; // Optional: track which admin approved
 
-    withdrawal.status = "approved";
-    withdrawal.processedAt = new Date();
-    await withdrawal.save();
-
-    res.json({ success: true, withdrawal });
-  } catch (error) {
-    console.error("MLM WITHDRAWAL APPROVE ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-router.post("/admin/withdrawals/:withdrawalId/reject", async (req, res) => {
-  try {
-    const adminKey = req.headers["x-admin-key"] as string;
-    if (
-      adminKey !== process.env.ADMIN_SECRET_KEY &&
-      adminKey !== "your-secure-admin-key-here"
-    ) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-
-    const { withdrawalId } = req.params;
-    const { note } = req.body;
-
-    const withdrawal = await Withdrawal.findById(withdrawalId);
-    if (!withdrawal) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    withdrawal.status = "rejected";
-    withdrawal.adminNote = note || "Rejected by admin";
-    withdrawal.processedAt = new Date();
-    await withdrawal.save();
-
-    await addCommission(withdrawal.userId.toString(), withdrawal.amount);
-
-    res.json({ success: true, withdrawal });
-  } catch (error) {
-    console.error("MLM WITHDRAWAL REJECT ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-router.get(
-  "/network/structural-pool",
-  requireAuth,
-  async (req: AuthReq, res) => {
-    try {
-      const user = await User.findById(req.userId).select("level");
-      if (!user) {
-        return res
-          .status(404)
-          .json({ success: false, message: "User not found" });
-      }
-
-      const pool = getStructuralCreditPool(user.level || 1);
-      res.json({ success: true, structuralCreditPool: pool });
-    } catch (error) {
-      console.error("MLM STRUCTURAL POOL ERROR", error);
-      res.status(500).json({ success: false, message: "Server error" });
-    }
-  },
-);
-
-router.get("/overview", requireAuth, async (req: AuthReq, res) => {
-  try {
-    const user = await User.findById(req.userId).select(
-      "name phone level directCount parentId createdAt",
-    );
-    if (!user) {
+    const credit = await MlmCredit.findById(creditId);
+    if (!credit) {
       return res
         .status(404)
-        .json({ success: false, message: "User not found" });
+        .json({ success: false, message: "Credit not found" });
     }
 
-    const wallet = await getOrCreateWallet(req.userId as string);
-    const creditDashboard = await getCreditDashboard(req.userId as string);
-    const commissionSummary = await getCommissionSummary(req.userId as string);
+    if (credit.paymentStatus !== "waiting_approval") {
+      return res.status(400).json({
+        success: false,
+        message: `Credit is in ${credit.paymentStatus} state, cannot approve`,
+      });
+    }
 
-    const totalNetworkUsers = await User.countDocuments({
-      parentId: req.userId,
-    });
-    const structuralCreditPool = getStructuralCreditPool(user.level || 1);
+    // Approve payment
+    credit.paymentStatus = "approved";
+    credit.status = "active";
+    credit.activatedAt = new Date();
+    credit.transferExpiresAt = new Date(
+      Date.now() + TRANSFER_EXPIRY_HOURS * 60 * 60 * 1000,
+    );
+    credit.adminApprovedBy = adminId || null;
+    credit.adminApprovedAt = new Date();
+    await credit.save();
+
+    // Add credits to receiver's wallet
+    await addCredits(credit.receiverId.toString(), credit.quantity);
+
+    // Generate vouchers for receiver
+    const vouchers = await generateVouchers(
+      credit.receiverId.toString(),
+      credit._id.toString(),
+      credit.quantity,
+    );
 
     res.json({
       success: true,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        phone: user.phone,
-        level: user.level || 0,
-        directCount: user.directCount || 0,
-        parentId: user.parentId,
-        joinedDate: user.createdAt,
+      message: "Payment approved. Vouchers generated.",
+      vouchersGenerated: vouchers.length,
+      credit: {
+        id: credit._id.toString(),
+        status: credit.status,
+        paymentStatus: credit.paymentStatus,
       },
-      wallet,
-      creditDashboard,
-      commissionSummary,
-      metrics: {
-        availableCredits: wallet.creditBalance,
-        totalVouchersTransferred: creditDashboard.totalCreditsTransferred,
-        totalNetworkUsers,
-        estimatedCommission: commissionSummary.totalEarned,
-      },
-      structuralCreditPool,
-      baseMrp: MLM_BASE_ENTRY_VALUE,
     });
   } catch (error) {
-    console.error("MLM OVERVIEW ERROR", error);
+    console.error("MLM ADMIN APPROVE PAYMENT ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ✅ NEW: Admin rejects payment (reverts credit)
+router.post("/admin/credits/:creditId/reject-payment", async (req, res) => {
+  try {
+    const adminKey = req.headers["x-admin-key"] as string;
+    if (
+      adminKey !== process.env.ADMIN_SECRET_KEY &&
+      adminKey !== "your-secure-admin-key-here"
+    ) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const { creditId } = req.params;
+    const { adminId, note } = req.body;
+
+    const credit = await MlmCredit.findById(creditId);
+    if (!credit) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Credit not found" });
+    }
+
+    if (credit.paymentStatus !== "waiting_approval") {
+      return res.status(400).json({
+        success: false,
+        message: `Credit is in ${credit.paymentStatus} state, cannot reject`,
+      });
+    }
+
+    // Reject payment
+    credit.paymentStatus = "rejected";
+    credit.status = "reverted";
+    credit.adminApprovedBy = adminId || null;
+    credit.adminApprovedAt = new Date();
+    credit.adminNote = note || "Payment not confirmed by sender";
+    await credit.save();
+
+    // Refund credit to sender
+    await addCredits(credit.senderId.toString(), 1);
+
+    res.json({
+      success: true,
+      message: "Payment rejected. Credit refunded to sender.",
+      credit: {
+        id: credit._id.toString(),
+        status: credit.status,
+        paymentStatus: credit.paymentStatus,
+      },
+    });
+  } catch (error) {
+    console.error("MLM ADMIN REJECT PAYMENT ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ✅ NEW: List credits pending admin approval
+router.get("/admin/credits/pending-approval", async (req, res) => {
+  try {
+    const adminKey = req.headers["x-admin-key"] as string;
+    if (
+      adminKey !== process.env.ADMIN_SECRET_KEY &&
+      adminKey !== "your-secure-admin-key-here"
+    ) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const { limit = 50, skip = 0 } = req.query;
+
+    const credits = await MlmCredit.find({ paymentStatus: "waiting_approval" })
+      .populate("senderId", "name phone")
+      .populate("receiverId", "name phone")
+      .sort({ paymentConfirmedAt: -1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .lean();
+
+    res.json({
+      success: true,
+      credits: (credits as any[]).map((c) => ({
+        id: c._id.toString(),
+        sender: c.senderId,
+        receiver: c.receiverId,
+        quantity: c.quantity,
+        paymentConfirmedAt: c.paymentConfirmedAt,
+        createdAt: c.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("MLM ADMIN PENDING APPROVAL ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });

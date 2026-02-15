@@ -64,6 +64,7 @@ const UserSchema = new Schema(
     parentId: { type: Schema.Types.ObjectId, ref: "User", index: true },
     level: { type: Number, default: 0, min: 0 },
     directCount: { type: Number, default: 0, min: 0 },
+    downlineCount: { type: Number, default: 0, min: 0 }, // Total descendants (all levels)
   },
   { timestamps: true },
 );

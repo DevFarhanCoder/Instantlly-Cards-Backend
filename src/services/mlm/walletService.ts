@@ -1,5 +1,8 @@
 import MlmWallet from "../../models/MlmWallet";
 
+// ✅ SIMPLIFIED WALLET SERVICE - Only handles credit balance
+// No commission/withdrawal logic (discount-based MLM model)
+
 export async function getOrCreateWallet(userId: string) {
   let wallet = await MlmWallet.findOne({ userId });
   if (!wallet) {
@@ -16,28 +19,19 @@ export async function addCredits(userId: string, amount: number) {
   );
 }
 
-export async function addCommission(userId: string, amount: number) {
-  return MlmWallet.findOneAndUpdate(
-    { userId },
-    {
-      $inc: {
-        commissionTotalEarned: amount,
-        commissionAvailableBalance: amount,
-      },
-    },
-    { new: true, upsert: true },
-  );
-}
+export async function subtractCredits(userId: string, amount: number) {
+  const wallet = await MlmWallet.findOne({
+    userId,
+    creditBalance: { $gte: amount },
+  });
 
-export async function subtractCommission(userId: string, amount: number) {
+  if (!wallet) {
+    throw new Error("Insufficient credit balance");
+  }
+
   return MlmWallet.findOneAndUpdate(
-    { userId, commissionAvailableBalance: { $gte: amount } },
-    {
-      $inc: {
-        commissionAvailableBalance: -amount,
-        commissionTotalWithdrawn: amount,
-      },
-    },
+    { userId, creditBalance: { $gte: amount } },
+    { $inc: { creditBalance: -amount } },
     { new: true },
   );
 }

@@ -8,6 +8,11 @@ const VoucherSchema = new Schema(
       required: true,
       index: true,
     },
+    originalOwner: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      index: true,
+    },
     creditId: { type: Schema.Types.ObjectId, ref: "MlmCredit" },
     voucherNumber: { type: String, required: true, unique: true, index: true },
     MRP: { type: Number, required: true, default: 1200 },
@@ -21,6 +26,23 @@ const VoucherSchema = new Schema(
     voucherImages: { type: [String], default: [] },
     productVideoLink: { type: String },
     redeemedAt: { type: Date },
+    source: {
+      type: String,
+      enum: ["purchase", "transfer"],
+      default: "purchase",
+    },
+    transferredFrom: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    transferredAt: { type: Date },
+    transferHistory: [
+      {
+        from: { type: Schema.Types.ObjectId, ref: "User" },
+        to: { type: Schema.Types.ObjectId, ref: "User" },
+        transferredAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true },
 );

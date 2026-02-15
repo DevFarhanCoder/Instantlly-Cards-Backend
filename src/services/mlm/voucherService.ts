@@ -15,11 +15,13 @@ export async function generateVouchers(
 
   const vouchers = Array.from({ length: quantity }).map(() => ({
     userId,
+    originalOwner: userId,
     creditId,
     voucherNumber: uuidv4().replace(/-/g, "").slice(0, 12).toUpperCase(),
     MRP: DEFAULT_VOUCHER_MRP,
     issueDate: now,
     expiryDate: expiry,
+    source: "purchase" as const,
   }));
 
   return Voucher.insertMany(vouchers);

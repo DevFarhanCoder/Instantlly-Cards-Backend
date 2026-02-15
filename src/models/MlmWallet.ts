@@ -1,5 +1,7 @@
 import { Schema, model, models } from "mongoose";
 
+// ✅ NEW MODEL: Only tracks credit balance (no real commission/withdrawals)
+// Discount-based MLM: Savings are virtual, not stored here
 const MlmWalletSchema = new Schema(
   {
     userId: {
@@ -10,9 +12,6 @@ const MlmWalletSchema = new Schema(
       index: true,
     },
     creditBalance: { type: Number, default: 0, min: 0 },
-    commissionTotalEarned: { type: Number, default: 0, min: 0 },
-    commissionTotalWithdrawn: { type: Number, default: 0, min: 0 },
-    commissionAvailableBalance: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true },
 );
