@@ -11,11 +11,16 @@ export interface IDesignRequest extends Document {
   channelType: 'withChannel' | 'withoutChannel';
   referenceImagesGridFS?: mongoose.Types.ObjectId[];
   referenceVideosGridFS?: mongoose.Types.ObjectId[];
+  referenceImagesS3?: Array<{ url: string; key: string }>;
+  referenceVideosS3?: Array<{ url: string; key: string }>;
   uploaderPhone: string;
   uploaderName: string;
   userId?: string;
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   adminNotes?: string;
+  assignedDesignerId?: mongoose.Types.ObjectId;
+  assignedDesignerName?: string;
+  assignedAt?: Date;
   completedAdId?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -65,6 +70,20 @@ const DesignRequestSchema = new Schema<IDesignRequest>(
       type: [Schema.Types.ObjectId],
       default: [],
     },
+    referenceImagesS3: {
+      type: [{
+        url: { type: String, required: true },
+        key: { type: String, required: true },
+      }],
+      default: [],
+    },
+    referenceVideosS3: {
+      type: [{
+        url: { type: String, required: true },
+        key: { type: String, required: true },
+      }],
+      default: [],
+    },
     uploaderPhone: {
       type: String,
       required: true,
@@ -85,6 +104,19 @@ const DesignRequestSchema = new Schema<IDesignRequest>(
     adminNotes: {
       type: String,
       default: '',
+    },
+    assignedDesignerId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Designer',
+      default: null,
+    },
+    assignedDesignerName: {
+      type: String,
+      default: '',
+    },
+    assignedAt: {
+      type: Date,
+      default: null,
     },
     completedAdId: {
       type: Schema.Types.ObjectId,
