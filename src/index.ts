@@ -29,6 +29,7 @@ import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
 import quizRouter from "./routes/quiz";
 import businessPromotionRouter from "./routes/businessPromotion";
+import businessListing from "./routes/business-listing";
 import designerRouter from "./routes/designer";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
@@ -60,6 +61,7 @@ const defaultAllowed = [
   'https://api-test.instantllycards.com',
   'https://instantlly-ads.vercel.app',
   'https://instantlly-admin.vercel.app',
+  'https://instantllychannelpatneradmin.vercel.app', // Channel Partner Admin
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:5500',
@@ -270,6 +272,8 @@ async function startServer() {
     console.log("✅ Mounted /api/quiz routes (quiz progress, answer submission)");
     app.use("/api/business-promotion", businessPromotionRouter);
     console.log("✅ Mounted /api/business-promotion routes (business promotion forms)");
+    app.use("/api/business-listings", businessListing);
+    console.log("✅ Mounted /api/business-listing routes (business listing search)");
     app.use("/api/designer", designerRouter);
     console.log("✅ Mounted /api/designer routes (designer login, requests, uploads)");
 
