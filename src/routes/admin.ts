@@ -1590,7 +1590,10 @@ router.get('/received-designs', async (req: Request, res: Response) => {
         uploaderPhone: dr.uploaderPhone || '',
         businessName: dr.businessName || '',
         adType: dr.adType || 'image',
-        status: u.status === 'uploaded' ? 'new' : u.status,
+        status: u.status === 'uploaded' ? 'new'
+              : u.status === 'approved' ? 'user-approved'
+              : u.status === 'rejected' ? 'changes-requested'
+              : u.status,
         designFiles: (u.filesS3 || []).map((f: any) => ({
           url: f.url,
           type: f.contentType?.startsWith('video/') ? 'video' : 'image',
