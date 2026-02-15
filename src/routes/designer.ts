@@ -124,9 +124,24 @@ router.get('/requests', designerAuth, async (req: DesignerRequest, res: Response
   try {
     const designRequests = await DesignRequest.find({
       assignedDesignerId: req.designerId
-    }).sort({ assignedAt: -1 });
+    }).sort({ assignedAt: -1 }).lean();
 
-    res.json({ success: true, designRequests });
+    // Attach the latest DesignerUpload info (userFeedback, approval status) to each request
+    const requestIds = designRequests.map((dr: any) => dr._id);
+    const uploads = await DesignerUpload.find({
+      designRequestId: { $in: requestIds }
+    }).sort({ createdAt: -1 }).lean();
+
+    const enrichedRequests = designRequests.map((dr: any) => {
+      const upload = uploads.find((u: any) => u.designRequestId.toString() === dr._id.toString());
+      return {
+        ...dr,
+        userApprovalStatus: upload ? upload.status : null,
+        userFeedback: upload ? upload.userFeedback || '' : '',
+      };
+    });
+
+    res.json({ success: true, designRequests: enrichedRequests });
   } catch (error) {
     console.error('Error fetching designer requests:', error);
     res.status(500).json({ success: false, message: 'Server error' });
