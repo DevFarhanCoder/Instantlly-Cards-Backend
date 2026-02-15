@@ -1598,6 +1598,7 @@ router.get('/received-designs', async (req: Request, res: Response) => {
         })),
         designerNotes: u.notes,
         adminFeedback: u.adminNotes,
+        userFeedback: u.userFeedback || '',
         uploadedAt: u.createdAt,
         createdAt: u.createdAt,
       };
