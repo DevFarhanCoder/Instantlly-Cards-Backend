@@ -7,6 +7,7 @@ import AWS from "aws-sdk";
 import User from '../models/User';
 import Transaction from '../models/Transaction';
 import DesignRequest from '../models/DesignRequest';
+import DesignerUpload from '../models/DesignerUpload';
 
 import { uploadPendingAdMedia, uploadDesignRequestMedia } from '../services/s3Service';
 
@@ -1284,5 +1285,128 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
+
+// ==========================================
+// GET /designs-for-approval?phone=
+// Returns completed designs sent to user for approval (mobile app)
+// ==========================================
+router.get('/designs-for-approval', async (req: Request, res: Response) => {
+  try {
+    const phone = req.query.phone as string;
+    if (!phone) {
+      return res.status(400).json({ message: 'Phone number is required' });
+    }
+
+    const designRequests = await DesignRequest.find({ uploaderPhone: phone });
+    if (!designRequests.length) {
+      return res.json({ designs: [] });
+    }
+
+    const designRequestIds = designRequests.map(dr => dr._id);
+
+    const uploads = await DesignerUpload.find({
+      designRequestId: { $in: designRequestIds },
+      status: { $in: ['sent-to-user', 'approved', 'rejected'] }
+    }).sort({ createdAt: -1 });
+
+    const designs = uploads.map(upload => {
+      const dr = designRequests.find(r => r._id.toString() === upload.designRequestId.toString());
+      return {
+        id: upload._id,
+        designRequestId: upload.designRequestId,
+        designerName: upload.designerName,
+        businessName: dr?.businessName || '',
+        adType: dr?.adType || 'image',
+        status: upload.status === 'sent-to-user' ? 'pending-approval'
+              : upload.status === 'approved' ? 'approved'
+              : 'changes-requested',
+        designFiles: (upload.filesS3 || []).map((f: any) => ({
+          url: f.url,
+          type: (f.contentType && f.contentType.startsWith('video')) ? 'video' : 'image',
+          name: f.filename || 'design-file'
+        })),
+        adminMessage: upload.adminNotes || '',
+        userFeedback: upload.userFeedback || '',
+        sentAt: upload.createdAt,
+        respondedAt: upload.updatedAt !== upload.createdAt ? upload.updatedAt : undefined
+      };
+    });
+
+    res.json({ designs });
+  } catch (error) {
+    console.error('Error fetching designs for approval:', error);
+    res.status(500).json({ message: 'Failed to fetch designs' });
+  }
+});
+
+// ==========================================
+// POST /designs/:id/approve
+// User approves a completed design
+// ==========================================
+router.post('/designs/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid ID' });
+    }
+
+    const upload = await DesignerUpload.findById(id);
+    if (!upload) {
+      return res.status(404).json({ message: 'Design not found' });
+    }
+
+    upload.status = 'approved';
+    await upload.save();
+
+    const designRequest = await DesignRequest.findById(upload.designRequestId);
+    if (designRequest) {
+      designRequest.status = 'completed';
+      await designRequest.save();
+    }
+
+    res.json({ success: true, message: 'Design approved successfully' });
+  } catch (error) {
+    console.error('Error approving design:', error);
+    res.status(500).json({ message: 'Failed to approve design' });
+  }
+});
+
+// ==========================================
+// POST /designs/:id/request-changes
+// User requests changes to a design
+// ==========================================
+router.post('/designs/:id/request-changes', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { feedback } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid ID' });
+    }
+
+    const upload = await DesignerUpload.findById(id);
+    if (!upload) {
+      return res.status(404).json({ message: 'Design not found' });
+    }
+
+    upload.status = 'rejected';
+    upload.userFeedback = feedback || '';
+    await upload.save();
+
+    const designRequest = await DesignRequest.findById(upload.designRequestId);
+    if (designRequest) {
+      designRequest.status = 'in-progress';
+      await designRequest.save();
+    }
+
+    res.json({ success: true, message: 'Feedback sent successfully' });
+  } catch (error) {
+    console.error('Error requesting changes:', error);
+    res.status(500).json({ message: 'Failed to send feedback' });
+  }
+});
+
 export default router;
+
 
