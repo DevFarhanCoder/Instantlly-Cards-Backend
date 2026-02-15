@@ -8,6 +8,7 @@ export interface IDesignerUpload extends Document {
   notes: string;
   status: 'uploaded' | 'approved' | 'rejected' | 'sent-to-user';
   adminNotes: string;
+  userFeedback: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,7 +29,8 @@ const DesignerUploadSchema = new Schema<IDesignerUpload>({
     enum: ['uploaded', 'approved', 'rejected', 'sent-to-user'],
     default: 'uploaded'
   },
-  adminNotes: { type: String, default: '' }
+  adminNotes: { type: String, default: '' },
+  userFeedback: { type: String, default: '' }
 }, { timestamps: true });
 
 // Index for fast lookups
