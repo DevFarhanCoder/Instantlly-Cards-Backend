@@ -1478,14 +1478,29 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
 router.get('/designers', async (req: Request, res: Response) => {
   try {
     const designers = await Designer.find({}).select('-password').sort({ createdAt: -1 });
+
+    // Count assigned and completed requests per designer
+    const designerStats = await Promise.all(
+      designers.map(async (d) => {
+        const assignedCount = await DesignRequest.countDocuments({ assignedDesignerId: d._id });
+        const completedCount = await DesignRequest.countDocuments({ assignedDesignerId: d._id, status: 'completed' });
+        return {
+          id: d._id,
+          _id: d._id,
+          username: d.username,
+          name: d.username, // Use username as display name
+          status: 'active' as const,
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+          assignedRequests: assignedCount,
+          completedRequests: completedCount,
+        };
+      })
+    );
+
     res.json({
       success: true,
-      designers: designers.map(d => ({
-        _id: d._id,
-        username: d.username,
-        createdAt: d.createdAt,
-        updatedAt: d.updatedAt,
-      })),
+      designers: designerStats,
     });
   } catch (error) {
     console.error('Error fetching designers:', error);
@@ -1562,7 +1577,33 @@ router.get('/received-designs', async (req: Request, res: Response) => {
       .populate('designRequestId', 'businessName adType uploaderName uploaderPhone status email phoneNumber')
       .sort({ createdAt: -1 });
 
-    res.json({ success: true, uploads });
+    // Map to the format the admin frontend expects
+    const designs = uploads.map((u: any) => {
+      const dr = u.designRequestId || {};
+      return {
+        id: u._id,
+        _id: u._id,
+        designRequestId: dr._id || u.designRequestId,
+        designerName: u.designerName,
+        designerId: u.designerId,
+        uploaderName: dr.uploaderName || 'Unknown',
+        uploaderPhone: dr.uploaderPhone || '',
+        businessName: dr.businessName || '',
+        adType: dr.adType || 'image',
+        status: u.status === 'uploaded' ? 'new' : u.status,
+        designFiles: (u.filesS3 || []).map((f: any) => ({
+          url: f.url,
+          type: f.contentType?.startsWith('video/') ? 'video' : 'image',
+          name: f.filename || 'file',
+        })),
+        designerNotes: u.notes,
+        adminFeedback: u.adminNotes,
+        uploadedAt: u.createdAt,
+        createdAt: u.createdAt,
+      };
+    });
+
+    res.json({ success: true, designs, uploads });
   } catch (error) {
     console.error('Error fetching received designs:', error);
     res.status(500).json({ message: 'Failed to fetch received designs' });
