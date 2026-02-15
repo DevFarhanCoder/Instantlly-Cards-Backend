@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
@@ -218,7 +218,7 @@ router.post(
 
       // console.log(`? Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
 
-      // ---- IMAGES → S3 ----
+      // ---- IMAGES â†’ S3 ----
       const tempAdId = Date.now().toString();
 
       if (bottomMediaType === "image" && bottomImage) {
@@ -229,7 +229,7 @@ router.post(
           tempAdId,
           bottomImage.mimetype
         );
-        console.log('✅ Bottom image uploaded to S3:', bottomImageS3Result.url);
+        console.log('âœ… Bottom image uploaded to S3:', bottomImageS3Result.url);
       }
 
       if (fullscreenMediaType === "image" && fullscreenImage) {
@@ -240,7 +240,7 @@ router.post(
           tempAdId,
           fullscreenImage.mimetype
         );
-        console.log('✅ Fullscreen image uploaded to S3:', fullscreenImageS3Result.url);
+        console.log('âœ… Fullscreen image uploaded to S3:', fullscreenImageS3Result.url);
       }
 
       // ---- VIDEO ? S3 ----
@@ -664,6 +664,55 @@ router.get('/video/:id', async (req: Request, res: Response) => {
   }
 });
 
+
+/**
+ * PUT /api/channel-partner/ads/design-requests/:id/assign
+ * Assign a designer to a design request (for admin)
+ */
+router.put('/design-requests/:id/assign', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { designerId, designerName } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid design request ID' });
+    }
+
+    if (!designerId || !designerName) {
+      return res.status(400).json({ message: 'designerId and designerName are required' });
+    }
+
+    const designRequest = await DesignRequest.findById(id);
+    if (!designRequest) {
+      return res.status(404).json({ message: 'Design request not found' });
+    }
+
+    designRequest.assignedDesignerId = designerId;
+    designRequest.assignedDesignerName = designerName;
+    designRequest.assignedAt = new Date();
+    if (designRequest.status === 'pending') {
+      designRequest.status = 'in-progress';
+    }
+
+    await designRequest.save();
+
+    res.json({
+      success: true,
+      message: 'Designer assigned successfully',
+      designRequest: {
+        id: designRequest._id,
+        assignedDesignerId: designRequest.assignedDesignerId,
+        assignedDesignerName: designRequest.assignedDesignerName,
+        assignedAt: designRequest.assignedAt,
+        status: designRequest.status,
+        updatedAt: designRequest.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('Error assigning designer:', error);
+    res.status(500).json({ message: 'Failed to assign designer' });
+  }
+});
 /**
  * GET /api/channel-partner/ads/image/:id
  * Stream an image from GridFS by its ObjectId
