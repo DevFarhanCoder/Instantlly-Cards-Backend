@@ -1,6 +1,8 @@
 import { Router } from "express";
 import BusinessPromotion from "../models/BusinessPromotion";
 import { requireAuth, AuthReq } from "../middleware/auth";
+import { s3, upload } from "./channelPartnerAds";
+import AWS from "aws-sdk";
 
 const router = Router();
 
@@ -403,6 +405,188 @@ router.delete("/:id", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// GET /api/business-promotion/:id/analytics
+router.get("/:id/analytics", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+
+    const promotion = await BusinessPromotion.findOne({
+      _id: id,
+      userId
+    }).lean() as any;
+
+    if (!promotion) {
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found"
+      });
+    }
+
+    const impressions = promotion?.visibility?.impressions || 0;
+    const clicks = promotion?.visibility?.clicks || 0;
+    const leads = promotion?.visibility?.leads || 0;
+
+    const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+
+    res.json({
+      success: true,
+      analytics: {
+        impressions,
+        clicks,
+        leads,
+        ctr: Number(ctr.toFixed(2)),
+        priorityScore: promotion.visibility?.priorityScore,
+        expiryDate: promotion.expiryDate,
+        listingType: promotion.listingType,
+        status: promotion.status
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+});
+
+
+
+
+router.post(
+  "/:id/media",
+  requireAuth,
+  upload.single("image"),
+  async (req: AuthReq, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.userId;
+
+      const promotion = await BusinessPromotion.findOne({ _id: id, userId });
+
+      if (!promotion) {
+        return res.status(404).json({ success: false });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: "No file" });
+      }
+
+      const s3 = new AWS.S3({
+        region: process.env.AWS_REGION,
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+        },
+      });
+
+      const key = `business-media/${Date.now()}-${req.file.originalname}`;
+
+      await s3
+        .putObject({
+          Bucket: process.env.S3_BUCKET!,
+          Key: key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+        })
+        .promise();
+
+      const imageUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
+
+      promotion.media.push({
+        url: imageUrl,
+        publicId: key,
+      });
+
+      await promotion.save();
+
+      res.json({
+        success: true,
+        media: promotion.media,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ success: false });
+    }
+  }
+);
+
+
+
+router.delete("/:id/media/:mediaId", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { id, mediaId } = req.params;
+    const userId = req.userId;
+
+    const promotion = await BusinessPromotion.findOne({ _id: id, userId });
+
+    if (!promotion) {
+      return res.status(404).json({ success: false });
+    }
+
+    const mediaItem = promotion.media.find(
+      (m: any) => m._id.toString() === mediaId
+    );
+
+    if (!mediaItem) {
+      return res.status(404).json({ success: false, message: "Media not found" });
+    }
+
+    // Delete from S3
+    if (mediaItem.publicId) {
+      await s3
+        .deleteObject({
+          Bucket: process.env.S3_BUCKET!,
+          Key: mediaItem.publicId,
+        })
+        .promise();
+    }
+
+    promotion.media = promotion.media.filter(
+      (m: any) => m._id.toString() !== mediaId
+    );
+
+    await promotion.save();
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Delete media error:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+
+
+router.patch("/:id/toggle-status", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    const promotion = await BusinessPromotion.findOne({ _id: id, userId });
+
+    if (!promotion) {
+      return res.status(404).json({ success: false });
+    }
+
+    promotion.isActive = !promotion.isActive;
+    promotion.status = promotion.isActive ? "active" : "inactive";
+
+    await promotion.save();
+
+    res.json({
+      success: true,
+      isActive: promotion.isActive
+    });
+
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
+
+
+
 export default router;
 
 
@@ -413,3 +597,35 @@ export default router;
 //   paymentStatus = 'expired';
 // }
 // TODO: validate price against server-side plan config
+
+// /cron/expiry-check.ts
+
+// import BusinessPromotion from "../models/BusinessPromotion";
+
+// export const checkExpiredListings = async () => {
+//   const now = new Date();
+
+//   await BusinessPromotion.updateMany(
+//     {
+//       expiryDate: { $lt: now },
+//       status: "active"
+//     },
+//     {
+//       status: "expired",
+//       isActive: false,
+//       paymentStatus: "expired"
+//     }
+//   );
+
+//   console.log("Expired listings updated");
+// };
+
+// Upgrade ranking to Mongo aggregation pipeline
+
+// Add fraud detection (fake clicks prevention)
+
+// Add geo-distance ranking
+
+// Add AI smart boost logic
+
+// Add daily performance charts API

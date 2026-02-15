@@ -87,6 +87,8 @@ const BusinessPromotionSchema = new Schema(
     },
 
 
+
+
     paymentStatus: {
       type: String,
       enum: ['not_required', 'pending', 'paid', 'expired', 'failed'],
@@ -96,11 +98,27 @@ const BusinessPromotionSchema = new Schema(
     paymentId: { type: String, default: null },
 
     visibility: {
-      priorityScore: { type: Number, default: 10 }, // ranking
+      priorityScore: { type: Number, default: 10 },
       impressions: { type: Number, default: 0 },
+      clicks: { type: Number, default: 0 },
       leads: { type: Number, default: 0 },
-      clicks: { type: Number, default: 0 }
+      callClicks: { type: Number, default: 0 },
+      whatsappClicks: { type: Number, default: 0 }
     },
+
+
+    media: [
+      {
+        url: String,
+        publicId: String, // if using cloud storage
+        uploadedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }
+    ],
+
+
 
 
     // Promotion visibility

@@ -9,48 +9,74 @@ router.get('/', async (req, res) => {
     const { subcategory, city } = req.query;
     const now = new Date();
 
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📥 Incoming Query Params:');
-    console.log('   subcategory:', subcategory);
-    console.log('   city:', city);
-
-    const query: any = {
+    const matchStage: any = {
       isActive: true,
       status: 'active',
       $or: [
         { expiryDate: null },
-        { expiryDate: { $gt: now } },
+        { expiryDate: { $gt: now } }
       ]
     };
 
+    if (city) {
+      matchStage.city = city;
+    }
+
     if (subcategory) {
-      query.category = {
-        $elemMatch: {
-          $regex: subcategory,
-          $options: 'i'
-        }
+      matchStage.category = {
+        $regex: subcategory,
+        $options: 'i'
       };
     }
 
-    if (city) {
-      query.city = city;
-    }
+    const listings = await BusinessPromotion.aggregate([
+      { $match: matchStage },
 
-    console.log('🧠 Final Mongo Query:');
-    console.log(JSON.stringify(query, null, 2));
+      {
+        $addFields: {
+          impressions: { $ifNull: ['$visibility.impressions', 0] },
+          clicks: { $ifNull: ['$visibility.clicks', 0] },
+          leads: { $ifNull: ['$visibility.leads', 0] },
+          priority: { $ifNull: ['$visibility.priorityScore', 10] }
+        }
+      },
 
-    const data = await BusinessPromotion.find(query)
-      .sort({
-        'visibility.priorityScore': -1,
-        createdAt: -1
-      })
-      .lean();
+      {
+        $addFields: {
+          ctr: {
+            $cond: [
+              { $gt: ['$impressions', 0] },
+              { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] },
+              0
+            ]
+          }
+        }
+      },
 
-    console.log('📊 Results Found:', data.length);
-    console.log('📄 Result Categories:', data.map(d => d.category));
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      {
+        $addFields: {
+          finalScore: {
+            $add: [
+              '$priority',
+              { $multiply: ['$clicks', 0.3] },
+              { $multiply: ['$leads', 0.7] }
+            ]
+          }
+        }
+      },
 
-    res.json({ success: true, data });
+      {
+        $sort: {
+          listingType: -1, // promoted first
+          finalScore: -1
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: listings
+    });
 
   } catch (error) {
     console.error("❌ Business listings error:", error);
@@ -61,21 +87,79 @@ router.get('/', async (req, res) => {
   }
 });
 
+// get business details and increment impressions
+router.get('/:id', async (req, res) => {
+  try {
+    const now = new Date();
 
-router.post('/:id/impression', async (req, res) => {
+    const business = await BusinessPromotion.findOne({
+      _id: req.params.id,
+      isActive: true,
+      status: 'active',
+      $or: [
+        { expiryDate: null },
+        { expiryDate: { $gt: now } }
+      ]
+    }).lean();
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        message: 'Business not found or expired'
+      });
+    }
+
     await BusinessPromotion.findByIdAndUpdate(
-        req.params.id,
-        { $inc: { 'visibility.impressions': 1 } }
+      req.params.id,
+      { $inc: { 'visibility.impressions': 1 } }
     );
-    res.json({ success: true });
+
+    res.json({
+      success: true,
+      data: business
+    });
+
+  } catch (error) {
+    console.error("❌ Detail error:", error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
 });
 
-router.post('/:id/click', async (req, res) => {
+
+// lead tracking endpoint
+router.post('/:id/lead', async (req, res) => {
+  try {
     await BusinessPromotion.findByIdAndUpdate(
-        req.params.id,
-        { $inc: { 'visibility.clicks': 1 } }
+      req.params.id,
+      { $inc: { 'visibility.leads': 1 } }
     );
+
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
+
+// click tracking endpoint
+router.post('/:id/impression', async (req, res) => {
+  await BusinessPromotion.findByIdAndUpdate(
+    req.params.id,
+    { $inc: { 'visibility.impressions': 1 } }
+  );
+  res.json({ success: true });
+});
+
+// click tracking endpoint
+router.post('/:id/click', async (req, res) => {
+  await BusinessPromotion.findByIdAndUpdate(
+    req.params.id,
+    { $inc: { 'visibility.clicks': 1 } }
+  );
+  res.json({ success: true });
 });
 
 

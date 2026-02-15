@@ -13,7 +13,7 @@ import { Readable } from 'stream';
 const router = express.Router();
 
 // Configure multer for memory storage - images only
-const upload = multer({
+export  const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 16 * 1024 * 1024, // 16MB limit for images
@@ -29,7 +29,7 @@ const upload = multer({
 });
 
 // Configure AWS S3
-const s3 = new AWS.S3({
+export  const s3 = new AWS.S3({
   region: process.env.AWS_REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
