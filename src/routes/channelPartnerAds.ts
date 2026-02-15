@@ -1310,7 +1310,7 @@ router.get('/designs-for-approval', async (req: Request, res: Response) => {
     }).sort({ createdAt: -1 });
 
     const designs = uploads.map(upload => {
-      const dr = designRequests.find(r => r._id.toString() === upload.designRequestId.toString());
+      const dr = designRequests.find((r: any) => r._id.toString() === upload.designRequestId.toString());
       return {
         id: upload._id,
         designRequestId: upload.designRequestId,
@@ -1408,5 +1408,6 @@ router.post('/designs/:id/request-changes', async (req: Request, res: Response) 
 });
 
 export default router;
+
 
 
