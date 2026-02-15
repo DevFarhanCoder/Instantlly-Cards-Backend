@@ -29,6 +29,7 @@ import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
 import quizRouter from "./routes/quiz";
 import businessPromotionRouter from "./routes/businessPromotion";
+import designerRouter from "./routes/designer";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -269,6 +270,8 @@ async function startServer() {
     console.log("✅ Mounted /api/quiz routes (quiz progress, answer submission)");
     app.use("/api/business-promotion", businessPromotionRouter);
     console.log("✅ Mounted /api/business-promotion routes (business promotion forms)");
+    app.use("/api/designer", designerRouter);
+    console.log("✅ Mounted /api/designer routes (designer login, requests, uploads)");
 
     // Initialize Socket.IO service
     const socketService = new SocketService(io);

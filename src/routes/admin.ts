@@ -13,6 +13,8 @@ import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
 import Transaction from "../models/Transaction";
 import Designer from "../models/Designer";
+import DesignerUpload from "../models/DesignerUpload";
+import DesignRequest from "../models/DesignRequest";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { movePendingToApproved } from "../services/s3Service";
 
@@ -1547,6 +1549,64 @@ router.delete('/designers/:id', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error deleting designer:', error);
     res.status(500).json({ message: 'Failed to delete designer' });
+  }
+});
+
+// ==========================================
+// GET /api/admin/received-designs
+// Get all designer uploads (received designs)
+// ==========================================
+router.get('/received-designs', async (req: Request, res: Response) => {
+  try {
+    const uploads = await DesignerUpload.find({})
+      .populate('designRequestId', 'businessName adType uploaderName uploaderPhone status email phoneNumber')
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, uploads });
+  } catch (error) {
+    console.error('Error fetching received designs:', error);
+    res.status(500).json({ message: 'Failed to fetch received designs' });
+  }
+});
+
+// ==========================================
+// POST /api/admin/received-designs/:id/send-to-user
+// Approve a designer upload and mark as sent to user
+// ==========================================
+router.post('/received-designs/:id/send-to-user', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid upload ID' });
+    }
+
+    const designerUpload = await DesignerUpload.findById(id);
+    if (!designerUpload) {
+      return res.status(404).json({ message: 'Designer upload not found' });
+    }
+
+    designerUpload.status = 'sent-to-user';
+    if (req.body.adminNotes) {
+      designerUpload.adminNotes = req.body.adminNotes;
+    }
+    await designerUpload.save();
+
+    // Also update the design request status
+    const designRequest = await DesignRequest.findById(designerUpload.designRequestId);
+    if (designRequest) {
+      designRequest.status = 'completed';
+      await designRequest.save();
+    }
+
+    res.json({
+      success: true,
+      message: 'Design sent to user successfully',
+      upload: designerUpload
+    });
+  } catch (error) {
+    console.error('Error sending design to user:', error);
+    res.status(500).json({ message: 'Failed to send design to user' });
   }
 });
 
