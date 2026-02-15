@@ -60,6 +60,28 @@ const AdSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ===== 🔥 NEW: S3 URLS =====
+    // WHY: CloudFront delivery for faster loading
+    bottomImageS3: {
+      url: { type: String, default: null },
+      key: { type: String, default: null },
+    },
+
+    fullscreenImageS3: {
+      url: { type: String, default: null },
+      key: { type: String, default: null },
+    },
+
+    bottomVideoS3: {
+      url: { type: String, default: null },
+      key: { type: String, default: null },
+    },
+
+    fullscreenVideoS3: {
+      url: { type: String, default: null },
+      key: { type: String, default: null },
+    },
+
     // Video Ad Support - Bottom Video (624 × 174px)
     bottomVideo: {
       type: String, // Legacy or empty when using GridFS

@@ -12,7 +12,11 @@ import Notification from "../models/Notification";
 import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
 import Transaction from "../models/Transaction";
+import Designer from "../models/Designer";
+import DesignerUpload from "../models/DesignerUpload";
+import DesignRequest from "../models/DesignRequest";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
+import { movePendingToApproved } from "../services/s3Service";
 
 const router = express.Router();
 
@@ -560,6 +564,67 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
         }
       } else {
         console.log(`⚠️ Could not find user with phone ${ad.uploadedBy} for credits deduction`);
+      }
+    }
+
+    // 📦 Move media files from pending-ads to approved-ads in S3
+    const uploaderPhone = ad.uploadedBy || 'unknown';
+    const mediaFiles: Array<{ filename: string; type: 'bottom_image' | 'fullscreen_image' | 'bottom_video' | 'fullscreen_video' }> = [];
+
+    // Collect all S3 media files that need to be moved
+    if ((ad as any).bottomImageS3?.key) {
+      const filename = (ad as any).bottomImageS3.key.split('/').pop() || 'bottom_image.jpg';
+      mediaFiles.push({ filename, type: 'bottom_image' });
+    }
+
+    if ((ad as any).fullscreenImageS3?.key) {
+      const filename = (ad as any).fullscreenImageS3.key.split('/').pop() || 'fullscreen_image.jpg';
+      mediaFiles.push({ filename, type: 'fullscreen_image' });
+    }
+
+    if ((ad as any).bottomVideoS3?.key) {
+      const filename = (ad as any).bottomVideoS3.key.split('/').pop() || 'bottom_video.mp4';
+      mediaFiles.push({ filename, type: 'bottom_video' });
+    }
+
+    if ((ad as any).fullscreenVideoS3?.key) {
+      const filename = (ad as any).fullscreenVideoS3.key.split('/').pop() || 'fullscreen_video.mp4';
+      mediaFiles.push({ filename, type: 'fullscreen_video' });
+    }
+
+    // Move files from pending to approved in S3
+    if (mediaFiles.length > 0) {
+      console.log(`📦 Moving ${mediaFiles.length} media files from pending to approved in S3...`);
+      
+      try {
+        const approvedFiles = await movePendingToApproved(id, uploaderPhone, mediaFiles);
+        
+        // Update ad with new approved S3 URLs
+        for (const file of approvedFiles) {
+          switch (file.type) {
+            case 'bottom_image':
+              (ad as any).bottomImageS3 = { url: file.url, key: file.key };
+              console.log(`✅ Bottom image moved: ${file.url}`);
+              break;
+            case 'fullscreen_image':
+              (ad as any).fullscreenImageS3 = { url: file.url, key: file.key };
+              console.log(`✅ Fullscreen image moved: ${file.url}`);
+              break;
+            case 'bottom_video':
+              (ad as any).bottomVideoS3 = { url: file.url, key: file.key };
+              console.log(`✅ Bottom video moved: ${file.url}`);
+              break;
+            case 'fullscreen_video':
+              (ad as any).fullscreenVideoS3 = { url: file.url, key: file.key };
+              console.log(`✅ Fullscreen video moved: ${file.url}`);
+              break;
+          }
+        }
+        
+        console.log(`✅ Successfully moved all media to approved-ads/${id}/`);
+      } catch (error) {
+        console.error('❌ Failed to move S3 media files:', error);
+        // Continue with approval even if S3 move fails (files can be moved manually)
       }
     }
 
@@ -1403,6 +1468,190 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
       success: false,
       message: error.message || "Failed to fetch referral chain"
     });
+  }
+});
+
+/**
+ * GET /api/admin/designers
+ * Get all designer accounts
+ */
+router.get('/designers', async (req: Request, res: Response) => {
+  try {
+    const designers = await Designer.find({}).select('-password').sort({ createdAt: -1 });
+
+    // Count assigned and completed requests per designer
+    const designerStats = await Promise.all(
+      designers.map(async (d) => {
+        const assignedCount = await DesignRequest.countDocuments({ assignedDesignerId: d._id });
+        const completedCount = await DesignRequest.countDocuments({ assignedDesignerId: d._id, status: 'completed' });
+        return {
+          id: d._id,
+          _id: d._id,
+          username: d.username,
+          name: d.username, // Use username as display name
+          status: 'active' as const,
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+          assignedRequests: assignedCount,
+          completedRequests: completedCount,
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      designers: designerStats,
+    });
+  } catch (error) {
+    console.error('Error fetching designers:', error);
+    res.status(500).json({ message: 'Failed to fetch designers' });
+  }
+});
+
+/**
+ * POST /api/admin/designers
+ * Create a new designer account
+ */
+router.post('/designers', async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required' });
+    }
+
+    // Check if username already exists
+    const existing = await Designer.findOne({ username });
+    if (existing) {
+      return res.status(409).json({ message: 'Username already exists' });
+    }
+
+    const designer = new Designer({ username, password });
+    await designer.save();
+
+    console.log(`✅ Designer created: ${username}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Designer account created successfully',
+      designer: {
+        _id: designer._id,
+        username: designer.username,
+        createdAt: designer.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error('Error creating designer:', error);
+    res.status(500).json({ message: 'Failed to create designer account' });
+  }
+});
+
+/**
+ * DELETE /api/admin/designers/:id
+ * Delete a designer account
+ */
+router.delete('/designers/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid designer ID' });
+    }
+    const result = await Designer.findByIdAndDelete(id);
+    if (!result) {
+      return res.status(404).json({ message: 'Designer not found' });
+    }
+    res.json({ success: true, message: 'Designer deleted' });
+  } catch (error) {
+    console.error('Error deleting designer:', error);
+    res.status(500).json({ message: 'Failed to delete designer' });
+  }
+});
+
+// ==========================================
+// GET /api/admin/received-designs
+// Get all designer uploads (received designs)
+// ==========================================
+router.get('/received-designs', async (req: Request, res: Response) => {
+  try {
+    const uploads = await DesignerUpload.find({})
+      .populate('designRequestId', 'businessName adType uploaderName uploaderPhone status email phoneNumber')
+      .sort({ createdAt: -1 });
+
+    // Map to the format the admin frontend expects
+    const designs = uploads.map((u: any) => {
+      const dr = u.designRequestId || {};
+      return {
+        id: u._id,
+        _id: u._id,
+        designRequestId: dr._id || u.designRequestId,
+        designerName: u.designerName,
+        designerId: u.designerId,
+        uploaderName: dr.uploaderName || 'Unknown',
+        uploaderPhone: dr.uploaderPhone || '',
+        businessName: dr.businessName || '',
+        adType: dr.adType || 'image',
+        status: u.status === 'uploaded' ? 'new'
+              : u.status === 'approved' ? 'user-approved'
+              : u.status === 'rejected' ? 'changes-requested'
+              : u.status,
+        designFiles: (u.filesS3 || []).map((f: any) => ({
+          url: f.url,
+          type: f.contentType?.startsWith('video/') ? 'video' : 'image',
+          name: f.filename || 'file',
+        })),
+        designerNotes: u.notes,
+        adminFeedback: u.adminNotes,
+        userFeedback: u.userFeedback || '',
+        uploadedAt: u.createdAt,
+        createdAt: u.createdAt,
+      };
+    });
+
+    res.json({ success: true, designs, uploads });
+  } catch (error) {
+    console.error('Error fetching received designs:', error);
+    res.status(500).json({ message: 'Failed to fetch received designs' });
+  }
+});
+
+// ==========================================
+// POST /api/admin/received-designs/:id/send-to-user
+// Approve a designer upload and mark as sent to user
+// ==========================================
+router.post('/received-designs/:id/send-to-user', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid upload ID' });
+    }
+
+    const designerUpload = await DesignerUpload.findById(id);
+    if (!designerUpload) {
+      return res.status(404).json({ message: 'Designer upload not found' });
+    }
+
+    designerUpload.status = 'sent-to-user';
+    if (req.body.adminNotes) {
+      designerUpload.adminNotes = req.body.adminNotes;
+    }
+    await designerUpload.save();
+
+    // Also update the design request status
+    const designRequest = await DesignRequest.findById(designerUpload.designRequestId);
+    if (designRequest) {
+      designRequest.status = 'completed';
+      await designRequest.save();
+    }
+
+    res.json({
+      success: true,
+      message: 'Design sent to user successfully',
+      upload: designerUpload
+    });
+  } catch (error) {
+    console.error('Error sending design to user:', error);
+    res.status(500).json({ message: 'Failed to send design to user' });
   }
 });
 

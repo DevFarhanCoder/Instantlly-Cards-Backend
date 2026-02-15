@@ -217,13 +217,27 @@ r.post("/", async (req: AuthReq, res) => {
       email: cardData.email,
       location: cardData.location
     }, null, 2));
-    console.log('📝 [CREATE CARD] Received data:', JSON.stringify({ 
-      name: cardData.name,
-      birthdate: cardData.birthdate, 
-      anniversary: cardData.anniversary,
-      email: cardData.email,
-      location: cardData.location
-    }, null, 2));
+
+    // PREVENT DUPLICATE DEFAULT CARDS - Only block explicit default card creation
+    if (cardData.isDefault === true) {
+      const existingDefaultCard = await Card.findOne({ 
+        userId, 
+        isDefault: true 
+      });
+      
+      if (existingDefaultCard) {
+        console.log(`⚠️ [CREATE CARD] User ${userId} already has default card - blocking duplicate default creation`);
+        return res.status(400).json({ 
+          message: "User already has a default card. Cannot create duplicate default cards." 
+        });
+      }
+      
+      console.log('✅ [CREATE CARD] Creating new default card');
+    } else {
+      // For manual card creation, set isDefault to false
+      cardData.isDefault = false;
+      console.log('✅ [CREATE CARD] Creating regular (non-default) card');
+    }
 
     // Handle Base64 image conversion if companyPhoto is provided
     if (cardData.companyPhoto && cardData.companyPhoto.startsWith('data:image/')) {
