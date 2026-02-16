@@ -58,6 +58,16 @@ const schema = new mongoose.Schema(
 schema.index({ userId: 1, createdAt: -1 }); // Composite index for user's cards sorted by date
 schema.index({ createdAt: -1 }); // Index for sorting by creation date
 schema.index({ companyName: 'text', name: 'text' }); // Text search index
-schema.index({ userId: 1, isDefault: 1 }, { unique: true, partialFilterExpression: { isDefault: true } }); // Unique default card per user
+
+// CRITICAL: Unique constraint to prevent multiple default cards per user
+// This enforces database-level atomicity for default card creation
+schema.index(
+  { userId: 1, isDefault: 1 }, 
+  { 
+    unique: true, 
+    partialFilterExpression: { isDefault: true },
+    name: 'unique_default_card_per_user'
+  }
+);
 
 export default mongoose.model("Card", schema);
