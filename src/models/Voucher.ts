@@ -5,7 +5,6 @@ const VoucherSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
-      required: true,
       index: true,
     },
     originalOwner: {
@@ -26,9 +25,26 @@ const VoucherSchema = new Schema(
     voucherImages: { type: [String], default: [] },
     productVideoLink: { type: String },
     redeemedAt: { type: Date },
+
+    // Admin-created voucher template fields
+    companyLogo: { type: String }, // URL to logo
+    companyName: { type: String, default: "Instantlly" },
+    phoneNumber: { type: String },
+    address: { type: String },
+    amount: { type: Number }, // Display amount
+    discountPercentage: { type: Number, default: 0 }, // e.g., 40 for 40% off
+    validity: { type: String }, // e.g., "Valid till August 30th, 2026"
+    voucherImage: { type: String }, // Main voucher detail image from admin
+    description: { type: String },
+
+    // Publishing status
+    isPublished: { type: Boolean, default: false },
+    publishedAt: { type: Date },
+    createdByAdmin: { type: Schema.Types.ObjectId, ref: "Admin" },
+
     source: {
       type: String,
-      enum: ["purchase", "transfer"],
+      enum: ["purchase", "transfer", "admin"],
       default: "purchase",
     },
     transferredFrom: {

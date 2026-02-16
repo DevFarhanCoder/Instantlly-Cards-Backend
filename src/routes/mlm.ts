@@ -246,17 +246,35 @@ router.get("/discount/summary", requireAuth, async (req: AuthReq, res) => {
 
 router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { status, limit = 20, skip = 0 } = req.query;
+    const { status, limit = 20, skip = 0, source } = req.query;
+
+    // If requesting admin vouchers specifically
+    if (source === "admin") {
+      const query: any = {
+        source: "admin",
+        isPublished: true,
+      };
+
+      const adminVouchers = await Voucher.find(query)
+        .sort({ publishedAt: -1 })
+        .skip(Number(skip))
+        .limit(Number(limit))
+        .lean();
+
+      return res.json({ success: true, vouchers: adminVouchers });
+    }
+
+    // Regular user vouchers
     const query: any = { userId: req.userId };
     if (status) query.redeemedStatus = status;
 
-    const vouchers = await Voucher.find(query)
+    const userVouchers = await Voucher.find(query)
       .sort({ issueDate: -1 })
       .skip(Number(skip))
       .limit(Number(limit))
       .lean();
 
-    res.json({ success: true, vouchers });
+    res.json({ success: true, vouchers: userVouchers });
   } catch (error) {
     console.error("MLM VOUCHERS ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -405,6 +423,8 @@ router.get("/vouchers/history", requireAuth, async (req: AuthReq, res) => {
       .populate("userId", "name phone")
       .populate("originalOwner", "name phone")
       .populate("transferredFrom", "name phone")
+      .populate("transferHistory.from", "name phone")
+      .populate("transferHistory.to", "name phone")
       .sort({ createdAt: -1 })
       .skip(Number(skip))
       .limit(Number(limit))
@@ -807,6 +827,132 @@ router.get("/admin/credits/pending-approval", async (req, res) => {
     });
   } catch (error) {
     console.error("MLM ADMIN PENDING APPROVAL ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ✅ NEW: Admin MLM Transfer - Transfer credits & vouchers to anyone by phone number
+// Admin becomes root (level 0), transferred users become level 1
+router.post("/admin/mlm-transfer", async (req, res) => {
+  try {
+    const adminKey = req.headers["x-admin-key"] as string;
+    if (
+      adminKey !== process.env.ADMIN_SECRET_KEY &&
+      adminKey !== "your-secure-admin-key-here"
+    ) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const { phone, amount, adminUserId } = req.body;
+
+    // Validation
+    if (!phone || !amount || !adminUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number, amount, and adminUserId are required",
+      });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount must be greater than 0",
+      });
+    }
+
+    // Find recipient by phone number
+    const recipient = await User.findOne({ phone });
+    if (!recipient) {
+      return res.status(404).json({
+        success: false,
+        message: `No user found with phone number: ${phone}`,
+      });
+    }
+
+    // Get or create Admin user
+    let adminUser = await User.findById(adminUserId);
+    if (!adminUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin user not found",
+      });
+    }
+
+    // Ensure Admin is at root level (level 0)
+    if (adminUser.level !== 0) {
+      adminUser.level = 0;
+      adminUser.parentId = null as any;
+      await adminUser.save();
+    }
+
+    // Check if recipient already has a parent
+    if (recipient.parentId && recipient.parentId.toString() !== adminUserId) {
+      return res.status(400).json({
+        success: false,
+        message: `${recipient.name} is already linked to another parent in the network`,
+      });
+    }
+
+    // Link recipient to Admin (if not already linked)
+    let isNewLink = false;
+    if (!recipient.parentId) {
+      recipient.parentId = adminUserId as any;
+      recipient.level = 1; // One level below Admin
+      await recipient.save();
+
+      // Update Admin's direct count
+      await User.findByIdAndUpdate(adminUserId, { $inc: { directCount: 1 } });
+
+      // Update downline counts for all ancestors (Admin in this case)
+      await updateAncestorDownlineCounts(recipient._id.toString());
+      isNewLink = true;
+    }
+
+    // Add credits to recipient's MLM wallet
+    await addCredits(recipient._id.toString(), amount);
+
+    // Generate vouchers for the recipient
+    // Create a temporary credit record for voucher generation
+    const adminCredit = await MlmCredit.create({
+      senderId: adminUserId,
+      receiverId: recipient._id,
+      status: "active",
+      paymentStatus: "approved",
+      quantity: amount,
+      activatedAt: new Date(),
+      transferExpiresAt: new Date(
+        Date.now() + TRANSFER_EXPIRY_HOURS * 60 * 60 * 1000,
+      ),
+    });
+
+    const vouchers = await generateVouchers(
+      recipient._id.toString(),
+      adminCredit._id.toString(),
+      amount,
+    );
+
+    res.json({
+      success: true,
+      message: `Successfully transferred ${amount} credits and generated ${vouchers.length} vouchers to ${recipient.name}`,
+      transfer: {
+        admin: {
+          id: adminUser._id,
+          name: adminUser.name,
+          level: adminUser.level,
+        },
+        recipient: {
+          id: recipient._id,
+          name: recipient.name,
+          phone: recipient.phone,
+          level: recipient.level,
+          isNewLink,
+        },
+        creditsTransferred: amount,
+        vouchersGenerated: vouchers.length,
+      },
+    });
+  } catch (error) {
+    console.error("MLM ADMIN TRANSFER ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
