@@ -1,4 +1,4 @@
-// src/routes/admin.ts
+﻿// src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { GridFSBucket } from "mongodb";
@@ -34,7 +34,7 @@ const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   if (adminKey && validKeys.includes(adminKey as string)) {
     next();
   } else {
-    console.log(`❌ Admin auth failed. Received key: ${adminKey}, Expected one of: ${validKeys.join(', ')}`);
+    console.log(`âŒ Admin auth failed. Received key: ${adminKey}, Expected one of: ${validKeys.join(', ')}`);
     res.status(401).json({ error: 'Unauthorized', message: 'Invalid admin key' });
   }
 };
@@ -100,7 +100,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     const sortOrder = req.query.sortOrder as string || '';
     const skip = (page - 1) * limit;
 
-    console.log('📊 Admin /users request:', { page, limit, search, sortBy, sortOrder });
+    console.log('ðŸ“Š Admin /users request:', { page, limit, search, sortBy, sortOrder });
 
     // Build search query
     const searchQuery: any = {};
@@ -115,7 +115,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
     let sortQuery: any = { createdAt: -1 }; // Default sort by creation date
     if (sortBy === 'credits' && (sortOrder === 'asc' || sortOrder === 'desc')) {
       sortQuery = { credits: sortOrder === 'asc' ? 1 : -1 };
-      console.log('💳 Sorting by credits:', sortQuery);
+      console.log('ðŸ’³ Sorting by credits:', sortQuery);
     }
 
     const [users, total] = await Promise.all([
@@ -127,7 +127,7 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
       User.countDocuments(searchQuery)
     ]);
 
-    console.log(`✅ Found ${users.length} users (Total: ${total}). First user credits: ${users[0]?.credits}, Last user credits: ${users[users.length - 1]?.credits}`);
+    console.log(`âœ… Found ${users.length} users (Total: ${total}). First user credits: ${users[0]?.credits}, Last user credits: ${users[users.length - 1]?.credits}`);
 
 
     // Get additional stats for each user
@@ -421,13 +421,13 @@ router.delete("/users/:userId", adminAuth, async (req: Request, res: Response) =
  */
 router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Response) => {
   try {
-    console.log(`📋 Admin ${req.adminUsername} fetching pending ads`);
+    console.log(`ðŸ“‹ Admin ${req.adminUsername} fetching pending ads`);
 
     const pendingAds = await Ad.find({ status: 'pending' })
       .sort({ createdAt: -1 }) // Most recent first
       .select('-__v');
 
-    console.log(`✅ Found ${pendingAds.length} pending ads`);
+    console.log(`âœ… Found ${pendingAds.length} pending ads`);
 
     const adsWithDetails = pendingAds.map((ad) => {
       // Debug: Log raw ad document
@@ -481,7 +481,7 @@ router.get("/ads/pending", requireAdminAuth, async (req: AdminAuthReq, res: Resp
       ads: adsWithDetails,
     });
   } catch (error) {
-    console.error('❌ Error fetching pending ads:', error);
+    console.error('âŒ Error fetching pending ads:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch pending ads',
@@ -498,7 +498,7 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
     const { id } = req.params;
     const { priority } = req.body; // Optional: admin can set priority during approval
 
-    console.log(`✅ Admin ${req.adminUsername} approving ad ${id}`);
+    console.log(`âœ… Admin ${req.adminUsername} approving ad ${id}`);
 
     const ad = await Ad.findById(id);
 
@@ -516,58 +516,24 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
       });
     }
 
-    // Find the user who created the ad (by phone number in uploadedBy field)
-    let creditsDeducted = false;
-    let paymentRequired = 0;
+    // Credits are already deducted at upload time (in channelPartnerAds.ts)
+    // No need to deduct again here - just log the approval
     let userCredits = 0;
+    let paymentRequired = 0;
 
     if (ad.uploadedBy && ad.uploadedBy !== 'admin') {
       const creator = await User.findOne({ phone: ad.uploadedBy });
       
       if (creator) {
-        const currentCredits = (creator as any).credits || 0;
-        const deductionAmount = 1200;
-
-        // Check if user has enough credits
-        if (currentCredits >= deductionAmount) {
-          // Deduct credits
-          creator.set({ credits: currentCredits - deductionAmount });
-          await creator.save();
-
-          // Create transaction record
-          await Transaction.create({
-            type: 'ad_deduction',
-            fromUser: creator._id,
-            amount: deductionAmount,
-            description: `Credits deducted for ad: ${ad.title}`,
-            balanceBefore: currentCredits,
-            balanceAfter: currentCredits - deductionAmount,
-            relatedAd: ad._id,
-            status: 'completed'
-          });
-
-          creditsDeducted = true;
-          userCredits = currentCredits - deductionAmount;
-          
-          // Calculate 15% payment required (15% of 1200 = 180)
-          paymentRequired = Math.round(deductionAmount * 0.15);
-
-          console.log(`💰 Deducted ${deductionAmount} credits from ${creator.name}. New balance: ${userCredits}. Payment required: ₹${paymentRequired}`);
-        } else {
-          console.log(`⚠️ User ${creator.name} has insufficient credits (${currentCredits}). Ad approval blocked.`);
-          return res.status(400).json({
-            success: false,
-            message: `Insufficient credits. User has ${currentCredits} credits but needs ${deductionAmount} credits to approve this ad.`,
-            userCredits: currentCredits,
-            required: deductionAmount
-          });
-        }
+        userCredits = (creator as any).credits || 0;
+        paymentRequired = Math.round(1200 * 0.15); // 15% of 1200 = 180
+        console.log(`âœ… Approving ad for user ${creator.name}. Current balance: ${userCredits}. Payment required: â‚¹${paymentRequired}`);
       } else {
-        console.log(`⚠️ Could not find user with phone ${ad.uploadedBy} for credits deduction`);
+        console.log(`âš ï¸ Could not find user with phone ${ad.uploadedBy}`);
       }
     }
 
-    // 📦 Move media files from pending-ads to approved-ads in S3
+    // ðŸ“¦ Move media files from pending-ads to approved-ads in S3
     const uploaderPhone = ad.uploadedBy || 'unknown';
     const mediaFiles: Array<{ filename: string; type: 'bottom_image' | 'fullscreen_image' | 'bottom_video' | 'fullscreen_video' }> = [];
 
@@ -594,7 +560,7 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
 
     // Move files from pending to approved in S3
     if (mediaFiles.length > 0) {
-      console.log(`📦 Moving ${mediaFiles.length} media files from pending to approved in S3...`);
+      console.log(`ðŸ“¦ Moving ${mediaFiles.length} media files from pending to approved in S3...`);
       
       try {
         const approvedFiles = await movePendingToApproved(id, uploaderPhone, mediaFiles);
@@ -604,26 +570,26 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
           switch (file.type) {
             case 'bottom_image':
               (ad as any).bottomImageS3 = { url: file.url, key: file.key };
-              console.log(`✅ Bottom image moved: ${file.url}`);
+              console.log(`âœ… Bottom image moved: ${file.url}`);
               break;
             case 'fullscreen_image':
               (ad as any).fullscreenImageS3 = { url: file.url, key: file.key };
-              console.log(`✅ Fullscreen image moved: ${file.url}`);
+              console.log(`âœ… Fullscreen image moved: ${file.url}`);
               break;
             case 'bottom_video':
               (ad as any).bottomVideoS3 = { url: file.url, key: file.key };
-              console.log(`✅ Bottom video moved: ${file.url}`);
+              console.log(`âœ… Bottom video moved: ${file.url}`);
               break;
             case 'fullscreen_video':
               (ad as any).fullscreenVideoS3 = { url: file.url, key: file.key };
-              console.log(`✅ Fullscreen video moved: ${file.url}`);
+              console.log(`âœ… Fullscreen video moved: ${file.url}`);
               break;
           }
         }
         
-        console.log(`✅ Successfully moved all media to approved-ads/${id}/`);
+        console.log(`âœ… Successfully moved all media to approved-ads/${id}/`);
       } catch (error) {
-        console.error('❌ Failed to move S3 media files:', error);
+        console.error('âŒ Failed to move S3 media files:', error);
         // Continue with approval even if S3 move fails (files can be moved manually)
       }
     }
@@ -639,7 +605,7 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
 
     await ad.save();
 
-    console.log(`✅ Ad ${id} approved by ${req.adminUsername}`);
+    console.log(`âœ… Ad ${id} approved by ${req.adminUsername}`);
 
     res.json({
       success: true,
@@ -653,19 +619,20 @@ router.post("/ads/:id/approve", requireAdminAuth, async (req: AdminAuthReq, res:
         priority: ad.priority,
       },
       credits: {
-        deducted: creditsDeducted,
-        amount: creditsDeducted ? 1200 : 0,
-        remainingBalance: creditsDeducted ? userCredits : null,
-        paymentRequired: creditsDeducted ? paymentRequired : 0,
-        paymentDetails: creditsDeducted ? {
+        deducted: true,
+        amount: 1200,
+        note: 'Credits were deducted at upload time',
+        remainingBalance: userCredits,
+        paymentRequired: paymentRequired,
+        paymentDetails: {
           description: `15% payment for ad approval`,
           amount: paymentRequired,
           currency: 'INR'
-        } : null
+        }
       }
     });
   } catch (error) {
-    console.error('❌ Error approving ad:', error);
+    console.error('âŒ Error approving ad:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to approve advertisement',
@@ -682,7 +649,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
     const { id } = req.params;
     const { reason } = req.body;
 
-    console.log(`❌ Admin ${req.adminUsername} rejecting ad ${id}`);
+    console.log(`âŒ Admin ${req.adminUsername} rejecting ad ${id}`);
 
     if (!reason || reason.trim() === '') {
       return res.status(400).json({
@@ -718,9 +685,9 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         if (ad.bottomImageGridFS) {
           try {
             await imageBucket.delete(ad.bottomImageGridFS);
-            console.log(`🗑️ Deleted bottom image: ${ad.bottomImageGridFS}`);
+            console.log(`ðŸ—‘ï¸ Deleted bottom image: ${ad.bottomImageGridFS}`);
           } catch (err) {
-            console.log(`⚠️ Could not delete bottom image: ${err}`);
+            console.log(`âš ï¸ Could not delete bottom image: ${err}`);
           }
         }
         
@@ -728,9 +695,9 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         if (ad.fullscreenImageGridFS) {
           try {
             await imageBucket.delete(ad.fullscreenImageGridFS);
-            console.log(`🗑️ Deleted fullscreen image: ${ad.fullscreenImageGridFS}`);
+            console.log(`ðŸ—‘ï¸ Deleted fullscreen image: ${ad.fullscreenImageGridFS}`);
           } catch (err) {
-            console.log(`⚠️ Could not delete fullscreen image: ${err}`);
+            console.log(`âš ï¸ Could not delete fullscreen image: ${err}`);
           }
         }
         
@@ -738,9 +705,9 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         if ((ad as any).bottomVideoGridFS) {
           try {
             await videoBucket.delete((ad as any).bottomVideoGridFS);
-            console.log(`🗑️ Deleted bottom video: ${(ad as any).bottomVideoGridFS}`);
+            console.log(`ðŸ—‘ï¸ Deleted bottom video: ${(ad as any).bottomVideoGridFS}`);
           } catch (err) {
-            console.log(`⚠️ Could not delete bottom video: ${err}`);
+            console.log(`âš ï¸ Could not delete bottom video: ${err}`);
           }
         }
         
@@ -748,16 +715,17 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
         if ((ad as any).fullscreenVideoGridFS) {
           try {
             await videoBucket.delete((ad as any).fullscreenVideoGridFS);
-            console.log(`🗑️ Deleted fullscreen video: ${(ad as any).fullscreenVideoGridFS}`);
+            console.log(`ðŸ—‘ï¸ Deleted fullscreen video: ${(ad as any).fullscreenVideoGridFS}`);
           } catch (err) {
-            console.log(`⚠️ Could not delete fullscreen video: ${err}`);
+            console.log(`âš ï¸ Could not delete fullscreen video: ${err}`);
           }
         }
       }
     } catch (deleteError) {
-      console.error('❌ Error deleting files:', deleteError);
+      console.error('âŒ Error deleting files:', deleteError);
       // Continue with rejection even if deletion fails
     }
+
 
     // Update ad status to rejected
     ad.status = 'rejected';
@@ -767,7 +735,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
 
     await ad.save();
 
-    console.log(`❌ Ad ${id} rejected by ${req.adminUsername}: ${reason}`);
+    console.log(`Ad ${id} rejected by ${req.adminUsername}: ${reason}`);
 
     res.json({
       success: true,
@@ -782,7 +750,7 @@ router.post("/ads/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: 
       },
     });
   } catch (error) {
-    console.error('❌ Error rejecting ad:', error);
+    console.error('âŒ Error rejecting ad:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to reject advertisement',
@@ -806,7 +774,7 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
       filter.uploadedBy = uploadedBy;
     }
 
-    console.log(`📋 Admin ${req.adminUsername} fetching ads with filter:`, filter);
+    console.log(`ðŸ“‹ Admin ${req.adminUsername} fetching ads with filter:`, filter);
 
     const ads = await Ad.find(filter)
       .sort({ createdAt: -1 })
@@ -844,7 +812,7 @@ router.get("/ads/all", requireAdminAuth, async (req: AdminAuthReq, res: Response
       ads: adsWithDetails,
     });
   } catch (error) {
-    console.error('❌ Error fetching all ads:', error);
+    console.error('âŒ Error fetching all ads:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch advertisements',
@@ -875,7 +843,7 @@ router.get("/users-stats", requireAdminAuth, async (req: AdminAuthReq, res: Resp
       totalCredits
     });
   } catch (error) {
-    console.error('❌ Error fetching user stats:', error);
+    console.error('âŒ Error fetching user stats:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch user statistics'
@@ -914,7 +882,7 @@ router.get("/all-transactions", requireAdminAuth, async (req: AdminAuthReq, res:
       skip: Number(skip)
     });
   } catch (error) {
-    console.error('❌ Error fetching all transactions:', error);
+    console.error('âŒ Error fetching all transactions:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch transactions'
@@ -949,7 +917,7 @@ router.get("/user/:userId", requireAdminAuth, async (req: AdminAuthReq, res: Res
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching user:', error);
+    console.error('âŒ Error fetching user:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch user details'
@@ -1004,7 +972,7 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
       status: 'completed'
     });
 
-    console.log(`✅ Admin transferred ${amount} credits to ${recipient.name}`);
+    console.log(`âœ… Admin transferred ${amount} credits to ${recipient.name}`);
 
     res.json({
       success: true,
@@ -1020,7 +988,7 @@ router.post("/transfer-credits", requireAdminAuth, async (req: AdminAuthReq, res
       }
     });
   } catch (error) {
-    console.error('❌ Admin transfer error:', error);
+    console.error('âŒ Admin transfer error:', error);
     res.status(500).json({ 
       success: false,
       message: "Server error during transfer" 
@@ -1034,7 +1002,7 @@ router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res:
     const { userId } = req.params;
     const { credits, reason } = req.body;
 
-    console.log('💰 Update Credits Request:', { userId, credits, reason });
+    console.log('ðŸ’° Update Credits Request:', { userId, credits, reason });
 
     // Validate inputs
     if (credits === undefined || credits === null || credits < 0) {
@@ -1089,13 +1057,13 @@ router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res:
           creditDifference,
           timestamp: new Date()
         });
-        console.log(`📡 Emitted credits_updated event for user ${userId}`);
+        console.log(`ðŸ“¡ Emitted credits_updated event for user ${userId}`);
       }
     } catch (socketError) {
-      console.log('⚠️ Socket.IO not available for credit update notification');
+      console.log('âš ï¸ Socket.IO not available for credit update notification');
     }
     
-    console.log(`✅ Credits updated for ${user.name}:`, {
+    console.log(`âœ… Credits updated for ${user.name}:`, {
       old: oldCredits,
       new: newCredits,
       difference: creditDifference
@@ -1114,7 +1082,7 @@ router.put("/users/:userId/update-credits", adminAuth, async (req: Request, res:
       }
     });
   } catch (error) {
-    console.error('❌ Error updating credits:', error);
+    console.error('âŒ Error updating credits:', error);
     res.status(500).json({ 
       success: false,
       message: 'Failed to update credits'
@@ -1169,7 +1137,7 @@ router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) 
       status: 'completed'
     });
 
-    console.log(`✅ Admin transferred ${amount} credits to ${recipient.name}`);
+    console.log(`âœ… Admin transferred ${amount} credits to ${recipient.name}`);
 
     res.json({
       success: true,
@@ -1177,7 +1145,7 @@ router.post("/credits/transfer", adminAuth, async (req: Request, res: Response) 
       newBalance: recipientCredits + amount
     });
   } catch (error) {
-    console.error('❌ Admin credit transfer error:', error);
+    console.error('âŒ Admin credit transfer error:', error);
     res.status(500).json({ 
       success: false,
       message: "Server error during transfer" 
@@ -1191,7 +1159,7 @@ router.put("/applications/:id/edit", adminAuth, async (req: Request, res: Respon
     const { id } = req.params;
     const { name, phone } = req.body;
 
-    console.log(`📝 Editing application ${id}:`, { name, phone });
+    console.log(`ðŸ“ Editing application ${id}:`, { name, phone });
 
     // Find and update the application (assuming you have an Application model)
     // For now, update the User model if the application is approved
@@ -1206,7 +1174,7 @@ router.put("/applications/:id/edit", adminAuth, async (req: Request, res: Respon
     if (phone) user.phone = phone;
     await user.save();
 
-    console.log(`✅ Updated user: ${user.name} (${user.phone})`);
+    console.log(`âœ… Updated user: ${user.name} (${user.phone})`);
 
     res.json({
       success: true,
@@ -1218,7 +1186,7 @@ router.put("/applications/:id/edit", adminAuth, async (req: Request, res: Respon
       }
     });
   } catch (error) {
-    console.error('❌ Edit application error:', error);
+    console.error('âŒ Edit application error:', error);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -1229,7 +1197,7 @@ router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Re
     const { id } = req.params;
     const { newPositionId } = req.body;
 
-    console.log(`🔄 Transferring application ${id} to position:`, newPositionId);
+    console.log(`ðŸ”„ Transferring application ${id} to position:`, newPositionId);
 
     // Update user's position (you may need to adjust based on your data model)
     const user = await User.findById(id);
@@ -1242,7 +1210,7 @@ router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Re
     (user as any).positionId = newPositionId;
     await user.save();
 
-    console.log(`✅ Transferred ${user.name} to ${newPositionId}`);
+    console.log(`âœ… Transferred ${user.name} to ${newPositionId}`);
 
     res.json({
       success: true,
@@ -1254,7 +1222,7 @@ router.put("/applications/:id/transfer", adminAuth, async (req: Request, res: Re
       }
     });
   } catch (error) {
-    console.error('❌ Transfer position error:', error);
+    console.error('âŒ Transfer position error:', error);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -1396,7 +1364,7 @@ router.get("/referral-tracking", adminAuth, async (req: Request, res: Response) 
       }
     });
   } catch (error) {
-    console.error('❌ Referral tracking error:', error);
+    console.error('âŒ Referral tracking error:', error);
     res.status(500).json({ 
       success: false,
       message: "Server error" 
@@ -1409,7 +1377,7 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
   try {
     const { userId } = req.params;
     
-    console.log(`📊 Fetching referral chain for user: ${userId}`);
+    console.log(`ðŸ“Š Fetching referral chain for user: ${userId}`);
 
     // Get the user's details
     const user = await User.findById(userId).select('name phone referralCode createdAt').lean() as any;
@@ -1463,7 +1431,7 @@ router.get("/referral-chain/:userId", adminAuth, async (req: Request, res: Respo
     });
 
   } catch (error: any) {
-    console.error("❌ Error fetching referral chain:", error);
+    console.error("âŒ Error fetching referral chain:", error);
     res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch referral chain"
@@ -1529,7 +1497,7 @@ router.post('/designers', async (req: Request, res: Response) => {
     const designer = new Designer({ username, password });
     await designer.save();
 
-    console.log(`✅ Designer created: ${username}`);
+    console.log(`âœ… Designer created: ${username}`);
 
     res.status(201).json({
       success: true,
