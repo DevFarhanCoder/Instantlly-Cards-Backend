@@ -65,6 +65,8 @@ const defaultAllowed = [
   "https://instantlly-admin.vercel.app",
   "https://instantllychannelpatneradmin.vercel.app", // Channel Partner Admin
   "https://instantllychannelpatner.vercel.app", // Channel Partner Main
+  "https://www.instantllycards.com", // InstantllyCards main website
+  "https://instantllycards.com", // InstantllyCards main website (no www)
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5500",
