@@ -92,7 +92,7 @@ app.use(
         return callback(null, true);
 
       // Otherwise deny
-      return callback(new Error("Not allowed by CORS"));
+      return callback(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
