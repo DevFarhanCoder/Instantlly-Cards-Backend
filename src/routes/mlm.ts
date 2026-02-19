@@ -25,6 +25,150 @@ const router = Router();
 
 const CREDIT_EXPIRY_MINUTES = 60;
 const TRANSFER_EXPIRY_HOURS = 48;
+const VOUCHER_PURCHASE_TIMEOUT_MINUTES = 60; // 1 hour to complete purchase
+const CONNECTION_TIMEOUT_HOURS = 48; // 2 days to connect 5 people
+const MIN_VOUCHERS_TO_UNLOCK = 5; // Must share 5 vouchers to unlock credit transfer
+
+// ============================================
+// DISTRIBUTION CREDITS
+// ============================================
+
+// Get distribution credits for MLM user (to be transferred to downline)
+router.get("/distribution-credits", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const user = await User.findById(req.userId).select("parentId");
+
+    // Only MLM users (those with introducers) get distribution credits
+    if (!user?.parentId) {
+      return res.json({ success: true, credits: [] });
+    }
+
+    // Get user's direct children (first level downline)
+    const directChildren = await User.find({ parentId: req.userId })
+      .select("name phone createdAt")
+      .lean();
+
+    // Calculate distribution credits for each child
+    const distributionCredits = await Promise.all(
+      directChildren.map(async (child: any, index: number) => {
+        // Count vouchers shared with this child
+        const vouchersShared = await Voucher.countDocuments({
+          userId: child._id,
+          source: "transfer",
+          transferredFrom: req.userId,
+        });
+
+        // Check if credits are locked (need 5 vouchers shared)
+        const isLocked = vouchersShared < MIN_VOUCHERS_TO_UNLOCK;
+
+        // Calculate time left to connect (2 days from creation)
+        const createdAt = new Date(child.createdAt);
+        const timeoutAt = new Date(
+          createdAt.getTime() + CONNECTION_TIMEOUT_HOURS * 60 * 60 * 1000,
+        );
+        const timeLeft = Math.max(0, timeoutAt.getTime() - Date.now());
+        const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
+        const minutesLeft = Math.floor(
+          (timeLeft % (1000 * 60 * 60)) / (1000 * 60),
+        );
+
+        return {
+          level: 1, // Direct children are level 1
+          creditsToTransfer: 293, // Example credit amount from the table
+          recipientName: child.name,
+          recipientPhone: child.phone,
+          recipientId: child._id.toString(),
+          vouchersShared,
+          isLocked,
+          timeLeft: `${hoursLeft}h ${minutesLeft}m`,
+        };
+      }),
+    );
+
+    res.json({ success: true, credits: distributionCredits });
+  } catch (error) {
+    console.error("MLM DISTRIBUTION CREDITS ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================
+// VOUCHER PURCHASE WITH TIMER
+// ============================================
+
+router.post("/vouchers/purchase", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { quantity, totalAmount, paymentMethod } = req.body;
+
+    // Validate quantity (must be multiple of 5)
+    if (!quantity || quantity < 5 || quantity % 5 !== 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Quantity must be at least 5 and in multiples of 5",
+      });
+    }
+
+    // Calculate expected amount (₹3600 for 5 vouchers with 40% discount)
+    const VOUCHER_SET_PRICE = 3600; // Discounted price for 5 vouchers
+    const sets = quantity / 5;
+    const expectedAmount = sets * VOUCHER_SET_PRICE;
+
+    if (totalAmount !== expectedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid amount. Expected ₹${expectedAmount}`,
+      });
+    }
+
+    // TODO: Integrate actual payment gateway (Razorpay, etc.)
+    // For now, we'll simulate successful payment
+
+    // Generate vouchers for user
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Create vouchers
+    const vouchers = [];
+    for (let i = 0; i < quantity; i++) {
+      const voucher = await Voucher.create({
+        userId: req.userId,
+        voucherNumber: `INS-${Date.now()}-${i + 1}`,
+        MRP: 1200, // ₹1200 per voucher
+        amount: 1200,
+        issueDate: new Date(),
+        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
+        redeemedStatus: "unredeemed",
+        source: "purchase",
+      });
+      vouchers.push(voucher);
+    }
+
+    // Set connection timeout (2 days to connect 5 people)
+    const connectionExpiresAt = new Date(
+      Date.now() + CONNECTION_TIMEOUT_HOURS * 60 * 60 * 1000,
+    );
+
+    res.json({
+      success: true,
+      message: `Successfully purchased ${quantity} vouchers`,
+      vouchers: vouchers.map((v) => ({
+        id: v._id.toString(),
+        voucherNumber: v.voucherNumber,
+        amount: v.amount,
+      })),
+      connectionExpiresAt,
+      connectionTimeoutHours: CONNECTION_TIMEOUT_HOURS,
+    });
+  } catch (error) {
+    console.error("MLM VOUCHER PURCHASE ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 
 // ============================================
 // WALLET & CREDITS
@@ -104,6 +248,23 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
         .json({ success: false, message: "Receiver not found" });
     }
 
+    // NEW: Check if sender has shared 5 vouchers with receiver
+    const vouchersShared = await Voucher.countDocuments({
+      userId: receiverId,
+      source: "transfer",
+      transferredFrom: req.userId,
+    });
+
+    if (vouchersShared < MIN_VOUCHERS_TO_UNLOCK) {
+      return res.status(400).json({
+        success: false,
+        message: `Credit transfer locked. You must share ${MIN_VOUCHERS_TO_UNLOCK} vouchers first (currently shared: ${vouchersShared})`,
+        vouchersShared,
+        vouchersRequired: MIN_VOUCHERS_TO_UNLOCK,
+        isLocked: true,
+      });
+    }
+
     // Link receiver to sender if not already linked
     if (receiver.parentId && receiver.parentId.toString() !== req.userId) {
       return res.status(400).json({
@@ -159,6 +320,8 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
       success: true,
       credits: createdCredits,
       message: "Credits transferred. Waiting for receiver to confirm payment.",
+      vouchersShared,
+      isUnlocked: true,
     });
   } catch (error) {
     console.error("MLM CREDIT TRANSFER ERROR", error);
