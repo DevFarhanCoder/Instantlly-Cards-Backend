@@ -148,77 +148,61 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
-      // Use main database User model for credits
+      // CREDIT CHECK - 1200 credits required
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
-
-      console.log('?? Looking for user with phone:', uploaderPhone);
-
-      // Connect to Channel Partner database (separate database named 'channelpartner')
-      // const channelPartnerDB = mongoose.connection.useDb('channelpartner');
-      // const ChannelPartnerUser = channelPartnerDB.model('User', new mongoose.Schema({
-      //   phone: String,
-      //   credits: Number,
-      //   creditsHistory: [{
-      //     type: String,
-      //     amount: Number,
-      //     description: String,
-      //     date: Date
-      //   }]
-      // }));
-
-      // let user = await ChannelPartnerUser.findOne({ phone: uploaderPhone });
-
-      // // If not found, try without country code prefix
-      // if (!user && uploaderPhone.startsWith('+91')) {
-      //   const phoneWithoutPrefix = uploaderPhone.substring(3);
-      //   console.log('?? Trying without +91 prefix:', phoneWithoutPrefix);
-      //   user = await ChannelPartnerUser.findOne({ phone: phoneWithoutPrefix });
-      // }
-
-      // // If still not found, try WITH country code prefix
-      // if (!user && !uploaderPhone.startsWith('+')) {
-      //   const phoneWithPrefix = '+91' + uploaderPhone;
-      //   console.log('?? Trying with +91 prefix:', phoneWithPrefix);
-      //   user = await ChannelPartnerUser.findOne({ phone: phoneWithPrefix });
-      // }
-
-      // console.log('?? Found user:', user ? `${user.phone} with ${user.credits} credits` : 'NOT FOUND');
-
-      // if (!user) {
-      //   // Try to find any user to see what's in the database
-      //   const allUsers = await ChannelPartnerUser.find({}).limit(5);
-      //   console.log('?? Sample users in database:', allUsers.map(u => ({ phone: u.phone, credits: u.credits })));
-      //   return res.status(404).json({
-      //     message: 'User not found. Please ensure you are logged in.',
-      //     searchedPhone: uploaderPhone,
-      //     hint: 'Check phone number format (+91XXXXXXXXXX or XXXXXXXXXX)'
-      //   });
-      // }
-
-      // const currentCredits = user.credits || 0;
-
-      // if (currentCredits < 1020) {
-      //   return res.status(400).json({
-      //     message: 'Insufficient credits. You need 1020 credits to create an ad.',
-      //     currentCredits: currentCredits,
-      //     required: 1020
-      //   });
-      // }
-
-      // // Deduct 1020 credits
-      // user.credits = currentCredits - 1020;
-      // user.creditsHistory = user.creditsHistory || [];
-      // (user.creditsHistory as any).push({
-      //   type: 'deduction',
-      //   amount: -1020,
-      //   description: `Ad creation: ${title}`,
-      //   date: new Date()
-      // });
-      // await user.save();
-
-      // console.log(`? Deducted 1020 credits from ${uploaderPhone}. Remaining: ${user.credits}`);
-
+      const userId = req.body.userId;
+      console.log('Looking for user - phone:', uploaderPhone, 'userId:', userId);
+      let user = null;
+      if (userId && userId.length > 0) {
+        try {
+          user = await User.findById(userId);
+          console.log('Found by userId:', user ? user.name : 'NOT FOUND');
+        } catch (e) {
+          console.log('Invalid userId format');
+        }
+      }
+      if (!user) {
+        const cleanPhone = uploaderPhone.replace(/[^0-9]/g, '');
+        user = await User.findOne({ phone: uploaderPhone });
+        if (!user && uploaderPhone.startsWith('+91')) {
+          user = await User.findOne({ phone: uploaderPhone.substring(3) });
+        }
+        if (!user && !uploaderPhone.startsWith('+')) {
+          user = await User.findOne({ phone: '+91' + uploaderPhone });
+        }
+        if (!user && cleanPhone.length >= 10) {
+          const last10Digits = cleanPhone.slice(-10);
+          user = await User.findOne({ phone: { $regex: last10Digits + '$' } });
+        }
+      }
+      console.log('Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
+      if (!user) {
+        return res.status(404).json({
+          message: 'User not found. Please ensure you are logged in.',
+          searchedPhone: uploaderPhone,
+        });
+      }
+      const currentCredits = (user as any).credits || 0;
+      if (currentCredits < 1200) {
+        return res.status(400).json({
+          message: 'Insufficient credits. You need 1200 credits to create an ad.',
+          currentCredits: currentCredits,
+          required: 1200
+        });
+      }
+      (user as any).credits = currentCredits - 1200;
+      await user.save();
+      await Transaction.create({
+        type: 'ad_deduction',
+        fromUser: user._id,
+        toUser: null,
+        amount: -1200,
+        description: `Image Ad creation: ${title}`,
+        balanceBefore: currentCredits,
+        balanceAfter: currentCredits - 1200,
+        status: 'completed'
+      });
+      console.log(`Deducted 1200 credits from ${user.name} (${uploaderPhone}). Balance: ${currentCredits} to ${(user as any).credits}`);
       // ---- IMAGES â†’ S3 ----
       const tempAdId = Date.now().toString();
 
@@ -302,20 +286,20 @@ router.post(
 
       await ad.save();
 
-      console.log(`? Ad created with pending status (1020 credits deducted):`, {
+      console.log(`? Ad created with pending status (1200 credits deducted):`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
         status: ad.status,
-        creditsDeducted: 1020
+        creditsDeducted: 1200
       });
 
       res.status(201).json({
-        message: 'Ad submitted successfully! 1020 credits deducted. Admin will review your ad. You will need to pay ?180 after approval.',
-        creditsDeducted: 1020,
-        // remainingCredits: user.credits,
+        message: 'Ad submitted successfully! 1200 credits deducted. Admin will review your ad. You will need to pay ?180 after approval.',
+        creditsDeducted: 1200,
+        remainingCredits: (user as any).credits,
         cashPaymentRequired: 180,
-        totalCost: '1020 credits + ?180 cash',
+        totalCost: '1200 credits + ?180 cash',
         ad: {
           id: ad._id,
           title: ad.title,
@@ -397,7 +381,7 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // CREDIT CHECK - 1020 credits required (+ 180 cash after admin approval)
+      // CREDIT CHECK - 1200 credits required
       // uploaderPhone already declared above
       const userId = req.body.userId;
       
@@ -467,16 +451,16 @@ router.post(
 
       const currentCredits = (user as any).credits || 0;
       
-      if (currentCredits < 1020) {
+      if (currentCredits < 1200) {
         return res.status(400).json({ 
-          message: 'Insufficient credits. You need 1020 credits to create an ad.',
+          message: 'Insufficient credits. You need 1200 credits to create an ad.',
           currentCredits: currentCredits,
-          required: 1020
+          required: 1200
         });
       }
 
-      // Deduct 1020 credits from main User model
-      (user as any).credits = currentCredits - 1020;
+      // Deduct 1200 credits from main User model
+      (user as any).credits = currentCredits - 1200;
       await user.save();
 
       // Create transaction record for the deduction
@@ -572,7 +556,7 @@ router.post(
         adType: 'video',
         uploadedBy: ad.uploadedBy,
         status: ad.status,
-        creditsDeducted: 1020
+        creditsDeducted: 1200
       });
 
       res.status(201).json({
