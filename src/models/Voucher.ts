@@ -26,6 +26,16 @@ const VoucherSchema = new Schema(
     productVideoLink: { type: String },
     redeemedAt: { type: Date },
 
+    // Multiple use support
+    maxUses: { type: Number, default: 1 }, // Total number of times voucher can be used
+    remainingUses: { type: Number, default: 1 }, // Remaining uses
+    usageHistory: [
+      {
+        usedAt: { type: Date, default: Date.now },
+        usedBy: { type: Schema.Types.ObjectId, ref: "User" },
+      },
+    ],
+
     // Admin-created voucher template fields
     companyLogo: { type: String }, // URL to logo
     companyName: { type: String, default: "Instantlly" },
