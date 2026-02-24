@@ -445,33 +445,39 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
       .limit(Number(limit))
       .lean();
 
-    // For VOUCHER ADMIN users ONLY, add special Instantlly voucher at the beginning
+    // Add special Instantlly voucher at the beginning for ALL users
     const allVouchers = [...userVouchers];
 
-    if (isVoucherAdmin && user?.specialCredits?.availableSlots) {
-      const specialVoucher = {
-        _id: "instantlly-special-credits",
-        voucherNumber: "INSTANTLLY-SPECIAL",
-        companyName: "Instantlly",
-        title: "Sales Target at Special Discount",
-        description: "Access your special credits dashboard",
-        MRP: 122070300,
-        amount: 122070300,
-        vouchersFigure: 122070300,
-        issueDate: new Date(),
-        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
-        redeemedStatus: "unredeemed",
-        source: "instantlly-special",
-        isSpecialCreditsVoucher: true,
-        specialCredits: {
-          totalSlots: user.specialCredits.availableSlots,
-          usedSlots: user.specialCredits.usedSlots || 0,
-          creditPerSlot: getSpecialCreditsForLevel(user.level || 0),
-        },
-      };
+    // Create Instantlly voucher (shown for all users)
+    const specialVoucher: any = {
+      _id: "instantlly-special-credits",
+      voucherNumber: "INSTANTLLY-SPECIAL",
+      companyName: "Instantlly",
+      phoneNumber: "+91 98674 77227",
+      address: "Jogeshwari, Mumbai",
+      title: "Sales Target at Special Discount",
+      description: "",
+      MRP: 1200,
+      amount: 1200,
+      discountPercentage: 40,
+      issueDate: new Date(),
+      expiryDate: new Date("2026-08-30"), // August 30, 2026
+      redeemedStatus: "unredeemed",
+      source: "instantlly-special",
+      isSpecialCreditsVoucher: true,
+    };
 
-      allVouchers.unshift(specialVoucher as any);
+    // For admin users, add special credits info
+    if (isVoucherAdmin && user?.specialCredits?.availableSlots) {
+      specialVoucher.vouchersFigure = 122070300; // Show credit amount for admin
+      specialVoucher.specialCredits = {
+        totalSlots: user.specialCredits.availableSlots,
+        usedSlots: user.specialCredits.usedSlots || 0,
+        creditPerSlot: getSpecialCreditsForLevel(user.level || 0),
+      };
     }
+
+    allVouchers.unshift(specialVoucher);
 
     res.json({ success: true, vouchers: allVouchers });
   } catch (error) {
@@ -607,45 +613,45 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
   try {
     const { voucherId } = req.params;
 
-    // Handle special Instantlly voucher
+    // Handle special Instantlly voucher (available to ALL users)
     if (voucherId === "instantlly-special-credits") {
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin specialCredits",
       );
       const isAdmin = user?.isVoucherAdmin || user?.level === 0;
 
-      if (!isAdmin) {
-        return res.status(403).json({
-          success: false,
-          message: "Not authorized to view this voucher",
-        });
-      }
-
-      const specialVoucher = {
+      const specialVoucher: any = {
         _id: "instantlly-special-credits",
         voucherNumber: "INSTANTLLY-SPECIAL",
         companyName: "Instantlly",
+        phoneNumber: "+91 98674 77227",
+        address: "Jogeshwari, Mumbai",
         title: "Sales Target at Special Discount",
-        description:
-          "Access your special credits dashboard to manage and distribute credits to your network.",
-        MRP: 122070300,
-        amount: 122070300,
-        vouchersFigure: 122070300,
+        description: "",
+        MRP: 1200,
+        amount: 1200,
+        discountPercentage: 40,
         issueDate: new Date(),
-        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        expiryDate: new Date("2027-02-24"),
         redeemedStatus: "unredeemed",
         source: "instantlly-special",
         isSpecialCreditsVoucher: true,
         canContinueToDashboard: true,
-        specialCredits: {
-          totalSlots: user?.specialCredits?.availableSlots || 0,
-          usedSlots: user?.specialCredits?.usedSlots || 0,
-          availableSlots:
-            (user?.specialCredits?.availableSlots || 0) -
-            (user?.specialCredits?.usedSlots || 0),
-          creditPerSlot: getSpecialCreditsForLevel(user?.level || 0),
-        },
+        isAdmin: isAdmin, // Flag to differentiate admin from regular users
       };
+
+      // For admin users, add special credits info
+      if (isAdmin && user?.specialCredits?.availableSlots) {
+        specialVoucher.vouchersFigure = 122070300; // Show credit amount for admin
+        specialVoucher.specialCredits = {
+          totalSlots: user.specialCredits.availableSlots || 0,
+          usedSlots: user.specialCredits.usedSlots || 0,
+          availableSlots:
+            (user.specialCredits.availableSlots || 0) -
+            (user.specialCredits.usedSlots || 0),
+          creditPerSlot: getSpecialCreditsForLevel(user?.level || 0),
+        };
+      }
 
       return res.json({ success: true, voucher: specialVoucher });
     }
