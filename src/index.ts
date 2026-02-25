@@ -32,6 +32,7 @@ import businessPromotionRouter from "./routes/businessPromotion";
 import mlmRouter from "./routes/mlm";
 import businessListing from "./routes/business-listing";
 import designerRouter from "./routes/designer";
+import categoriesRouter from "./routes/categories";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -338,6 +339,10 @@ async function startServer() {
     app.use("/api/designer", designerRouter);
     console.log(
       "✅ Mounted /api/designer routes (designer login, requests, uploads)",
+    );
+    app.use("/api/categories", categoriesRouter);
+    console.log(
+      "✅ Mounted /api/categories routes (categories, custom services management)",
     );
 
     // Initialize Socket.IO service
