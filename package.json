@@ -3,7 +3,7 @@
   "version": "1.0.3",
   "scripts": {
     "dev": "nodemon src/index.ts",
-    "build": "node --max-old-space-size=512 ./node_modules/.bin/tsc",
+    "build": "node --max-old-space-size=1024 ./node_modules/.bin/tsc",
     "start": "node dist/index.js",
     "check-user": "ts-node src/scripts/check-user.ts",
     "reset-password": "ts-node src/scripts/reset-password.ts",
