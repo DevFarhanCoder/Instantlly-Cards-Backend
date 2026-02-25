@@ -507,4 +507,51 @@ router.delete("/admin/custom-service/:id", adminAuth, async (req: Request, res: 
   }
 });
 
+// DELETE /api/categories/admin/category/:id - Delete a category
+router.delete("/admin/category/:id", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const category = await Category.findByIdAndDelete(id);
+    if (!category) {
+      return res.status(404).json({ success: false, error: "Category not found" });
+    }
+    res.json({ success: true, message: `Category "${category.name}" deleted` });
+  } catch (error: any) {
+    console.error("Error deleting category:", error);
+    res.status(500).json({ success: false, error: "Failed to delete category" });
+  }
+});
+
+// DELETE /api/categories/admin/category/:id/subcategory/:subName - Remove a subcategory from a category
+router.delete("/admin/category/:id/subcategory/:subName", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id, subName } = req.params;
+    const subcategoryName = decodeURIComponent(subName);
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, error: "Category not found" });
+    }
+
+    const idx = category.subcategories.findIndex(
+      (s: string) => s.toLowerCase() === subcategoryName.toLowerCase()
+    );
+    if (idx === -1) {
+      return res.status(404).json({ success: false, error: `Subcategory "${subcategoryName}" not found` });
+    }
+
+    category.subcategories.splice(idx, 1);
+    await category.save();
+
+    res.json({
+      success: true,
+      message: `Subcategory "${subcategoryName}" removed from "${category.name}"`,
+      data: category,
+    });
+  } catch (error: any) {
+    console.error("Error removing subcategory:", error);
+    res.status(500).json({ success: false, error: "Failed to remove subcategory" });
+  }
+});
+
 export default router;
