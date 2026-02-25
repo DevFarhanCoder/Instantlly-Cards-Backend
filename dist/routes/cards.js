@@ -1,0 +1,1125 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const Card_1 = __importDefault(require("../models/Card"));
+const SharedCard_1 = __importDefault(require("../models/SharedCard"));
+const GroupSharedCard_1 = __importDefault(require("../models/GroupSharedCard"));
+const User_1 = __importDefault(require("../models/User"));
+const Group_1 = __importDefault(require("../models/Group"));
+const Contact_1 = __importDefault(require("../models/Contact"));
+const auth_1 = require("../middleware/auth");
+const pushNotifications_1 = require("../services/pushNotifications");
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const uuid_1 = require("uuid");
+const r = (0, express_1.Router)();
+// Helper function to save Base64 image to file system
+const saveBase64Image = async (base64Data, userId) => {
+    try {
+        // Check if data is provided
+        if (!base64Data || typeof base64Data !== 'string') {
+            throw new Error('Image data is required and must be a valid string');
+        }
+        // Check if it's a data URI
+        if (!base64Data.startsWith('data:image/')) {
+            throw new Error('Invalid image format. Image must be in data:image/ format (PNG, JPEG, JPG, GIF, WebP)');
+        }
+        // Extract mime type and base64 data
+        const matches = base64Data.match(/^data:image\/([^;]+);base64,(.+)$/);
+        if (!matches) {
+            throw new Error('Invalid Base64 image encoding. Please ensure the image is properly encoded');
+        }
+        const [, extension, base64] = matches;
+        // Validate base64 string
+        if (!base64 || base64.length === 0) {
+            throw new Error('Image data is empty or corrupted');
+        }
+        let buffer;
+        try {
+            buffer = Buffer.from(base64, 'base64');
+        }
+        catch (err) {
+            throw new Error('Failed to decode image. The image data may be corrupted');
+        }
+        // Validate file size (limit to 15MB)
+        const maxSize = 15 * 1024 * 1024; // 15MB
+        const actualSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
+        if (buffer.length > maxSize) {
+            throw new Error(`Image size is ${actualSizeMB}MB which exceeds the maximum limit of 15MB. Please compress or resize your image`);
+        }
+        // Validate supported image formats
+        const supportedFormats = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+        if (!supportedFormats.includes(extension.toLowerCase())) {
+            throw new Error(`Image format '${extension}' is not supported. Supported formats: ${supportedFormats.join(', ').toUpperCase()}`);
+        }
+        console.log(`✅ Image validation passed - Size: ${actualSizeMB}MB, Format: ${extension.toUpperCase()}, User: ${userId}`);
+        // Generate unique filename
+        const filename = `${(0, uuid_1.v4)()}.${extension}`;
+        const uploadDir = path_1.default.join(process.cwd(), 'uploads', 'cards');
+        const filepath = path_1.default.join(uploadDir, filename);
+        // Ensure upload directory exists
+        if (!fs_1.default.existsSync(uploadDir)) {
+            fs_1.default.mkdirSync(uploadDir, { recursive: true });
+        }
+        // Save file to disk
+        fs_1.default.writeFileSync(filepath, buffer);
+        // Return relative path for storing in database
+        return `/uploads/cards/${filename}`;
+    }
+    catch (error) {
+        console.error('❌ Error saving Base64 image:', error.message || error);
+        // Re-throw with more specific error message if available
+        if (error.message) {
+            throw error; // Preserve our detailed error messages
+        }
+        // Generic fallback for unexpected errors
+        throw new Error('Failed to process image. Please ensure the image is valid and try again');
+    }
+};
+// Public feed (no auth) – latest 50 cards
+r.get("/feed/public", async (_req, res) => {
+    const items = await Card_1.default.find({}).sort({ createdAt: -1 }).limit(50).lean();
+    res.json({ data: items });
+});
+// Require auth for everything below
+r.use(auth_1.requireAuth);
+// DIAGNOSTIC ENDPOINT - Check if card exists in database (for debugging deletion issues)
+r.get("/debug/:id", async (req, res) => {
+    try {
+        const cardId = req.params.id;
+        const userId = req.userId;
+        console.log(`🔍 DEBUG card check - CardID: ${cardId}, UserID: ${userId}`);
+        // Check if card exists
+        const card = await Card_1.default.findById(cardId);
+        const count = await Card_1.default.countDocuments({ _id: cardId });
+        const userCards = await Card_1.default.find({ userId }).select('_id name');
+        res.json({
+            requested: cardId,
+            found: !!card,
+            count,
+            card: card || null,
+            userCardsCount: userCards.length,
+            userCardIds: userCards.map(c => c._id.toString())
+        });
+    }
+    catch (err) {
+        console.error("DEBUG ERROR", err);
+        res.status(500).json({ message: "Debug check failed" });
+    }
+});
+// CONTACTS FEED - Get cards from OTHER contacts only (NOT user's own cards)
+r.get("/feed/contacts", async (req, res) => {
+    try {
+        const userId = req.userId;
+        const startTime = Date.now();
+        console.log(`📱 [${userId}] Fetching contacts feed (other members only)...`);
+        // Get all contacts who are app users (optimized query with select)
+        const myContacts = await Contact_1.default.find({
+            userId,
+            isAppUser: true
+        })
+            .select('appUserId')
+            .lean()
+            .exec();
+        // Extract contact user IDs with proper typing
+        const contactUserIds = myContacts.map((contact) => contact.appUserId).filter(Boolean);
+        // CRITICAL: Explicitly exclude user's own ID (in case they added themselves as a contact)
+        const safeContactIds = contactUserIds.filter((id) => id.toString() !== userId.toString());
+        console.log(`📞 [${userId}] Found ${contactUserIds.length} contacts on app (${safeContactIds.length} after self-exclusion)`);
+        // Get cards from contacts ONLY (excluding user's own cards)
+        const allCards = await Card_1.default.find({
+            $and: [
+                { userId: { $in: safeContactIds } },
+                { userId: { $ne: userId } } // Additional safety: Explicitly exclude user's own userId
+            ]
+        })
+            .select('_id userId name companyName designation companyPhoto email companyEmail personalPhone companyPhone location companyAddress birthdate anniversary createdAt updatedAt')
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean()
+            .exec();
+        // Final safety check: Filter out any cards that might have slipped through
+        const filteredCards = allCards.filter((card) => card.userId && card.userId.toString() !== userId.toString());
+        const elapsed = Date.now() - startTime;
+        console.log(`✅ [${userId}] Feed loaded in ${elapsed}ms - ${filteredCards.length} cards from contacts (user's own cards excluded)`);
+        // Generate ETag based on card IDs and update times for browser caching
+        const etag = `"${filteredCards.map((c) => `${c._id}-${c.updatedAt}`).join(',').substring(0, 32)}"`;
+        // Check if client has cached version
+        if (req.headers['if-none-match'] === etag) {
+            console.log(`💾 [${userId}] Client has cached version - returning 304 Not Modified`);
+            return res.status(304).end();
+        }
+        // Set cache headers
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
+        res.json({
+            success: true,
+            data: filteredCards,
+            meta: {
+                totalContacts: contactUserIds.length,
+                totalCards: filteredCards.length,
+                contactCards: filteredCards.length,
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error("❌ CONTACTS FEED ERROR", err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch contacts feed",
+            data: []
+        });
+    }
+});
+// CREATE (expects flat body)
+r.post("/", async (req, res) => {
+    try {
+        const userId = req.userId;
+        let cardData = { ...req.body, userId };
+        console.log('📝 [CREATE CARD] Received data:', JSON.stringify({
+            name: cardData.name,
+            birthdate: cardData.birthdate,
+            anniversary: cardData.anniversary,
+            email: cardData.email,
+            location: cardData.location
+        }, null, 2));
+        // PREVENT DUPLICATE DEFAULT CARDS - Only block explicit default card creation
+        if (cardData.isDefault === true) {
+            const existingDefaultCard = await Card_1.default.findOne({
+                userId,
+                isDefault: true
+            });
+            if (existingDefaultCard) {
+                console.log(`⚠️ [CREATE CARD] User ${userId} already has default card - blocking duplicate default creation`);
+                return res.status(400).json({
+                    message: "User already has a default card. Cannot create duplicate default cards."
+                });
+            }
+            console.log('✅ [CREATE CARD] Creating new default card');
+        }
+        else {
+            // For manual card creation, set isDefault to false
+            cardData.isDefault = false;
+            console.log('✅ [CREATE CARD] Creating regular (non-default) card');
+        }
+        // Handle Base64 image conversion if companyPhoto is provided
+        if (cardData.companyPhoto && cardData.companyPhoto.startsWith('data:image/')) {
+            console.log('🖼️ Processing Base64 image for card...');
+            try {
+                const imagePath = await saveBase64Image(cardData.companyPhoto, userId);
+                cardData.companyPhoto = imagePath;
+                console.log('✅ Image saved successfully:', imagePath);
+            }
+            catch (imageError) {
+                console.error('❌ Failed to process image:', imageError);
+                // Continue without image rather than failing entire card creation
+                cardData.companyPhoto = '';
+            }
+        }
+        const doc = await Card_1.default.create(cardData);
+        console.log('✅ [CREATE CARD] Saved to DB:', JSON.stringify({
+            _id: doc._id,
+            name: doc.name,
+            birthdate: doc.birthdate,
+            anniversary: doc.anniversary,
+            email: doc.email,
+            location: doc.location
+        }, null, 2));
+        console.log('✅ [CREATE CARD] Saved to DB:', JSON.stringify({
+            _id: doc._id,
+            name: doc.name,
+            birthdate: doc.birthdate,
+            anniversary: doc.anniversary,
+            email: doc.email,
+            location: doc.location
+        }, null, 2));
+        // Send notifications to contacts who have this user in their contacts
+        try {
+            // Get user details
+            const creator = await User_1.default.findById(userId).select('name phoneNumber').lean();
+            if (creator && creator.name) {
+                // Find all contacts who have this user as a contact AND are app users
+                const myContactsWhoAreAppUsers = await Contact_1.default.find({
+                    appUserId: userId,
+                    isAppUser: true
+                }).populate('userId', 'pushToken name').lean();
+                console.log(`📢 Notifying ${myContactsWhoAreAppUsers.length} contacts about new card creation`);
+                // Send notification to each contact
+                for (const contact of myContactsWhoAreAppUsers) {
+                    const contactUser = contact.userId;
+                    if (contactUser?.pushToken) {
+                        await (0, pushNotifications_1.sendCardCreationNotification)(contactUser.pushToken, creator.name || 'A contact', req.body.name || 'a new card', doc._id.toString(), userId);
+                    }
+                }
+            }
+        }
+        catch (notifError) {
+            console.error('Error sending card creation notifications:', notifError);
+            // Don't fail the card creation if notifications fail
+        }
+        res.status(201).json({ data: doc });
+    }
+    catch (err) {
+        console.error("CREATE CARD ERROR", err);
+        res.status(400).json({ message: err?.message || "Bad request" });
+    }
+});
+// LIST own cards (OPTIMIZED WITH PROPER CACHING AND LOGGING)
+r.get("/", async (req, res) => {
+    try {
+        const reqId = req.get('x-req-id') || req.get('X-REQ-ID') || 'no-req-id';
+        const userId = req.userId;
+        const startTime = Date.now();
+        console.log(`🔖 [REQ:${reqId}] GET /api/cards called - auth header present? ${!!req.header('authorization')} - resolved userId: ${userId}`);
+        console.log(`📇 [${userId}] Fetching user's own cards...`);
+        // Get user's cards sorted by creation date (descending)
+        const items = await Card_1.default.find({ userId })
+            .sort({ createdAt: -1 })
+            .lean()
+            .exec();
+        const elapsed = Date.now() - startTime;
+        console.log(`✅ [${userId}] Own cards loaded in ${elapsed}ms - Found ${items.length} cards`);
+        items.forEach((card, i) => {
+            console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${card.businessHours}", servicesOffered="${card.servicesOffered}", establishedYear="${card.establishedYear}", aboutBusiness="${card.aboutBusiness}"`);
+            console.log(`   Card ${i + 1}: "${card.name}" - NEW FIELDS: businessHours="${card.businessHours}", servicesOffered="${card.servicesOffered}", establishedYear="${card.establishedYear}", aboutBusiness="${card.aboutBusiness}"`);
+        });
+        // DISABLED ETag caching to prevent stale data after delete
+        // Generate ETag using ALL card IDs to detect deletions
+        // const cardIds = items.map(c => c._id).join(',');
+        // const etag = `"own-cards-${userId}-${items.length}-${cardIds.substring(0, 50)}-${items[0]?.updatedAt || 'empty'}"`;
+        // Check if client has cached version
+        // // if (req.headers['if-none-match'] === etag) {
+        // //   console.log(`💾 [${userId}] Client has cached own cards - returning 304`);
+        // //   return res.status(304).end();
+        // // }
+        // Force no-cache to prevent stale data issues
+        // // res.setHeader('ETag', etag);
+        // res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        res.json({
+            success: true,
+            data: items,
+            meta: {
+                totalCards: items.length,
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error(`❌ [${req.userId}] ERROR fetching own cards:`, err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch cards",
+            data: []
+        });
+    }
+});
+// UPDATE
+r.put("/:id", async (req, res) => {
+    try {
+        const userId = req.userId;
+        let updateData = { ...req.body };
+        console.log('🔧 UPDATE CARD REQUEST RECEIVED - Card ID:', req.params.id);
+        console.log('📦 NEW FIELDS in request:', {
+            businessHours: updateData.businessHours,
+            servicesOffered: updateData.servicesOffered,
+            establishedYear: updateData.establishedYear,
+            aboutBusiness: updateData.aboutBusiness
+        });
+        console.log('🔧 UPDATE CARD REQUEST RECEIVED - Card ID:', req.params.id);
+        console.log('📦 NEW FIELDS in request:', {
+            businessHours: updateData.businessHours,
+            servicesOffered: updateData.servicesOffered,
+            establishedYear: updateData.establishedYear,
+            aboutBusiness: updateData.aboutBusiness
+        });
+        // Handle Base64 image conversion if companyPhoto is provided
+        if (updateData.companyPhoto && updateData.companyPhoto.startsWith('data:image/')) {
+            try {
+                const imagePath = await saveBase64Image(updateData.companyPhoto, userId);
+                // Get old image path before update (only if we're changing the image)
+                const existingCard = await Card_1.default.findOne({ _id: req.params.id, userId }).select('companyPhoto').lean();
+                const oldImagePath = existingCard?.companyPhoto;
+                updateData.companyPhoto = imagePath;
+                // Clean up old image in background (non-blocking)
+                if (oldImagePath && typeof oldImagePath === 'string' && oldImagePath !== imagePath && oldImagePath.startsWith('/uploads/')) {
+                    const pathToDelete = oldImagePath; // Capture in closure
+                    setImmediate(() => {
+                        try {
+                            const oldPath = path_1.default.join(process.cwd(), pathToDelete);
+                            if (fs_1.default.existsSync(oldPath)) {
+                                fs_1.default.unlinkSync(oldPath);
+                            }
+                        }
+                        catch (deleteError) {
+                            console.error('Warning: Failed to delete old image:', deleteError);
+                        }
+                    });
+                }
+            }
+            catch (imageError) {
+                console.error('❌ Failed to process image:', imageError);
+                // Continue without updating image rather than failing entire update
+                delete updateData.companyPhoto;
+            }
+        }
+        // Single database query for update
+        console.log('🔧 UPDATE: Received data for new fields:', {
+            businessHours: updateData.businessHours,
+            servicesOffered: updateData.servicesOffered,
+            establishedYear: updateData.establishedYear,
+            aboutBusiness: updateData.aboutBusiness
+        });
+        // Single database query for update
+        console.log('🔧 UPDATE: Received data for new fields:', {
+            businessHours: updateData.businessHours,
+            servicesOffered: updateData.servicesOffered,
+            establishedYear: updateData.establishedYear,
+            aboutBusiness: updateData.aboutBusiness
+        });
+        const doc = await Card_1.default.findOneAndUpdate({ _id: req.params.id, userId }, updateData, { new: true });
+        if (!doc)
+            return res.status(404).json({ message: "Not found" });
+        console.log('✅ UPDATE: Saved doc has new fields:', {
+            businessHours: doc.businessHours,
+            servicesOffered: doc.servicesOffered,
+            establishedYear: doc.establishedYear,
+            aboutBusiness: doc.aboutBusiness
+        });
+        console.log('✅ UPDATE: Saved doc has new fields:', {
+            businessHours: doc.businessHours,
+            servicesOffered: doc.servicesOffered,
+            establishedYear: doc.establishedYear,
+            aboutBusiness: doc.aboutBusiness
+        });
+        res.json({ data: doc });
+    }
+    catch (err) {
+        console.error("UPDATE CARD ERROR", err);
+        res.status(400).json({ message: "Bad request" });
+    }
+});
+// DELETE
+r.delete("/:id", async (req, res) => {
+    try {
+        const cardId = req.params.id;
+        const userId = req.userId;
+        console.log(`🗑️ DELETE card request - CardID: ${cardId}, UserID: ${userId}`);
+        // First check if card exists at all (for debugging)
+        const existingCard = await Card_1.default.findById(cardId);
+        if (!existingCard) {
+            console.log(`❌ Card ${cardId} does not exist in database`);
+            return res.status(404).json({ message: "Card not found - it may have already been deleted" });
+        }
+        console.log(`📋 Card found - Owner: ${existingCard.userId}, Requester: ${userId}`);
+        // Check if user owns the card
+        if (existingCard.userId.toString() !== userId.toString()) {
+            console.log(`❌ Permission denied - Card ${cardId} belongs to ${existingCard.userId}, not ${userId}`);
+            return res.status(403).json({ message: "You don't have permission to delete this card" });
+        }
+        // Delete the card
+        await Card_1.default.findByIdAndDelete(cardId);
+        console.log(`✅ Card ${cardId} deleted successfully by user ${userId}`);
+        res.json({ ok: true });
+    }
+    catch (err) {
+        console.error("DELETE CARD ERROR", err);
+        res.status(400).json({ message: "Bad request" });
+    }
+});
+// SHARE CARD (send to another user within the app)
+r.post("/:id/share", async (req, res) => {
+    try {
+        const { recipientId, message } = req.body;
+        const cardId = req.params.id;
+        const senderId = req.userId;
+        if (!recipientId) {
+            return res.status(400).json({ message: "Recipient ID is required" });
+        }
+        // Verify the card belongs to the sender
+        const card = await Card_1.default.findOne({ _id: cardId, userId: senderId });
+        if (!card) {
+            return res.status(404).json({ message: "Card not found or access denied" });
+        }
+        // Verify recipient exists
+        const recipient = await User_1.default.findById(recipientId);
+        if (!recipient) {
+            return res.status(404).json({ message: "Recipient not found" });
+        }
+        // Get sender info
+        const sender = await User_1.default.findById(senderId);
+        if (!sender) {
+            return res.status(404).json({ message: "Sender not found" });
+        }
+        // Check for duplicate - prevent sharing same card to same person twice
+        const existingShare = await SharedCard_1.default.findOne({
+            cardId,
+            senderId,
+            recipientId
+        });
+        if (existingShare) {
+            return res.status(409).json({
+                message: "Card already shared",
+                error: "You have already sent this card to this person. You can only send a card once to each user."
+            });
+        }
+        // PERFORMANCE OPTIMIZATION: Store all data in shared card (ultra denormalization)
+        // This eliminates need for populate queries later
+        const sharedCard = await SharedCard_1.default.create({
+            cardId,
+            senderId,
+            recipientId,
+            message: message || "",
+            cardTitle: card.companyName || card.name || 'Business Card',
+            senderName: sender.name,
+            recipientName: recipient.name,
+            cardPhoto: card.companyPhoto || "", // ✅ Store photo URL directly
+            senderProfilePicture: sender.profilePicture || "", // ✅ Store sender profile pic
+            recipientProfilePicture: recipient.profilePicture || "", // ✅ Store recipient profile pic
+            status: 'sent'
+        });
+        console.log(`📧 Card shared: ${sender.name} → ${recipient.name} (${card.companyName || card.name})`);
+        // Send push notification to recipient if they have a push token
+        if (recipient.pushToken) {
+            try {
+                const notificationSent = await (0, pushNotifications_1.sendCardSharingNotification)(recipient.pushToken, sender.name, sharedCard.cardTitle, senderId, cardId);
+                if (notificationSent) {
+                    console.log(`🔔 Card sharing notification sent to ${recipient.name}`);
+                }
+                else {
+                    console.log(`❌ Failed to send card sharing notification to ${recipient.name}`);
+                }
+            }
+            catch (notificationError) {
+                console.error('Error sending card sharing notification:', notificationError);
+                // Don't fail the card sharing if notification fails
+            }
+        }
+        else {
+            console.log(`📱 No push token for ${recipient.name}, skipping notification`);
+        }
+        res.json({
+            success: true,
+            message: "Card shared successfully",
+            data: {
+                sharedCardId: sharedCard._id,
+                cardTitle: sharedCard.cardTitle,
+                recipientName: recipient.name,
+                sentAt: sharedCard.sentAt
+            }
+        });
+    }
+    catch (err) {
+        console.error("SHARE CARD ERROR", err);
+        res.status(500).json({ message: "Failed to share card" });
+    }
+});
+// GET SENT CARDS (CURSOR-BASED PAGINATION FOR 100K+ RECORDS)
+r.get("/sent", async (req, res) => {
+    try {
+        const senderId = req.userId;
+        const startTime = Date.now();
+        // Cursor-based pagination parameters
+        const cursor = req.query.cursor; // Last _id from previous page
+        const limit = Math.min(parseInt(req.query.limit) || 20, 50); // Max 50 per page
+        console.log(`📤 [${senderId}] Fetching sent cards (cursor: ${cursor || 'first'}, limit: ${limit})...`);
+        // Build query with cursor for pagination
+        const query = { senderId };
+        if (cursor) {
+            query._id = { $lt: cursor }; // Get records before this cursor (pagination)
+        }
+        // ULTRA-FAST QUERY: Single query, no populate, uses cached fields
+        const sentCards = await SharedCard_1.default.find(query)
+            .select('_id cardId recipientId recipientName cardTitle cardPhoto recipientProfilePicture sentAt status message viewedAt')
+            .sort({ _id: -1 }) // Sort by _id (equivalent to creation time, uses index)
+            .limit(limit + 1) // Fetch one extra to check if there's more
+            .lean()
+            .exec();
+        // Check if there are more pages
+        const hasMore = sentCards.length > limit;
+        const items = sentCards.slice(0, limit);
+        const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
+        const elapsed = Date.now() - startTime;
+        console.log(`✅ [${senderId}] Sent cards loaded in ${elapsed}ms - ${items.length} cards${hasMore ? ' (more available)' : ' (last page)'}`);
+        // Generate ETag for HTTP caching
+        const etag = `"sent-${senderId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
+        // Disable ETag checking to avoid stale data
+        // if (req.headers['if-none-match'] === etag) {
+        //   console.log(`💾 [${senderId}] Client cache hit - returning 304`);
+        //   return res.status(304).end();
+        // }
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, no-cache, must-revalidate');
+        res.json({
+            success: true,
+            data: items,
+            pagination: {
+                nextCursor,
+                hasMore,
+                count: items.length,
+                limit
+            },
+            meta: {
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error(`❌ [${req.userId}] GET SENT CARDS ERROR:`, err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch sent cards",
+            data: [],
+            pagination: { nextCursor: null, hasMore: false, count: 0 }
+        });
+    }
+});
+// GET RECEIVED CARDS (CURSOR-BASED PAGINATION FOR 100K+ RECORDS WITH SEARCH)
+r.get("/received", async (req, res) => {
+    try {
+        const recipientId = req.userId;
+        const startTime = Date.now();
+        // Cursor-based pagination parameters
+        const cursor = req.query.cursor;
+        const limit = Math.min(parseInt(req.query.limit) || 20, 50); // Max 50 per page
+        // Search parameters
+        const search = req.query.search;
+        const fuzzy = req.query.fuzzy === 'true';
+        const caseSensitive = req.query.case_sensitive === 'true';
+        const sortBy = req.query.sort_by;
+        console.log(`📥 [${recipientId}] Fetching received cards (cursor: ${cursor || 'first'}, limit: ${limit}, search: "${search || 'none'}", fuzzy: ${fuzzy})...`);
+        // STEP 1: Find all senders who sent cards to this recipient
+        const receivedFromSenders = await SharedCard_1.default.find({ recipientId }).distinct('senderId');
+        // STEP 2: Find which of these senders the recipient has ALSO sent cards to (mutual exchange)
+        const mutualSenders = await SharedCard_1.default.find({
+            senderId: recipientId,
+            recipientId: { $in: receivedFromSenders }
+        }).distinct('recipientId');
+        console.log(`🔄 [${recipientId}] Received from ${receivedFromSenders.length} users, mutual exchange with ${mutualSenders.length} users`);
+        // Build query with cursor for pagination - ONLY show cards from mutual exchanges - ONLY show cards from mutual exchanges
+        const query = {
+            recipientId,
+            senderId: { $in: mutualSenders } // Only show if recipient has also sent card back
+            ,
+        };
+        if (cursor) {
+            query._id = { $lt: cursor };
+        }
+        // Add search functionality
+        if (search && search.trim()) {
+            const searchTerm = search.trim();
+            const searchOptions = caseSensitive ? undefined : 'i'; // Case insensitive by default
+            if (fuzzy) {
+                // Optimized fuzzy search - create broader patterns for better matching
+                const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(word => word.length > 1);
+                if (searchWords.length > 0) {
+                    // Create flexible patterns for each word
+                    const patterns = searchWords.map(word => {
+                        // Escape special regex characters but keep flexibility
+                        const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        // Create pattern that matches partial words at beginning, middle, or end
+                        return new RegExp(`${escapedWord}`, searchOptions);
+                    });
+                    // Build efficient OR query across fields with AND logic for multiple words
+                    if (searchWords.length === 1) {
+                        // Single word - OR across all fields
+                        const singlePattern = patterns[0];
+                        query.$or = [
+                            { cardTitle: singlePattern },
+                            { senderName: singlePattern },
+                            { message: singlePattern }
+                        ];
+                    }
+                    else {
+                        // Multiple words - each word must match in at least one field
+                        query.$and = searchWords.map((word, index) => ({
+                            $or: [
+                                { cardTitle: patterns[index] },
+                                { senderName: patterns[index] },
+                                { message: patterns[index] }
+                            ]
+                        }));
+                    }
+                }
+            }
+            else {
+                // Optimized simple text search
+                const escapedTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const searchPattern = new RegExp(escapedTerm, searchOptions);
+                query.$or = [
+                    { cardTitle: searchPattern },
+                    { senderName: searchPattern },
+                    { message: searchPattern }
+                ];
+            }
+        }
+        // Build sort criteria
+        let sortCriteria = { _id: -1 }; // Default sort by creation time
+        if (search && sortBy === 'relevance') {
+            // For search results, use text score for relevance (requires text index)
+            // For now, we'll use a simple relevance approximation
+            sortCriteria = { _id: -1 }; // MongoDB will handle relevance in $or queries
+        }
+        // ULTRA-FAST QUERY: Single query, no populate, uses cached fields
+        const receivedCards = await SharedCard_1.default.find(query)
+            .select('_id cardId senderId senderName cardTitle cardPhoto senderProfilePicture sentAt status message viewedAt')
+            .sort(sortCriteria)
+            .limit(limit + 1)
+            .lean()
+            .exec();
+        // Check if there are more pages
+        const hasMore = receivedCards.length > limit;
+        const items = receivedCards.slice(0, limit).map((share) => ({
+            ...share,
+            receivedAt: share.sentAt,
+            isViewed: share.status === 'viewed'
+        }));
+        const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
+        const elapsed = Date.now() - startTime;
+        const unviewedCount = items.filter(card => !card.isViewed).length;
+        // Enhanced logging for search queries
+        if (search && search.trim()) {
+            console.log(`🔍 [${recipientId}] SEARCH QUERY: "${search}" (fuzzy: ${fuzzy}) -> ${items.length} results in ${elapsed}ms`);
+            if (items.length > 0) {
+                console.log(`🔍 [${recipientId}] Sample results: ${items.slice(0, 3).map(item => `"${item.cardTitle}" from ${item.senderName}`).join(', ')}`);
+            }
+        }
+        else {
+            console.log(`✅ [${recipientId}] Received cards loaded in ${elapsed}ms - ${items.length} cards, ${unviewedCount} unviewed${hasMore ? ' (more available)' : ' (last page)'}`);
+        }
+        // Generate ETag for HTTP caching (disable caching for search queries)
+        const etag = search ? null : `"received-${recipientId}-${cursor || 'first'}-${limit}-${items[0]?._id || 'empty'}-${Date.now()}"`;
+        // Don't use if-none-match for now to avoid stale data issues
+        // if (etag && req.headers['if-none-match'] === etag) {
+        //   console.log(`💾 [${recipientId}] Client cache hit - returning 304`);
+        //   return res.status(304).end();
+        // }
+        if (etag) {
+            res.setHeader('ETag', etag);
+            res.setHeader('Cache-Control', 'private, no-cache, must-revalidate'); // Changed to no-cache
+        }
+        else {
+            // Don't cache search results
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+        res.json({
+            success: true,
+            data: items,
+            pagination: {
+                nextCursor,
+                hasMore,
+                count: items.length,
+                unviewedCount,
+                limit
+            },
+            meta: {
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error(`❌ [${req.userId}] GET RECEIVED CARDS ERROR:`, err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch received cards",
+            data: [],
+            pagination: { nextCursor: null, hasMore: false, count: 0, unviewedCount: 0 }
+        });
+    }
+});
+// GET SINGLE CARD BY ID (for viewing any card)
+// IMPORTANT: This route MUST be after /sent and /received to avoid route conflicts
+r.get("/:id", async (req, res) => {
+    try {
+        const cardId = req.params.id;
+        const userId = req.userId;
+        const startTime = Date.now();
+        console.log(`🔍 [${userId}] Fetching single card: ${cardId}`);
+        // Validate ObjectId format
+        if (!cardId.match(/^[0-9a-fA-F]{24}$/)) {
+            console.log(`❌ [${userId}] Invalid card ID format: ${cardId}`);
+            return res.status(400).json({
+                success: false,
+                message: "Invalid card ID format"
+            });
+        }
+        // First, try to find as a regular Card
+        let card = await Card_1.default.findById(cardId)
+            .populate('userId', 'name profilePicture')
+            .lean()
+            .maxTimeMS(5000)
+            .exec();
+        // If not found, check if it's a SharedCard ID (mobile app might be sending wrong ID)
+        if (!card) {
+            console.log(`🔄 [${userId}] Not found as Card, checking SharedCard: ${cardId}`);
+            const sharedCard = await SharedCard_1.default.findById(cardId)
+                .select('cardId')
+                .lean()
+                .maxTimeMS(3000)
+                .exec();
+            if (sharedCard && sharedCard.cardId) {
+                console.log(`🔄 [${userId}] Found SharedCard, fetching actual card: ${sharedCard.cardId}`);
+                card = await Card_1.default.findById(sharedCard.cardId)
+                    .populate('userId', 'name profilePicture')
+                    .lean()
+                    .maxTimeMS(5000)
+                    .exec();
+            }
+        }
+        if (!card) {
+            console.log(`❌ [${userId}] Card not found: ${cardId}`);
+            return res.status(404).json({
+                success: false,
+                message: "Card not found"
+            });
+        }
+        const elapsed = Date.now() - startTime;
+        console.log(`✅ [${userId}] Single card fetched in ${elapsed}ms - Card: ${card.name || card.companyName || 'Unnamed'}`);
+        // Generate ETag for caching
+        const etag = `"card-${card._id}-${card.updatedAt}"`;
+        // Check if client has cached version
+        if (req.headers['if-none-match'] === etag) {
+            console.log(`💾 [${userId}] Client has cached card ${cardId} - returning 304`);
+            return res.status(304).end();
+        }
+        // Set cache headers
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, max-age=300'); // Cache for 5 minutes
+        res.json({
+            success: true,
+            data: card,
+            meta: {
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error(`❌ [${req.userId}] GET CARD BY ID ERROR for ${req.params.id}:`, err.message);
+        // Handle timeout gracefully
+        if (err.message?.includes('timeout')) {
+            return res.status(504).json({
+                success: false,
+                message: "Request timeout - please try again",
+                error: "TIMEOUT"
+            });
+        }
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch card",
+            error: "INTERNAL_ERROR"
+        });
+    }
+});
+// MARK CARD AS VIEWED
+r.post("/shared/:id/view", async (req, res) => {
+    try {
+        const sharedCardId = req.params.id;
+        const userId = req.userId;
+        console.log(`👁️ Marking card as viewed: ${sharedCardId} by user: ${userId}`);
+        // Add timeout protection
+        const updatedCard = await Promise.race([
+            SharedCard_1.default.findOneAndUpdate({
+                _id: sharedCardId,
+                recipientId: userId,
+                status: { $ne: 'viewed' } // Only update if not already viewed
+            }, {
+                status: 'viewed',
+                viewedAt: new Date()
+            }, { new: true }).maxTimeMS(5000).lean(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('View update timeout')), 5000))
+        ]);
+        if (!updatedCard) {
+            console.log(`⚠️ Shared card not found or already viewed: ${sharedCardId}`);
+            // Check if card exists at all
+            const cardExists = await SharedCard_1.default.findById(sharedCardId).select('_id status recipientId').maxTimeMS(3000).lean();
+            if (!cardExists) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Shared card not found",
+                    error: "CARD_NOT_FOUND"
+                });
+            }
+            // Card exists but either already viewed or user is not recipient
+            return res.status(200).json({
+                success: true,
+                message: "Card already viewed or you are not the recipient",
+                alreadyViewed: cardExists.status === 'viewed'
+            });
+        }
+        console.log(`✅ Card marked as viewed: ${sharedCardId}`);
+        res.json({
+            success: true,
+            message: "Card marked as viewed",
+            viewedAt: updatedCard.viewedAt
+        });
+    }
+    catch (err) {
+        console.error("❌ MARK CARD VIEWED ERROR:", err.message);
+        // If timeout, return success anyway (update will complete eventually)
+        if (err.message?.includes('timeout')) {
+            return res.status(200).json({
+                success: true,
+                message: "View status updating (may take a moment)",
+                pending: true
+            });
+        }
+        res.status(500).json({
+            success: false,
+            message: "Failed to mark card as viewed",
+            error: "INTERNAL_ERROR"
+        });
+    }
+});
+// GET SHARED CARDS BETWEEN TWO USERS (for chat conversations)
+r.get("/shared-with/:userId", async (req, res) => {
+    try {
+        const currentUserId = req.userId;
+        const otherUserId = req.params.userId;
+        // Find all shared cards between these two users (in both directions)
+        const sharedCards = await SharedCard_1.default.find({
+            $or: [
+                { senderId: currentUserId, recipientId: otherUserId },
+                { senderId: otherUserId, recipientId: currentUserId }
+            ]
+        })
+            .populate('cardId', 'companyName name companyPhoto')
+            .populate('senderId', 'name profilePicture')
+            .populate('recipientId', 'name profilePicture')
+            .sort({ sentAt: 1 }) // Chronological order for chat timeline
+            .lean();
+        // Format the response
+        const formattedCards = sharedCards.map((share) => ({
+            _id: share._id,
+            cardId: share.cardId._id,
+            senderId: share.senderId._id,
+            recipientId: share.recipientId._id,
+            senderName: share.senderName,
+            recipientName: share.recipientName,
+            senderProfilePicture: share.senderId.profilePicture,
+            recipientProfilePicture: share.recipientId.profilePicture,
+            cardTitle: share.cardTitle,
+            cardPhoto: share.cardId.companyPhoto,
+            sentAt: share.sentAt,
+            status: share.status,
+            message: share.message,
+            viewedAt: share.viewedAt,
+            isFromMe: share.senderId.toString() === currentUserId,
+            isToMe: share.recipientId.toString() === currentUserId
+        }));
+        res.json({
+            success: true,
+            data: formattedCards
+        });
+    }
+    catch (err) {
+        console.error("GET SHARED CARDS BETWEEN USERS ERROR", err);
+        res.status(500).json({ message: "Failed to fetch shared cards" });
+    }
+});
+// SHARE CARD TO GROUP
+r.post("/:id/share-to-group", async (req, res) => {
+    try {
+        const { groupId, message } = req.body;
+        const cardId = req.params.id;
+        const senderId = req.userId;
+        if (!groupId) {
+            return res.status(400).json({ message: "Group ID is required" });
+        }
+        // Verify the card belongs to the sender
+        const card = await Card_1.default.findOne({ _id: cardId, userId: senderId });
+        if (!card) {
+            return res.status(404).json({ message: "Card not found or access denied" });
+        }
+        // Verify group exists and user is a member
+        const group = await Group_1.default.findById(groupId);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+        // Check if user is a member of the group
+        const isMember = group.members.some(memberId => memberId.toString() === senderId);
+        if (!isMember) {
+            return res.status(403).json({ message: "You are not a member of this group" });
+        }
+        // Get sender info
+        const sender = await User_1.default.findById(senderId);
+        if (!sender) {
+            return res.status(404).json({ message: "Sender not found" });
+        }
+        // Check for duplicate - prevent sharing same card to same group twice
+        const existingGroupShare = await GroupSharedCard_1.default.findOne({
+            cardId,
+            senderId,
+            groupId
+        });
+        if (existingGroupShare) {
+            return res.status(409).json({
+                message: "Card already shared to group",
+                error: "You have already sent this card to this group. You can only send a card once to each group."
+            });
+        }
+        // Create group shared card record
+        const groupSharedCard = await GroupSharedCard_1.default.create({
+            cardId,
+            senderId,
+            groupId,
+            message: message || "",
+            cardTitle: card.companyName || card.name || 'Business Card',
+            senderName: sender.name,
+            groupName: group.name
+        });
+        console.log(`📧 Card shared to group: ${sender.name} → ${group.name} (${card.companyName || card.name})`);
+        res.json({
+            success: true,
+            message: "Card shared to group successfully",
+            data: {
+                sharedCardId: groupSharedCard._id,
+                cardTitle: groupSharedCard.cardTitle,
+                groupName: group.name,
+                sentAt: groupSharedCard.sentAt
+            }
+        });
+    }
+    catch (err) {
+        console.error("SHARE CARD TO GROUP ERROR", err);
+        res.status(500).json({ message: "Failed to share card to group" });
+    }
+});
+// GET GROUP SHARED CARDS - Cards shared in a specific group
+r.get("/group/:groupId/shared", async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+        const currentUserId = req.userId;
+        // Verify group exists and user is a member
+        const group = await Group_1.default.findById(groupId);
+        if (!group) {
+            return res.status(404).json({ message: "Group not found" });
+        }
+        // Check if user is a member of the group
+        const isMember = group.members.some(memberId => memberId.toString() === currentUserId);
+        if (!isMember) {
+            return res.status(403).json({ message: "You are not a member of this group" });
+        }
+        // Find all cards shared in this group
+        const groupSharedCards = await GroupSharedCard_1.default.find({ groupId })
+            .populate('cardId', 'companyName name companyPhoto userId')
+            .populate('senderId', 'name profilePicture')
+            .sort({ sentAt: -1 })
+            .lean();
+        // Format the response
+        const formattedCards = groupSharedCards.map((share) => ({
+            _id: share._id,
+            cardId: share.cardId._id,
+            senderId: share.senderId._id,
+            senderName: share.senderName,
+            senderProfilePicture: share.senderId.profilePicture,
+            cardTitle: share.cardTitle,
+            cardPhoto: share.cardId.companyPhoto,
+            sentAt: share.sentAt,
+            message: share.message,
+            isFromMe: share.senderId._id.toString() === currentUserId
+        }));
+        res.json({
+            success: true,
+            data: formattedCards
+        });
+    }
+    catch (err) {
+        console.error("GET GROUP SHARED CARDS ERROR", err);
+        res.status(500).json({ message: "Failed to fetch group shared cards" });
+    }
+});
+// GET GROUP CARDS SUMMARY - Cards sent and received counts for a group (OPTIMIZED)
+r.get("/group/:groupId/summary", async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+        const currentUserId = req.userId;
+        const startTime = Date.now();
+        console.log(`📊 [${currentUserId}] Fetching group cards summary for group: ${groupId}`);
+        // Verify group exists and user is a member (lean query)
+        const group = await Group_1.default.findById(groupId).select('members').lean().exec();
+        if (!group) {
+            return res.status(404).json({ success: false, message: "Group not found" });
+        }
+        // Check if user is a member of the group
+        const isMember = group.members.some((memberId) => memberId.toString() === currentUserId);
+        if (!isMember) {
+            return res.status(403).json({ success: false, message: "You are not a member of this group" });
+        }
+        // Get cards sent and received in parallel for better performance
+        const [sentCards, receivedCards] = await Promise.all([
+            // Cards sent by current user to this group
+            GroupSharedCard_1.default.find({
+                groupId,
+                senderId: currentUserId
+            })
+                .populate('cardId', 'companyName name companyPhoto')
+                .sort({ sentAt: -1 })
+                .lean()
+                .exec(),
+            // Cards received by current user in this group (sent by others)
+            GroupSharedCard_1.default.find({
+                groupId,
+                senderId: { $ne: currentUserId }
+            })
+                .populate('cardId', 'companyName name companyPhoto')
+                .populate('senderId', 'name profilePicture')
+                .sort({ sentAt: -1 })
+                .lean()
+                .exec()
+        ]);
+        // Format sent cards
+        const formattedSentCards = sentCards.map((share) => ({
+            _id: share._id,
+            cardId: share.cardId?._id || share.cardId,
+            cardTitle: share.cardTitle,
+            cardPhoto: share.cardId?.companyPhoto,
+            sentAt: share.sentAt,
+            message: share.message,
+            isFromMe: true
+        }));
+        // Format received cards
+        const formattedReceivedCards = receivedCards.map((share) => ({
+            _id: share._id,
+            cardId: share.cardId?._id || share.cardId,
+            senderId: share.senderId?._id || share.senderId,
+            senderName: share.senderName,
+            senderProfilePicture: share.senderId?.profilePicture,
+            cardTitle: share.cardTitle,
+            cardPhoto: share.cardId?.companyPhoto,
+            sentAt: share.sentAt,
+            message: share.message,
+            isFromMe: false
+        }));
+        const elapsed = Date.now() - startTime;
+        console.log(`✅ [${currentUserId}] Group cards loaded in ${elapsed}ms - ${formattedSentCards.length} sent, ${formattedReceivedCards.length} received`);
+        res.json({
+            success: true,
+            data: {
+                sent: {
+                    count: formattedSentCards.length,
+                    cards: formattedSentCards
+                },
+                received: {
+                    count: formattedReceivedCards.length,
+                    cards: formattedReceivedCards
+                }
+            },
+            meta: {
+                loadTimeMs: elapsed
+            }
+        });
+    }
+    catch (err) {
+        console.error("❌ GET GROUP CARDS SUMMARY ERROR", err);
+        res.status(500).json({ success: false, message: "Failed to fetch group cards summary" });
+    }
+});
+exports.default = r;
