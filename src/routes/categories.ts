@@ -79,10 +79,20 @@ router.post("/custom-service", async (req: Request, res: Response) => {
     });
 
     if (matchingCategory) {
+      // Determine if it matched as a category name or subcategory
+      const isCategory = matchingCategory.name.toLowerCase() === serviceName.toLowerCase();
+      const matchedSub = matchingCategory.subcategories.find(
+        (s: string) => s.toLowerCase() === serviceName.toLowerCase()
+      );
       return res.json({
         success: true,
-        message: "Service already exists in categories",
+        message: isCategory
+          ? `"${serviceName}" already exists as a category`
+          : `"${serviceName}" already exists as a subcategory under "${matchingCategory.name}"`,
         alreadyExists: true,
+        matchedAs: isCategory ? "category" : "subcategory",
+        categoryName: matchingCategory.name,
+        subcategoryName: matchedSub || null,
       });
     }
 
@@ -219,6 +229,12 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
         "Car Repairs & Services", "Taxi & Cab Services", "Towing Services",
         "Transporters & Logistics",
       ],
+      Services: [
+        "Courier Services", "Pest Control", "Security Services",
+        "Cleaning Services", "Laundry & Dry Cleaning", "Catering Services",
+        "Photography Services", "Printing Services", "AC Repair & Services",
+        "Appliance Installation",
+      ],
       Business: [
         "Bulk SMS & Digital Marketing", "Chartered Accountants",
         "Business Consultants", "GST Registration Consultants",
@@ -241,6 +257,7 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
       Education: "🎓",
       Construction: "🔨",
       Automotive: "🚗",
+      Services: "🔧",
       Business: "💼",
     };
 
