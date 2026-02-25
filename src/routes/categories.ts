@@ -226,8 +226,8 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
       ],
       Automotive: [
         "Automobile Dealers", "Car Insurance Agents", "Car Loans & Finance",
-        "Car Repairs & Services", "Taxi & Cab Services", "Towing Services",
-        "Transporters & Logistics",
+        "Car Repairs & Services", "Taxi & Cab Services", "Tempos on Hire",
+        "Towing Services", "Transporters & Logistics",
       ],
       Services: [
         "Courier Services", "Pest Control", "Security Services",
