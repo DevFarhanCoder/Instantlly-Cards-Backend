@@ -1564,7 +1564,67 @@ router.post("/reset-password", async (req, res) => {
 });
 
 // GET /api/users/search-by-phone/:phone - Search user by phone number for carousel messaging
-router.get("/users/search-by-phone/:phone", async (req, res) => {
+// GET /api/users/search?q=query - Search users by name or phone
+router.get("/search", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const query = req.query.q as string;
+
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        users: [],
+      });
+    }
+
+    console.log(`🔍 Searching users with query: ${query}`);
+
+    // Escape special regex characters in the query
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // Search by name (case-insensitive)
+    const nameRegex = new RegExp(escapedQuery, "i");
+
+    // For phone search, try multiple formats
+    const phonePatterns = [
+      escapedQuery, // As is: 9867477227
+      `\\+91${escapedQuery}`, // With +91: +919867477227
+      escapedQuery.replace(/^\\\+91/, ""), // Remove +91 if present
+      escapedQuery.replace(/^91/, ""), // Remove 91 prefix
+    ];
+
+    const users = await User.find({
+      $or: [
+        { name: nameRegex },
+        { phone: { $regex: phonePatterns[0] } },
+        { phone: { $regex: phonePatterns[1] } },
+        { phone: { $regex: phonePatterns[2] } },
+        { phone: { $regex: phonePatterns[3] } },
+      ],
+    })
+      .select("_id name phone")
+      .limit(10)
+      .lean<{ _id: mongoose.Types.ObjectId; name: string; phone: string }[]>();
+
+    console.log(`✅ Found ${users.length} users`);
+
+    res.json({
+      success: true,
+      users: users.map((u) => ({
+        id: u._id.toString(),
+        name: u.name,
+        phone: u.phone,
+      })),
+    });
+  } catch (error) {
+    console.error("SEARCH USERS ERROR", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while searching users",
+    });
+  }
+});
+
+router.get("/search-by-phone/:phone", async (req, res) => {
   try {
     const { phone } = req.params;
 

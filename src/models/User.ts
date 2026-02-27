@@ -65,6 +65,22 @@ const UserSchema = new Schema(
     level: { type: Number, default: 0, min: 0 },
     directCount: { type: Number, default: 0, min: 0 },
     downlineCount: { type: Number, default: 0, min: 0 }, // Total descendants (all levels)
+
+    // Special Credits System - "Sales Target at Special Discount"
+    // Separate from regular MLM credits
+    specialCredits: {
+      balance: { type: Number, default: 0 }, // Current balance of special credits
+      totalReceived: { type: Number, default: 0 }, // Lifetime received
+      totalSent: { type: Number, default: 0 }, // Lifetime sent
+      availableSlots: { type: Number, default: 0 }, // Number of slots (10 for admin, 5 for others)
+      usedSlots: { type: Number, default: 0 }, // Number of used slots
+    },
+
+    // Voucher admin flag
+    isVoucherAdmin: { type: Boolean, default: false },
+
+    // Voucher balance - stored as a count, not as actual documents (for admin)
+    voucherBalance: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
