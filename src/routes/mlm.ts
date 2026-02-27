@@ -4,6 +4,7 @@ import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
 import Voucher from "../models/Voucher";
 import SpecialCredit from "../models/SpecialCredit";
+import VoucherTransferLog from "../models/VoucherTransferLog";
 import { getStructuralCreditPool, MLM_BASE_MRP } from "../utils/mlm";
 import {
   addCredits,
@@ -415,9 +416,10 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     // Check if user is voucher admin
     const user = await User.findById(req.userId).select(
-      "isVoucherAdmin level specialCredits",
+      "isVoucherAdmin level specialCredits voucherBalance",
     );
     const isVoucherAdmin = user?.isVoucherAdmin === true;
+    const userVoucherBalance = (user as any)?.voucherBalance || 0;
 
     // If requesting admin vouchers specifically
     if (source === "admin") {
@@ -479,7 +481,11 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     allVouchers.unshift(specialVoucher);
 
-    res.json({ success: true, vouchers: allVouchers });
+    res.json({
+      success: true,
+      vouchers: allVouchers,
+      voucherBalance: userVoucherBalance,
+    });
   } catch (error) {
     console.error("MLM VOUCHERS ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -866,7 +872,7 @@ router.post(
 
       // Check if user is admin
       const admin = await User.findById(req.userId).select(
-        "isVoucherAdmin level",
+        "isVoucherAdmin level name phone",
       );
       const isAdmin = admin?.isVoucherAdmin || admin?.level === 0;
 
@@ -900,42 +906,32 @@ router.post(
           .json({ success: false, message: "Recipient not found" });
       }
 
-      // Create vouchers for recipient directly (admin transfer doesn't need creditId)
-      const now = new Date();
-      const expiry = new Date(now);
-      expiry.setDate(expiry.getDate() + 365); // 1 year expiry
+      // Increment recipient's voucherBalance (no physical documents created)
+      await User.findByIdAndUpdate(recipient._id, {
+        $inc: { voucherBalance: qty },
+      });
 
-      const voucherDocs = Array.from({ length: qty }).map(() => ({
-        userId: recipient._id,
-        originalOwner: req.userId, // Admin is the original owner
-        voucherNumber: require("uuid")
-          .v4()
-          .replace(/-/g, "")
-          .slice(0, 12)
-          .toUpperCase(),
-        MRP: 1200,
-        issueDate: now,
-        expiryDate: expiry,
-        source: "admin" as const,
-        maxUses: 1,
-        remainingUses: 1,
-        transferredFrom: req.userId, // Track who sent it
-        transferredAt: now, // When it was sent
-        transferHistory: [
-          {
-            from: req.userId,
-            to: recipient._id,
-            transferredAt: now,
-          },
-        ],
-      }));
+      // Deduct from admin's voucherBalance
+      await User.findByIdAndUpdate(req.userId, {
+        $inc: { voucherBalance: -qty },
+      });
 
-      const vouchers = await Voucher.insertMany(voucherDocs);
+      // Save transfer log for history tracking
+      await VoucherTransferLog.create({
+        senderId: req.userId,
+        senderName: (admin as any).name,
+        senderPhone: (admin as any).phone,
+        recipientId: recipient._id,
+        recipientName: recipient.name,
+        recipientPhone: recipient.phone,
+        quantity: qty,
+        transferredAt: new Date(),
+      });
 
       res.json({
         success: true,
-        message: `Created ${qty} voucher${qty > 1 ? "s" : ""} for ${recipient.name}`,
-        vouchers,
+        message: `Transferred ${qty} voucher${qty > 1 ? "s" : ""} to ${recipient.name}`,
+        count: qty,
       });
     } catch (error) {
       console.error("MLM ADMIN VOUCHER TRANSFER ERROR", error);
@@ -969,6 +965,21 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
     })
       .populate("ownerId", "name phone")
       .sort({ sentAt: -1 })
+      .limit(Number(limit))
+      .lean();
+
+    // Get balance-based voucher transfer logs (admin-transfer uses voucherBalance counters)
+    const voucherLogsSent = await VoucherTransferLog.find({
+      senderId: req.userId,
+    })
+      .sort({ transferredAt: -1 })
+      .limit(Number(limit))
+      .lean();
+
+    const voucherLogsReceived = await VoucherTransferLog.find({
+      recipientId: req.userId,
+    })
+      .sort({ transferredAt: -1 })
       .limit(Number(limit))
       .lean();
 
@@ -1100,6 +1111,49 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
     // Convert map to array
     history.vouchers.sent = Array.from(vouchersSentMap.values());
 
+    // Merge balance-based transfer logs into sent/received
+    const VOUCHER_MRP = 1200; // ₹1200 per voucher
+    const logSentEntries = voucherLogsSent.map((log: any) => ({
+      type: "voucher",
+      direction: "sent",
+      voucherNumber: null,
+      voucherNumbers: [],
+      companyName: "Instantlly",
+      amount: VOUCHER_MRP,
+      totalAmount: VOUCHER_MRP * log.quantity,
+      count: log.quantity,
+      recipient: {
+        id: log.recipientId?.toString(),
+        name: log.recipientName,
+        phone: log.recipientPhone,
+      },
+      transferredAt: log.transferredAt,
+      source: "admin-balance",
+    }));
+
+    const logReceivedEntries = voucherLogsReceived.map((log: any) => ({
+      type: "voucher",
+      direction: "received",
+      voucherNumber: null,
+      companyName: "Instantlly",
+      amount: VOUCHER_MRP,
+      totalAmount: VOUCHER_MRP * log.quantity,
+      count: log.quantity,
+      sender: {
+        id: log.senderId?.toString(),
+        name: log.senderName,
+        phone: log.senderPhone,
+      },
+      transferredAt: log.transferredAt,
+      source: "admin-balance",
+    }));
+
+    history.vouchers.sent = [...history.vouchers.sent, ...logSentEntries];
+    history.vouchers.received = [
+      ...history.vouchers.received,
+      ...logReceivedEntries,
+    ];
+
     // Combine and sort all transfers by date
     const allTransfers = [
       ...history.specialCredits.sent,
@@ -1228,7 +1282,7 @@ router.get(
 router.get("/overview", requireAuth, async (req: AuthReq, res) => {
   try {
     const user = await User.findById(req.userId).select(
-      "name phone level directCount downlineCount parentId createdAt isVoucherAdmin specialCredits",
+      "name phone level directCount downlineCount parentId createdAt isVoucherAdmin specialCredits voucherBalance",
     );
 
     if (!user) {
@@ -1268,7 +1322,7 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
       ).length;
 
       specialCreditsData = {
-        vouchersFigure: 122070300,
+        vouchersFigure: (user as any).voucherBalance || 0,
         totalSlots,
         availableSlots,
         usedSlots,
@@ -1289,6 +1343,10 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
         parentId: user.parentId,
         joinedDate: user.createdAt,
         isVoucherAdmin: isVoucherAdmin,
+        specialCredits: (user as any).specialCredits || {
+          availableSlots: 0,
+          usedSlots: 0,
+        },
       },
       wallet,
       creditDashboard,
@@ -1299,6 +1357,10 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
         totalNetworkUsers,
         virtualCommission: discountSummary.virtualCommission || 0, // Discount equivalent
         currentDiscountPercent: discountSummary.discountPercent || 0,
+        // Include vouchersFigure for any user who has a voucherBalance > 0
+        ...((user as any).voucherBalance > 0
+          ? { vouchersFigure: (user as any).voucherBalance }
+          : {}),
       },
       structuralCreditPool,
       baseMrp: MLM_BASE_MRP,
@@ -1846,7 +1908,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     // Get sender
     const sender = await User.findById(req.userId).select(
-      "name phone level isVoucherAdmin specialCredits",
+      "name phone level isVoucherAdmin specialCredits voucherBalance",
     );
 
     if (!sender) {
@@ -1862,17 +1924,19 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     // Non-admin users need at least 5 vouchers to send special credits
     if (!isAdmin) {
-      const voucherCount = await Voucher.countDocuments({
+      const voucherDocCount = await Voucher.countDocuments({
         userId: req.userId,
-        redeemedStatus: { $ne: "redeemed" }, // Count unredeemed vouchers
+        redeemedStatus: { $ne: "redeemed" },
       });
+      const totalVouchers =
+        voucherDocCount + ((sender as any).voucherBalance || 0);
 
-      if (voucherCount < 5) {
+      if (totalVouchers < 5) {
         return res.status(403).json({
           success: false,
-          message: `You need at least 5 vouchers to send special credits. Current vouchers: ${voucherCount}`,
+          message: `You need at least 5 vouchers to send special credits. Current vouchers: ${totalVouchers}`,
           requiredVouchers: 5,
-          currentVouchers: voucherCount,
+          currentVouchers: totalVouchers,
         });
       }
     }
@@ -1915,8 +1979,23 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Find recipient by phone
-    const recipient = await User.findOne({ phone: recipientPhone });
+    // Find recipient by phone - try multiple formats
+    const phonePatterns = [
+      recipientPhone, // As is
+      `+91${recipientPhone}`, // With +91
+      recipientPhone.replace(/^\+91/, ""), // Remove +91 if present
+      recipientPhone.replace(/^91/, ""), // Remove 91 prefix
+    ];
+
+    const recipient = await User.findOne({
+      $or: [
+        { phone: phonePatterns[0] },
+        { phone: phonePatterns[1] },
+        { phone: phonePatterns[2] },
+        { phone: phonePatterns[3] },
+      ],
+    });
+
     if (!recipient) {
       return res.status(404).json({
         success: false,
@@ -1984,12 +2063,15 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     await recipient.save();
 
-    // Create 5 slots for recipient (divided by 5)
-    const recipientLevel = recipient.level;
-    const recipientCreditAmount = getSpecialCreditsForLevel(recipientLevel);
+    // Add credits to recipient's WALLET
+    await addCredits(recipient._id.toString(), slot.creditAmount);
 
-    // Create slots for recipient
+    // Create 5 slots for recipient with EQUAL amounts
+    // Each slot gets: (received amount) / 5
+    const recipientLevel = recipient.level;
     const recipientSlots = [];
+    const slotCreditAmount = slot.creditAmount / 5; // Divide equally among 5 slots
+
     for (let i = 1; i <= 5; i++) {
       const existingSlot = await SpecialCredit.findOne({
         ownerId: recipient._id,
@@ -2000,7 +2082,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
         const newSlot = await SpecialCredit.create({
           ownerId: recipient._id,
           slotNumber: i,
-          creditAmount: recipientCreditAmount,
+          creditAmount: slotCreditAmount, // All slots get the same amount
           status: "available",
           level: recipientLevel,
           sourceSlotId: slot._id,
@@ -2030,7 +2112,11 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
           sentAt: slot.sentAt,
         },
         recipientSlotsCreated: recipientSlots.length,
-        recipientCreditPerSlot: recipientCreditAmount,
+        recipientSlotAmount: slotCreditAmount,
+        recipientSlots: recipientSlots.map((s) => ({
+          slotNumber: s.slotNumber,
+          creditAmount: s.creditAmount,
+        })),
       },
     });
   } catch (error) {
@@ -2046,7 +2132,7 @@ router.get(
   async (req: AuthReq, res) => {
     try {
       const user = await User.findById(req.userId).select(
-        "name phone level isVoucherAdmin specialCredits parentId",
+        "name phone level isVoucherAdmin specialCredits parentId voucherBalance",
       );
 
       if (!user) {
@@ -2087,10 +2173,18 @@ router.get(
         .select("name phone level specialCredits")
         .lean();
 
-      // For admin, also provide vouchers figure
+      // Provide vouchers figure for admin and users with special credits
       let vouchersFigure = 0;
       if (isAdmin) {
-        vouchersFigure = 122070300; // Fixed vouchers for admin
+        // Admin uses voucherBalance field (a stored number, not actual documents)
+        vouchersFigure = user.voucherBalance || 0;
+      } else if (user.specialCredits?.availableSlots > 0) {
+        // Regular users with special credits: count physical voucher docs + balance-based transfers
+        const physicalCount = await Voucher.countDocuments({
+          userId: req.userId,
+          redeemedStatus: { $ne: "redeemed" },
+        });
+        vouchersFigure = physicalCount + ((user as any).voucherBalance || 0);
       }
 
       res.json({

@@ -78,6 +78,9 @@ const UserSchema = new Schema(
 
     // Voucher admin flag
     isVoucherAdmin: { type: Boolean, default: false },
+
+    // Voucher balance - stored as a count, not as actual documents (for admin)
+    voucherBalance: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
