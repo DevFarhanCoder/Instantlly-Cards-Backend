@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isValidObjectId } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
@@ -495,6 +496,12 @@ router.post(
       const { voucherId } = req.params;
       const { recipientPhone } = req.body;
 
+      if (!isValidObjectId(voucherId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid voucher id" });
+      }
+
       if (!recipientPhone) {
         return res
           .status(400)
@@ -547,6 +554,9 @@ router.post(
       voucher.source = "transfer";
       voucher.transferredFrom = previousOwner;
       voucher.transferredAt = new Date();
+      if (!Array.isArray(voucher.transferHistory)) {
+        voucher.transferHistory = [];
+      }
       voucher.transferHistory.push({
         from: previousOwner,
         to: recipient._id as any,

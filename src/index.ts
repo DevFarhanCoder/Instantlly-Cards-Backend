@@ -37,6 +37,7 @@ import reviewsRouter from "./routes/reviews";
 import enquiriesRouter from "./routes/enquiries";
 import suggestionsRouter from "./routes/suggestions";
 import locationsRouter from "./routes/locations";
+import categoriesRouter from "./routes/categories";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -70,6 +71,8 @@ const defaultAllowed = [
   "https://instantlly-admin.vercel.app",
   "https://instantllychannelpatneradmin.vercel.app", // Channel Partner Admin
   "https://instantllychannelpatner.vercel.app", // Channel Partner Main
+  "https://www.instantllycards.com", // InstantllyCards main website
+  "https://instantllycards.com", // InstantllyCards main website (no www)
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5500",
@@ -97,7 +100,7 @@ app.use(
         return callback(null, true);
 
       // Otherwise deny
-      return callback(new Error("Not allowed by CORS"));
+      return callback(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -345,6 +348,10 @@ async function startServer() {
     app.use("/api/designer", designerRouter);
     console.log(
       "✅ Mounted /api/designer routes (designer login, requests, uploads)",
+    );
+    app.use("/api/categories", categoriesRouter);
+    console.log(
+      "✅ Mounted /api/categories routes (categories, custom services management)",
     );
 
     // New Review & Enquiry System Routes
