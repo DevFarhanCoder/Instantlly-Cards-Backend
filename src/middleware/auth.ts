@@ -17,7 +17,7 @@ export function requireAuth(req: AuthReq, res: Response, next: NextFunction) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET as string) as any;
     
-    console.log('🔍 Token payload:', { sub: payload.sub, id: payload.id, exp: payload.exp });
+    // console.log('🔍 Token payload:', { sub: payload.sub, id: payload.id, exp: payload.exp });
     
     // Support both user tokens (payload.sub) and admin tokens (payload.id)
     const userId = payload.sub || payload.id;

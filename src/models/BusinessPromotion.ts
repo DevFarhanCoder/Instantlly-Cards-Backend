@@ -59,6 +59,13 @@ const BusinessPromotionSchema = new Schema(
       default: 'free',
       index: true
     },
+    // User-selected intent before activation/payment is completed
+    listingIntent: {
+      type: String,
+      enum: ['free', 'promoted'],
+      default: 'free',
+      index: true
+    },
 
 
     // Form completion status

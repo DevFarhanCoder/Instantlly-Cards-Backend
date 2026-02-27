@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isValidObjectId } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
@@ -774,6 +775,12 @@ router.post(
           message:
             "Cannot transfer special credits voucher. Use the special credits transfer feature instead.",
         });
+      }
+
+      if (!isValidObjectId(voucherId)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid voucher id" });
       }
 
       if (!recipientPhone) {

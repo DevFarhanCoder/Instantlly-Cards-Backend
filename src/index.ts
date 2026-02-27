@@ -31,7 +31,13 @@ import quizRouter from "./routes/quiz";
 import businessPromotionRouter from "./routes/businessPromotion";
 import mlmRouter from "./routes/mlm";
 import businessListing from "./routes/business-listing";
+import promotionPricingRouter from "./routes/promotionPricing";
 import designerRouter from "./routes/designer";
+import reviewsRouter from "./routes/reviews";
+import enquiriesRouter from "./routes/enquiries";
+import suggestionsRouter from "./routes/suggestions";
+import locationsRouter from "./routes/locations";
+import categoriesRouter from "./routes/categories";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
 import { imageCache } from "./services/imageCache";
@@ -65,6 +71,8 @@ const defaultAllowed = [
   "https://instantlly-admin.vercel.app",
   "https://instantllychannelpatneradmin.vercel.app", // Channel Partner Admin
   "https://instantllychannelpatner.vercel.app", // Channel Partner Main
+  "https://www.instantllycards.com", // InstantllyCards main website
+  "https://instantllycards.com", // InstantllyCards main website (no www)
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5500",
@@ -92,7 +100,7 @@ app.use(
         return callback(null, true);
 
       // Otherwise deny
-      return callback(new Error("Not allowed by CORS"));
+      return callback(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -333,9 +341,35 @@ async function startServer() {
     console.log(
       "✅ Mounted /api/business-listing routes (business listing search)",
     );
+    app.use("/api/promotion-pricing", promotionPricingRouter);
+    console.log(
+      "✅ Mounted /api/promotion-pricing routes (pricing catalog & orders)",
+    );
     app.use("/api/designer", designerRouter);
     console.log(
       "✅ Mounted /api/designer routes (designer login, requests, uploads)",
+    );
+    app.use("/api/categories", categoriesRouter);
+    console.log(
+      "✅ Mounted /api/categories routes (categories, custom services management)",
+    );
+
+    // New Review & Enquiry System Routes
+    app.use("/api/reviews", reviewsRouter);
+    console.log(
+      "✅ Mounted /api/reviews routes (review management, stats, moderation)",
+    );
+    app.use("/api/enquiries", enquiriesRouter);
+    console.log(
+      "✅ Mounted /api/enquiries routes (enquiry management, responses, stats)",
+    );
+    app.use("/api/suggestions", suggestionsRouter);
+    console.log(
+      "✅ Mounted /api/suggestions routes (dynamic review suggestions)",
+    );
+    app.use("/api/locations", locationsRouter);
+    console.log(
+      "✅ Mounted /api/locations routes (user location, nearby businesses)",
     );
 
     // Initialize Socket.IO service
