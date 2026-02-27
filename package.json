@@ -3,13 +3,15 @@
   "version": "1.0.3",
   "scripts": {
     "dev": "nodemon src/index.ts",
-    "build": "tsc",
+    "build": "npx tsc",
     "start": "node dist/index.js",
     "check-user": "ts-node src/scripts/check-user.ts",
     "reset-password": "ts-node src/scripts/reset-password.ts",
     "migrate:gridfs": "ts-node src/scripts/migrate-ads-to-gridfs.ts",
     "migrate:gridfs:cleanup": "ts-node src/scripts/migrate-ads-to-gridfs.ts cleanup",
     "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts",
+    "setup-mlm-test": "ts-node src/scripts/setup-mlm-test-data.ts",
+    "cleanup-dummy": "ts-node src/scripts/cleanup-dummy-data.ts",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },
