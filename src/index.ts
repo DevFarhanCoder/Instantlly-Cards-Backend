@@ -31,7 +31,12 @@ import quizRouter from "./routes/quiz";
 import businessPromotionRouter from "./routes/businessPromotion";
 import mlmRouter from "./routes/mlm";
 import businessListing from "./routes/business-listing";
+import promotionPricingRouter from "./routes/promotionPricing";
 import designerRouter from "./routes/designer";
+import reviewsRouter from "./routes/reviews";
+import enquiriesRouter from "./routes/enquiries";
+import suggestionsRouter from "./routes/suggestions";
+import locationsRouter from "./routes/locations";
 import categoriesRouter from "./routes/categories";
 import { SocketService } from "./services/socketService";
 import { gridfsService } from "./services/gridfsService";
@@ -336,6 +341,10 @@ async function startServer() {
     console.log(
       "✅ Mounted /api/business-listing routes (business listing search)",
     );
+    app.use("/api/promotion-pricing", promotionPricingRouter);
+    console.log(
+      "✅ Mounted /api/promotion-pricing routes (pricing catalog & orders)",
+    );
     app.use("/api/designer", designerRouter);
     console.log(
       "✅ Mounted /api/designer routes (designer login, requests, uploads)",
@@ -343,6 +352,24 @@ async function startServer() {
     app.use("/api/categories", categoriesRouter);
     console.log(
       "✅ Mounted /api/categories routes (categories, custom services management)",
+    );
+
+    // New Review & Enquiry System Routes
+    app.use("/api/reviews", reviewsRouter);
+    console.log(
+      "✅ Mounted /api/reviews routes (review management, stats, moderation)",
+    );
+    app.use("/api/enquiries", enquiriesRouter);
+    console.log(
+      "✅ Mounted /api/enquiries routes (enquiry management, responses, stats)",
+    );
+    app.use("/api/suggestions", suggestionsRouter);
+    console.log(
+      "✅ Mounted /api/suggestions routes (dynamic review suggestions)",
+    );
+    app.use("/api/locations", locationsRouter);
+    console.log(
+      "✅ Mounted /api/locations routes (user location, nearby businesses)",
     );
 
     // Initialize Socket.IO service
