@@ -624,7 +624,7 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin specialCredits",
       );
-      const isAdmin = user?.isVoucherAdmin || user?.level === 0;
+      const isAdmin = user?.isVoucherAdmin === true;
 
       const specialVoucher: any = {
         _id: "instantlly-special-credits",
@@ -874,7 +874,7 @@ router.post(
       const admin = await User.findById(req.userId).select(
         "isVoucherAdmin level name phone",
       );
-      const isAdmin = admin?.isVoucherAdmin || admin?.level === 0;
+      const isAdmin = admin?.isVoucherAdmin === true;
 
       if (!isAdmin) {
         return res.status(403).json({
@@ -1300,10 +1300,9 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
     });
     const structuralCreditPool = getStructuralCreditPool(user.level || 1);
 
-    // Add special credits data for voucher admin (isVoucherAdmin flag OR level 0)
+    // Add special credits data for voucher admin (ONLY isVoucherAdmin flag)
     let specialCreditsData = null;
-    const isVoucherAdmin =
-      (user as any).isVoucherAdmin === true || (user as any).level === 0;
+    const isVoucherAdmin = (user as any).isVoucherAdmin === true;
 
     if (isVoucherAdmin) {
       const specialCreditSlots = await SpecialCredit.find({
@@ -1827,10 +1826,10 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
     const slots = await SpecialCredit.find({ ownerId: req.userId })
       .populate("recipientId", "name phone")
       .sort({ slotNumber: 1 })
-      .lean();
+        .lean();
 
     // Calculate expected slots
-    const isAdmin = user.isVoucherAdmin || user.level === 0;
+    const isAdmin = user.isVoucherAdmin === true;
     const expectedSlots = getSlotsForUser(isAdmin);
     const creditAmount = getSpecialCreditsForLevel(user.level || 0);
 
@@ -1920,7 +1919,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     }
 
     // Check slot availability
-    const isAdmin = sender.isVoucherAdmin || sender.level === 0;
+    const isAdmin = sender.isVoucherAdmin === true;
     const maxSlots = getSlotsForUser(isAdmin);
 
     // Non-admin users need at least 5 vouchers to send special credits
@@ -2150,7 +2149,7 @@ router.get(
         .lean();
 
       // Calculate stats
-      const isAdmin = user.isVoucherAdmin || user.level === 0;
+      const isAdmin = user.isVoucherAdmin === true;
       const totalSlots = getSlotsForUser(isAdmin);
       const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
 
@@ -2253,13 +2252,28 @@ router.get(
         .sort({ slotNumber: 1 })
         .lean();
 
-      // Get slots info
+      // Get slots info - Check if user has ANY slots at all
       const allSlots = await SpecialCredit.find({ ownerId: req.userId })
         .sort({ slotNumber: 1 })
         .lean();
 
-      const isAdmin = user.isVoucherAdmin || user.level === 0;
-      const totalSlots = getSlotsForUser(isAdmin);
+      // If user has no slots in database, return empty array
+      // This prevents generating placeholders for users who never received special credits
+      if (allSlots.length === 0) {
+        return res.json({
+          success: true,
+          networkUsers: [],
+          summary: {
+            totalSlots: 0,
+            usedSlots: 0,
+            availableSlots: 0,
+            creditPerSlot: 0,
+          },
+        });
+      }
+
+      const isAdmin = user.isVoucherAdmin === true;
+      const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
       const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
 
       // Format network users
@@ -2272,7 +2286,7 @@ router.get(
         recipientLevel: slot.recipientId?.level || 0,
       }));
 
-      // Add placeholders for unused slots
+      // Add placeholders for unused slots (only if user actually has slots)
       const placeholders = [];
       for (let i = 1; i <= totalSlots; i++) {
         const existingSlot = allSlots.find((s: any) => s.slotNumber === i);
