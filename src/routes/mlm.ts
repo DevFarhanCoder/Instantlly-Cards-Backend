@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { isValidObjectId } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
@@ -777,12 +776,6 @@ router.post(
         });
       }
 
-      if (!isValidObjectId(voucherId)) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid voucher id" });
-      }
-
       if (!recipientPhone) {
         return res
           .status(400)
@@ -1307,9 +1300,10 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
     });
     const structuralCreditPool = getStructuralCreditPool(user.level || 1);
 
-    // Add special credits data for voucher admin
+    // Add special credits data for voucher admin (isVoucherAdmin flag OR level 0)
     let specialCreditsData = null;
-    const isVoucherAdmin = (user as any).isVoucherAdmin === true;
+    const isVoucherAdmin =
+      (user as any).isVoucherAdmin === true || (user as any).level === 0;
 
     if (isVoucherAdmin) {
       const specialCreditSlots = await SpecialCredit.find({
@@ -1697,16 +1691,16 @@ router.post("/admin/mlm-transfer", async (req, res) => {
 
 // Credit calculation per level (divides by 5 each level)
 const SPECIAL_CREDIT_CHAIN = [
-  14648436000, // Level 0 (Admin)
-  2929686000, // Level 1
-  585936000, // Level 2
-  117186000, // Level 3
-  23436000, // Level 4
-  4686000, // Level 5
-  936000, // Level 6
-  186000, // Level 7
-  36000, // Level 8
-  6000, // Level 9
+  29296872000, // Level 0 (Admin) - 10 slots
+  5859372000, // Level 1 - After sending 5 slots with equal division
+  1171872000, // Level 2
+  234372000, // Level 3
+  46872000, // Level 4
+  9372000, // Level 5
+  1872000, // Level 6
+  372000, // Level 7
+  72000, // Level 8
+  12000, // Level 9
 ];
 
 // Calculate credits for a given level
