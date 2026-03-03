@@ -625,7 +625,7 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin specialCredits",
       );
-      const isAdmin = user?.isVoucherAdmin || user?.level === 0;
+      const isAdmin = user?.isVoucherAdmin === true;
 
       const specialVoucher: any = {
         _id: "instantlly-special-credits",
@@ -881,7 +881,7 @@ router.post(
       const admin = await User.findById(req.userId).select(
         "isVoucherAdmin level name phone",
       );
-      const isAdmin = admin?.isVoucherAdmin || admin?.level === 0;
+      const isAdmin = admin?.isVoucherAdmin === true;
 
       if (!isAdmin) {
         return res.status(403).json({
@@ -1715,9 +1715,9 @@ function getSpecialCreditsForLevel(level: number): number {
   return SPECIAL_CREDIT_CHAIN[level];
 }
 
-// Get number of slots for user (10 for admin, 5 for others)
+// Get number of slots for user (30 for admin, 5 for others)
 function getSlotsForUser(isAdmin: boolean): number {
-  return isAdmin ? 10 : 5;
+  return isAdmin ? 30 : 5;
 }
 
 // ✅ Initialize Admin's Special Credit Slots
@@ -1760,11 +1760,11 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
         balance: 0,
         totalReceived: 0,
         totalSent: 0,
-        availableSlots: 10,
+        availableSlots: 30,
         usedSlots: 0,
       };
     } else {
-      admin.specialCredits.availableSlots = 10;
+      admin.specialCredits.availableSlots = 30;
     }
 
     await admin.save();
@@ -1774,19 +1774,20 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
       ownerId: adminUserId,
     });
 
-    if (existingSlots >= 10) {
+    if (existingSlots >= 30) {
       return res.json({
         success: true,
-        message: "Admin already has special credit slots initialized",
+        message: "Admin already has 30 special credit slots initialized",
         slots: existingSlots,
       });
     }
 
-    // Create 10 slots for admin
+    // Create/extend to 30 slots for admin
     const slots = [];
-    const adminCreditAmount = getSpecialCreditsForLevel(0); // 14,648,436,000
+    const adminCreditAmount = getSpecialCreditsForLevel(0); // 29,296,872,000
+    const startFrom = existingSlots + 1;
 
-    for (let i = 1; i <= 10; i++) {
+    for (let i = startFrom; i <= 30; i++) {
       const slot = await SpecialCredit.create({
         ownerId: adminUserId,
         slotNumber: i,
@@ -1836,7 +1837,7 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
       .lean();
 
     // Calculate expected slots
-    const isAdmin = user.isVoucherAdmin || user.level === 0;
+    const isAdmin = user.isVoucherAdmin === true;
     const expectedSlots = getSlotsForUser(isAdmin);
     const creditAmount = getSpecialCreditsForLevel(user.level || 0);
 
@@ -1926,7 +1927,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     }
 
     // Check slot availability
-    const isAdmin = sender.isVoucherAdmin || sender.level === 0;
+    const isAdmin = sender.isVoucherAdmin === true;
     const maxSlots = getSlotsForUser(isAdmin);
 
     // Non-admin users need at least 5 vouchers to send special credits
@@ -2024,6 +2025,8 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     slot.recipientName = recipient.name;
     slot.recipientPhone = recipient.phone;
     slot.sentAt = new Date();
+    // Auto-refund if recipient doesn't collect required vouchers within 1 hour
+    slot.expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     await slot.save();
 
     // Update sender's special credits stats
@@ -2156,7 +2159,7 @@ router.get(
         .lean();
 
       // Calculate stats
-      const isAdmin = user.isVoucherAdmin || user.level === 0;
+      const isAdmin = user.isVoucherAdmin === true;
       const totalSlots = getSlotsForUser(isAdmin);
       const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
 
@@ -2259,13 +2262,28 @@ router.get(
         .sort({ slotNumber: 1 })
         .lean();
 
-      // Get slots info
+      // Get slots info - Check if user has ANY slots at all
       const allSlots = await SpecialCredit.find({ ownerId: req.userId })
         .sort({ slotNumber: 1 })
         .lean();
 
-      const isAdmin = user.isVoucherAdmin || user.level === 0;
-      const totalSlots = getSlotsForUser(isAdmin);
+      // If user has no slots in database, return empty array
+      // This prevents generating placeholders for users who never received special credits
+      if (allSlots.length === 0) {
+        return res.json({
+          success: true,
+          networkUsers: [],
+          summary: {
+            totalSlots: 0,
+            usedSlots: 0,
+            availableSlots: 0,
+            creditPerSlot: 0,
+          },
+        });
+      }
+
+      const isAdmin = user.isVoucherAdmin === true;
+      const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
       const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
 
       // Format network users
@@ -2278,7 +2296,7 @@ router.get(
         recipientLevel: slot.recipientId?.level || 0,
       }));
 
-      // Add placeholders for unused slots
+      // Add placeholders for unused slots (only if user actually has slots)
       const placeholders = [];
       for (let i = 1; i <= totalSlots; i++) {
         const existingSlot = allSlots.find((s: any) => s.slotNumber === i);
@@ -2313,5 +2331,156 @@ router.get(
     }
   },
 );
+
+// ============================================
+// AUTO-REFUND SCHEDULER
+// Checks every 5 minutes for expired special-credit slots.
+// If recipient hasn't collected required vouchers, credits are refunded.
+// ============================================
+
+export function startAutoRefundScheduler(): void {
+  const CHECK_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+
+  const runCheck = async () => {
+    try {
+      const now = new Date();
+
+      // Find sent slots whose 1-hour window has expired
+      const expiredSlots = await SpecialCredit.find({
+        status: "sent",
+        expiresAt: { $lt: now },
+      })
+        .populate("ownerId", "name phone specialCredits")
+        .populate("recipientId", "name phone specialCredits voucherBalance")
+        .lean();
+
+      if (expiredSlots.length === 0) return;
+
+      console.log(
+        `⏰ Auto-refund check: ${expiredSlots.length} expired slot(s) to evaluate`,
+      );
+
+      for (const slotDoc of expiredSlots as any[]) {
+        try {
+          const recipient = await User.findById(slotDoc.recipientId?._id);
+          if (!recipient) {
+            // Recipient deleted — just expire the slot
+            await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
+              status: "expired",
+            });
+            continue;
+          }
+
+          // Count physical unredeemed vouchers + voucherBalance counter
+          const physicalCount = await Voucher.countDocuments({
+            userId: recipient._id,
+            redeemedStatus: { $ne: "redeemed" },
+          });
+          const totalVouchers =
+            physicalCount + ((recipient as any).voucherBalance || 0);
+
+          // Default minimum vouchers required: 5 (can be overridden per voucher)
+          const minRequired = 5;
+
+          if (totalVouchers >= minRequired) {
+            // ✅ User has enough vouchers — extend expiry far out so we don't re-check
+            await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
+              expiresAt: new Date(
+                Date.now() + 365 * 24 * 60 * 60 * 1000,
+              ),
+            });
+            console.log(
+              `✅ Slot ${slotDoc.slotNumber} for ${recipient.name}: vouchers satisfied (${totalVouchers}/${minRequired})`,
+            );
+            continue;
+          }
+
+          // ❌ Not enough vouchers — revert the slot and refund credits
+          console.log(
+            `⚠️ Auto-refunding slot ${slotDoc.slotNumber}: ${recipient.name} has ${totalVouchers}/${minRequired} vouchers`,
+          );
+
+          // Reset the slot to available
+          await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
+            status: "available",
+            recipientId: null,
+            recipientName: null,
+            recipientPhone: null,
+            sentAt: null,
+            expiresAt: null,
+          });
+
+          // Deduct credits from recipient's special-credits balance
+          if (recipient.specialCredits) {
+            const newBalance = Math.max(
+              0,
+              (recipient.specialCredits.balance || 0) - slotDoc.creditAmount,
+            );
+            const newReceived = Math.max(
+              0,
+              (recipient.specialCredits.totalReceived || 0) -
+                slotDoc.creditAmount,
+            );
+            const newSlots = Math.max(
+              0,
+              (recipient.specialCredits.availableSlots || 0) - 5,
+            );
+            await User.findByIdAndUpdate(recipient._id, {
+              "specialCredits.balance": newBalance,
+              "specialCredits.totalReceived": newReceived,
+              "specialCredits.availableSlots": newSlots,
+            });
+          }
+
+          // Also deduct from recipient's MLM wallet
+          try {
+            await subtractCredits(
+              recipient._id.toString(),
+              slotDoc.creditAmount,
+            );
+          } catch (_) {
+            /* wallet may already be at 0 */
+          }
+
+          // Remove recipient's 5 sub-slots (the ones sourced from this slot)
+          await SpecialCredit.deleteMany({
+            ownerId: recipient._id,
+            sourceSlotId: slotDoc._id,
+            status: "available",
+          });
+
+          // Restore sender's stats
+          const sender = await User.findById(slotDoc.ownerId?._id);
+          if (sender && sender.specialCredits) {
+            const restoredSent = Math.max(
+              0,
+              (sender.specialCredits.totalSent || 0) - slotDoc.creditAmount,
+            );
+            const restoredUsed = Math.max(
+              0,
+              (sender.specialCredits.usedSlots || 0) - 1,
+            );
+            await User.findByIdAndUpdate(sender._id, {
+              "specialCredits.totalSent": restoredSent,
+              "specialCredits.usedSlots": restoredUsed,
+            });
+          }
+        } catch (innerErr) {
+          console.error(
+            `Auto-refund failed for slot ${slotDoc._id}:`,
+            innerErr,
+          );
+        }
+      }
+    } catch (err) {
+      console.error("Auto-refund scheduler error:", err);
+    }
+  };
+
+  // Run immediately on startup, then repeat every 5 minutes
+  setTimeout(runCheck, 30_000); // first run 30s after startup
+  setInterval(runCheck, CHECK_INTERVAL_MS);
+  console.log("✅ MLM Auto-refund scheduler started (5-min interval)");
+}
 
 export default router;

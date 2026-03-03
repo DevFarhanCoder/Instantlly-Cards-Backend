@@ -17,6 +17,7 @@ import DesignerUpload from "../models/DesignerUpload";
 import DesignRequest from "../models/DesignRequest";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { movePendingToApproved } from "../services/s3Service";
+import SpecialCredit from "../models/SpecialCredit";
 
 const router = express.Router();
 
@@ -1240,6 +1241,103 @@ router.post(
   },
 );
 
+// PUT /api/admin/users/:userId/update-vouchers — Admin update user's voucherBalance directly
+router.put(
+  "/users/:userId/update-vouchers",
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const { voucherBalance, reason } = req.body;
+
+      if (voucherBalance === undefined || voucherBalance === null || Number(voucherBalance) < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "voucherBalance must be 0 or greater",
+        });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      const oldBalance = (user as any).voucherBalance || 0;
+      const newBalance = parseInt(String(voucherBalance));
+      const diff = newBalance - oldBalance;
+
+      user.set({ voucherBalance: newBalance });
+      await user.save();
+
+      try {
+        const io = (global as any).io;
+        if (io) {
+          io.emit(`vouchers_updated_${userId}`, {
+            userId,
+            oldBalance,
+            newBalance,
+            diff,
+            timestamp: new Date(),
+          });
+        }
+      } catch (_) {}
+
+      res.json({
+        success: true,
+        message: `Voucher balance updated from ${oldBalance} to ${newBalance}`,
+        user: {
+          id: user._id,
+          name: user.name,
+          phone: user.phone,
+          oldVoucherBalance: oldBalance,
+          newVoucherBalance: newBalance,
+          diff,
+          reason: reason || null,
+        },
+      });
+    } catch (error) {
+      console.error("Error updating voucher balance:", error);
+      res.status(500).json({ success: false, message: "Failed to update voucher balance" });
+    }
+  },
+);
+
+// GET /api/admin/users/by-phone/:phone — Look up a user by phone number
+router.get(
+  "/users/by-phone/:phone",
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const rawPhone = decodeURIComponent(req.params.phone);
+      const clean = rawPhone.replace(/^\+91/, "").replace(/^91/, "");
+      const patterns = [rawPhone, `+91${clean}`, clean];
+
+      const user = await User.findOne({ phone: { $in: patterns } }).select(
+        "name phone credits voucherBalance isVoucherAdmin specialCredits createdAt",
+      );
+
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      res.json({
+        success: true,
+        user: {
+          _id: user._id,
+          name: user.name,
+          phone: user.phone,
+          credits: (user as any).credits || 0,
+          voucherBalance: (user as any).voucherBalance || 0,
+          isVoucherAdmin: (user as any).isVoucherAdmin || false,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching user by phone:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch user" });
+    }
+  },
+);
+
 // Edit Application Info (Name & Phone)
 router.put(
   "/applications/:id/edit",
@@ -1793,6 +1891,7 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
       description,
       expiryDate,
       isPublished = false,
+      minVouchersRequired,
     } = req.body;
 
     console.log(`ðŸ“ Admin creating voucher template`);
@@ -1836,6 +1935,7 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
       createdByAdmin: null,
       source: "admin",
       redeemedStatus: "unredeemed",
+      minVouchersRequired: minVouchersRequired !== undefined ? parseInt(String(minVouchersRequired)) : 5,
     });
 
     console.log(`âœ… Voucher template created: ${voucher.voucherNumber}`);
@@ -1868,7 +1968,11 @@ router.get("/vouchers", adminAuth, async (req: Request, res: Response) => {
   try {
     const { isPublished, limit = 50, skip = 0 } = req.query;
 
-    const filter: any = { source: "admin" };
+    // Admin templates = vouchers with no userId (not user-specific copies)
+    // Also include source:"admin" to catch both old and new templates
+    const filter: any = {
+      $or: [{ userId: { $exists: false } }, { userId: null }, { source: "admin" }],
+    };
     if (isPublished !== undefined) {
       filter.isPublished = isPublished === "true";
     }
@@ -1895,6 +1999,7 @@ router.get("/vouchers", adminAuth, async (req: Request, res: Response) => {
         validity: v.validity,
         voucherImage: v.voucherImage,
         description: v.description,
+        minVouchersRequired: (v as any).minVouchersRequired ?? 5,
         isPublished: v.isPublished,
         publishedAt: v.publishedAt,
         expiryDate: v.expiryDate,
@@ -2059,5 +2164,127 @@ router.delete(
   },
 );
 
-export default router;
 
+// 
+// PER-VOUCHER MLM SLOT MANAGEMENT  (all protected by adminAuth)
+// 
+
+const SPECIAL_CREDIT_CHAIN_ADMIN = [
+  29296872000, 5859372000, 1171872000, 234372000,
+  46872000, 9372000, 1872000, 372000, 72000, 12000,
+];
+
+// GET /api/admin/mlm/slots?voucherId=xxx
+router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { voucherId, userId } = req.query;
+    let targetUser: any = userId
+      ? await User.findById(userId as string).select("name phone level isVoucherAdmin specialCredits").lean()
+      : await User.findOne({ isVoucherAdmin: true }).select("name phone level isVoucherAdmin specialCredits").lean();
+
+    if (!targetUser) {
+      return res.json({ success: true, slots: [], summary: { totalSlots: 0, availableSlots: 0, usedSlots: 0, creditPerSlot: SPECIAL_CREDIT_CHAIN_ADMIN[0] }, message: "No admin user found." });
+    }
+
+    const query: any = { ownerId: (targetUser as any)._id };
+    if (voucherId) query.voucherId = voucherId;
+
+    const slots = await SpecialCredit.find(query).populate("recipientId", "name phone").sort({ slotNumber: 1 }).lean();
+    const creditPerSlot = SPECIAL_CREDIT_CHAIN_ADMIN[(targetUser as any).level || 0] || SPECIAL_CREDIT_CHAIN_ADMIN[0];
+
+    const formattedSlots = (slots as any[]).map((s) => ({
+      slotNumber: s.slotNumber,
+      status: s.status,
+      creditAmount: s.creditAmount,
+      recipientName: s.recipientName || null,
+      recipientPhone: s.recipientPhone || null,
+      recipientId: s.recipientId?._id?.toString() || null,
+      sentAt: s.sentAt || null,
+      expiresAt: s.expiresAt || null,
+      isAvailable: s.status === "available",
+    }));
+
+    res.json({
+      success: true,
+      user: { id: (targetUser as any)._id, name: (targetUser as any).name, phone: (targetUser as any).phone },
+      slots: formattedSlots,
+      summary: { totalSlots: formattedSlots.length, availableSlots: formattedSlots.filter((s) => s.isAvailable).length, usedSlots: formattedSlots.filter((s) => !s.isAvailable).length, creditPerSlot },
+    });
+  } catch (error) {
+    console.error("ADMIN MLM SLOTS ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// POST /api/admin/mlm/slots/initialize  Body: { adminUserId, voucherId }
+router.post("/mlm/slots/initialize", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { adminUserId, voucherId } = req.body;
+    if (!adminUserId || !voucherId) return res.status(400).json({ success: false, message: "adminUserId and voucherId are required" });
+
+    const admin = await User.findById(adminUserId);
+    if (!admin) return res.status(404).json({ success: false, message: "Admin user not found" });
+
+    const voucher = await Voucher.findById(voucherId).lean();
+    if (!voucher) return res.status(404).json({ success: false, message: "Voucher not found" });
+
+    admin.isVoucherAdmin = true;
+    if (!admin.specialCredits) {
+      admin.specialCredits = { balance: 0, totalReceived: 0, totalSent: 0, availableSlots: 30, usedSlots: 0 };
+    } else {
+      admin.specialCredits.availableSlots = 30;
+    }
+    await admin.save();
+
+    const existingCount = await SpecialCredit.countDocuments({ ownerId: adminUserId, voucherId });
+    if (existingCount >= 30) {
+      return res.json({ success: true, message: `Admin already has 30 slots for ${(voucher as any).companyName}`, slots: existingCount });
+    }
+
+    const creditAmount = SPECIAL_CREDIT_CHAIN_ADMIN[0];
+    const toCreate = [];
+    for (let i = existingCount + 1; i <= 30; i++) {
+      toCreate.push({ ownerId: adminUserId, voucherId, slotNumber: i, creditAmount, status: "available", level: 0 });
+    }
+    await SpecialCredit.insertMany(toCreate);
+
+    res.json({ success: true, message: `${toCreate.length} slots initialized for ${(voucher as any).companyName}`, slotsCreated: toCreate.length, totalSlots: 30, creditPerSlot: creditAmount });
+  } catch (error) {
+    console.error("ADMIN MLM SLOTS INIT ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// POST /api/admin/mlm/slots/increase  Body: { voucherId, count, adminUserId? }
+router.post("/mlm/slots/increase", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { voucherId, count, adminUserId } = req.body as { voucherId: string; count: number; adminUserId?: string };
+    if (!voucherId || !count || count < 1) return res.status(400).json({ success: false, message: "voucherId and count (>=1) are required" });
+
+    const voucher = await Voucher.findById(voucherId).lean();
+    if (!voucher) return res.status(404).json({ success: false, message: "Voucher not found" });
+
+    let admin: any = adminUserId
+      ? await User.findById(adminUserId).lean()
+      : await User.findOne({ isVoucherAdmin: true }).lean();
+    if (!admin) return res.status(404).json({ success: false, message: "No admin user found. Initialize slots first." });
+
+    const lastSlot = await SpecialCredit.findOne({ ownerId: admin._id, voucherId }).sort({ slotNumber: -1 }).lean();
+    const startFrom = lastSlot ? (lastSlot as any).slotNumber + 1 : 1;
+    const creditAmount = SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] || SPECIAL_CREDIT_CHAIN_ADMIN[0];
+
+    const newSlots = [];
+    for (let i = startFrom; i < startFrom + count; i++) {
+      newSlots.push({ ownerId: admin._id, voucherId, slotNumber: i, creditAmount, status: "available", level: admin.level || 0 });
+    }
+    await SpecialCredit.insertMany(newSlots);
+    await User.findByIdAndUpdate(admin._id, { $inc: { "specialCredits.availableSlots": count } });
+
+    res.json({ success: true, message: `${count} slot(s) added for ${(voucher as any).companyName}`, slotsAdded: count, totalSlots: startFrom - 1 + count, creditPerSlot: creditAmount });
+  } catch (error) {
+    console.error("ADMIN MLM SLOTS INCREASE ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+export default router;

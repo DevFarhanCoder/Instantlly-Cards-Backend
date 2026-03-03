@@ -46,6 +46,8 @@ const VoucherSchema = new Schema(
     validity: { type: String }, // e.g., "Valid till August 30th, 2026"
     voucherImage: { type: String }, // Main voucher detail image from admin
     description: { type: String },
+    // Minimum vouchers user must collect to unlock/use this voucher's credits
+    minVouchersRequired: { type: Number, default: 5 },
 
     // Publishing status
     isPublished: { type: Boolean, default: false },

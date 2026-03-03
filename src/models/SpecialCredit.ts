@@ -22,12 +22,19 @@ const SpecialCreditSchema = new Schema(
       index: true,
     },
 
-    // Slot number (1-10 for admin, 1-5 for regular users)
+    // Which voucher template this slot belongs to (per-voucher MLM system)
+    voucherId: {
+      type: Schema.Types.ObjectId,
+      ref: "Voucher",
+      index: true,
+    },
+
+    // Slot number (1-30 for admin, 1-5 for regular users)
     slotNumber: {
       type: Number,
       required: true,
       min: 1,
-      max: 10,
+      max: 100,
     },
 
     // Amount of credits in this slot
@@ -76,6 +83,7 @@ const SpecialCreditSchema = new Schema(
 // Compound index for efficient queries
 SpecialCreditSchema.index({ ownerId: 1, slotNumber: 1 });
 SpecialCreditSchema.index({ ownerId: 1, status: 1 });
+SpecialCreditSchema.index({ ownerId: 1, voucherId: 1, slotNumber: 1 });
 
 export default models.SpecialCredit ||
   model("SpecialCredit", SpecialCreditSchema);

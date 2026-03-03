@@ -29,7 +29,7 @@ import creditsRouter from "./routes/credits";
 import feedbackRouter from "./routes/feedback";
 import quizRouter from "./routes/quiz";
 import businessPromotionRouter from "./routes/businessPromotion";
-import mlmRouter from "./routes/mlm";
+import mlmRouter, { startAutoRefundScheduler } from "./routes/mlm";
 import businessListing from "./routes/business-listing";
 import promotionPricingRouter from "./routes/promotionPricing";
 import designerRouter from "./routes/designer";
@@ -402,6 +402,9 @@ async function startServer() {
 
     startMlmScheduler();
     console.log("✅ MLM scheduler started");
+
+    startAutoRefundScheduler();
+    console.log("✅ MLM auto-refund scheduler started");
 
     // Start the server
     const port = process.env.PORT || 3001;
