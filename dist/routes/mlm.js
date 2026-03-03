@@ -422,35 +422,7 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
                 }
                 allVouchers.unshift(sv);
             }
-        }
-        else {
-            // Fallback: hardcoded special voucher (backward compat when no published templates exist)
-            const specialVoucher = {
-                _id: "instantlly-special-credits",
-                voucherNumber: "INSTANTLLY-SPECIAL",
-                companyName: "Instantlly",
-                phoneNumber: "+91 98674 77227",
-                address: "Jogeshwari, Mumbai",
-                title: "Sales Target at Special Discount",
-                description: "",
-                MRP: 100,
-                amount: 100,
-                discountPercentage: 70,
-                issueDate: new Date(),
-                expiryDate: new Date("2026-08-30"),
-                redeemedStatus: "unredeemed",
-                source: "instantlly-special",
-                isSpecialCreditsVoucher: true,
-            };
-            if (isVoucherAdmin && user?.specialCredits?.availableSlots) {
-                specialVoucher.vouchersFigure = 122070300;
-                specialVoucher.specialCredits = {
-                    totalSlots: user.specialCredits.availableSlots,
-                    usedSlots: user.specialCredits.usedSlots || 0,
-                    creditPerSlot: getSpecialCreditsForLevel(user.level || 0),
-                };
-            }
-            allVouchers.unshift(specialVoucher);
+            // No else — if no published templates exist, no special voucher is shown
         }
         res.json({
             success: true,
@@ -621,26 +593,12 @@ router.get("/vouchers/:voucherId", auth_1.requireAuth, async (req, res) => {
                     canContinueToDashboard: true,
                     isAdmin,
                 }
-                : {
-                    // Hardcoded fallback (no published template in DB yet)
-                    _id: "instantlly-special-credits",
-                    voucherNumber: "INSTANTLLY-SPECIAL",
-                    companyName: "Instantlly",
-                    phoneNumber: "+91 98674 77227",
-                    address: "Jogeshwari, Mumbai",
-                    title: "Sales Target at Special Discount",
-                    description: "",
-                    MRP: 1200,
-                    amount: 1200,
-                    discountPercentage: 40,
-                    issueDate: new Date(),
-                    expiryDate: new Date("2027-02-24"),
-                    redeemedStatus: "unredeemed",
-                    source: "instantlly-special",
-                    isSpecialCreditsVoucher: true,
-                    canContinueToDashboard: true,
-                    isAdmin,
-                };
+                : null;
+            if (!specialVoucher) {
+                return res
+                    .status(404)
+                    .json({ success: false, message: "Voucher not found" });
+            }
             // For admin users, add special credits info
             if (isAdmin && user?.specialCredits?.availableSlots) {
                 specialVoucher.vouchersFigure = 122070300; // Show credit amount for admin
