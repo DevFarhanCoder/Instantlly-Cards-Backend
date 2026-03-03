@@ -1882,6 +1882,7 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
     const {
       companyLogo,
       companyName,
+      title,
       phoneNumber,
       address,
       amount,
@@ -1918,6 +1919,7 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
       voucherNumber,
       companyLogo,
       companyName,
+      title,
       phoneNumber,
       address,
       amount: amount || 1200,
@@ -1991,6 +1993,7 @@ router.get("/vouchers", adminAuth, async (req: Request, res: Response) => {
         _id: v._id,
         voucherNumber: v.voucherNumber,
         companyName: v.companyName,
+        title: (v as any).title,
         companyLogo: v.companyLogo,
         phoneNumber: v.phoneNumber,
         address: v.address,
@@ -2126,6 +2129,29 @@ router.post(
       });
     }
   },
+);
+
+/**
+ * POST /api/admin/vouchers/:id/unpublish
+ * Unpublish a voucher template (removes it from users' app)
+ */
+router.post(
+  "/vouchers/:id/unpublish",
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const voucher = await Voucher.findByIdAndUpdate(
+        id,
+        { isPublished: false, publishedAt: null },
+        { new: true }
+      );
+      if (!voucher) return res.status(404).json({ success: false, message: "Voucher not found" });
+      res.json({ success: true, message: "Voucher unpublished", voucher: { id: voucher._id, isPublished: false } });
+    } catch (error) {
+      res.status(500).json({ success: false, message: "Failed to unpublish voucher" });
+    }
+  }
 );
 
 /**

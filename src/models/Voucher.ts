@@ -39,6 +39,7 @@ const VoucherSchema = new Schema(
     // Admin-created voucher template fields
     companyLogo: { type: String }, // URL to logo
     companyName: { type: String, default: "Instantlly" },
+    title: { type: String }, // e.g. "Sales Target at Special Discount"
     phoneNumber: { type: String },
     address: { type: String },
     amount: { type: Number }, // Display amount
