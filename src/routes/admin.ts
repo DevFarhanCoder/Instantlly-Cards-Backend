@@ -131,7 +131,9 @@ router.get("/users", adminAuth, async (req: Request, res: Response) => {
 
     const [users, total] = await Promise.all([
       User.find(searchQuery)
-        .select("name phone profilePicture about createdAt credits")
+        .select(
+          "name phone profilePicture about createdAt credits voucherBalance isVoucherAdmin",
+        )
         .sort(sortQuery)
         .skip(skip)
         .limit(limit),
@@ -2381,12 +2383,10 @@ router.post(
     try {
       const { adminUserId, voucherId } = req.body;
       if (!adminUserId || !voucherId)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "adminUserId and voucherId are required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "adminUserId and voucherId are required",
+        });
 
       const admin = await User.findById(adminUserId);
       if (!admin)
@@ -2466,12 +2466,10 @@ router.post(
         adminUserId?: string;
       };
       if (!voucherId || !count || count < 1)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "voucherId and count (>=1) are required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "voucherId and count (>=1) are required",
+        });
 
       const voucher = await Voucher.findById(voucherId).lean();
       if (!voucher)
@@ -2483,12 +2481,10 @@ router.post(
         ? await User.findById(adminUserId).lean()
         : await User.findOne({ isVoucherAdmin: true }).lean();
       if (!admin)
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message: "No admin user found. Initialize slots first.",
-          });
+        return res.status(404).json({
+          success: false,
+          message: "No admin user found. Initialize slots first.",
+        });
 
       const lastSlot = await SpecialCredit.findOne({
         ownerId: admin._id,
