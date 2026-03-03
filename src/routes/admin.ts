@@ -1962,6 +1962,8 @@ router.post(
 // VOUCHER IMAGE UPLOAD
 // ============================================
 
+import { uploadToS3 } from "../services/s3Service";
+
 const voucherImageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
@@ -1973,13 +1975,13 @@ const voucherImageUpload = multer({
 
 /**
  * POST /api/admin/upload-image
- * Upload a voucher image (logo or voucher image) and return its public URL
+ * Upload a voucher image (logo or voucher image) to S3 and return its public URL
  */
 router.post(
   "/upload-image",
   adminAuth,
   voucherImageUpload.single("image"),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     if (!req.file) {
       return res
         .status(400)
@@ -1987,21 +1989,14 @@ router.post(
     }
     try {
       const ext = path.extname(req.file.originalname) || ".jpg";
-      const filename = `voucher-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-      const uploadDir = path.join(process.cwd(), "uploads", "cards");
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      fs.writeFileSync(path.join(uploadDir, filename), req.file.buffer);
-      const baseUrl =
-        process.env.API_BASE_URL || "https://api.instantllycards.com";
-      const url = `${baseUrl}/uploads/cards/${filename}`;
+      const key = `voucher-images/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+      const { url } = await uploadToS3(req.file.buffer, key, req.file.mimetype);
       return res.json({ success: true, url });
     } catch (err) {
-      console.error("Image upload error:", err);
+      console.error("Voucher image upload error:", err);
       return res
         .status(500)
-        .json({ success: false, message: "Failed to save image" });
+        .json({ success: false, message: "Failed to upload image" });
     }
   },
 );
