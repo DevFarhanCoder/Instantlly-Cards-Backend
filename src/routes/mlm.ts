@@ -473,6 +473,8 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
           _id: template._id,
           voucherNumber: template.voucherNumber,
           companyName: template.companyName,
+          companyLogo: (template as any).companyLogo || null,
+          voucherImage: (template as any).voucherImage || null,
           phoneNumber: (template as any).phoneNumber,
           address: (template as any).address,
           title:
@@ -676,6 +678,8 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
             _id: publishedTemplate._id,
             voucherNumber: publishedTemplate.voucherNumber,
             companyName: publishedTemplate.companyName,
+            companyLogo: (publishedTemplate as any).companyLogo || null,
+            voucherImage: (publishedTemplate as any).voucherImage || null,
             phoneNumber: (publishedTemplate as any).phoneNumber,
             address: (publishedTemplate as any).address,
             title:
