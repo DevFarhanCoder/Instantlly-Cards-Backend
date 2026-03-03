@@ -1962,21 +1962,8 @@ router.post(
 // VOUCHER IMAGE UPLOAD
 // ============================================
 
-const voucherImagesDir = path.join(__dirname, "../../uploads/cards");
-if (!fs.existsSync(voucherImagesDir)) {
-  fs.mkdirSync(voucherImagesDir, { recursive: true });
-}
-
-const voucherImageStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, voucherImagesDir),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `voucher-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
-  },
-});
-
 const voucherImageUpload = multer({
-  storage: voucherImageStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/")) cb(null, true);
@@ -1998,10 +1985,24 @@ router.post(
         .status(400)
         .json({ success: false, message: "No image file provided" });
     }
-    const baseUrl =
-      process.env.API_BASE_URL || "https://api.instantllycards.com";
-    const url = `${baseUrl}/uploads/cards/${req.file.filename}`;
-    return res.json({ success: true, url });
+    try {
+      const ext = path.extname(req.file.originalname) || ".jpg";
+      const filename = `voucher-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+      const uploadDir = path.join(process.cwd(), "uploads", "cards");
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(uploadDir, filename), req.file.buffer);
+      const baseUrl =
+        process.env.API_BASE_URL || "https://api.instantllycards.com";
+      const url = `${baseUrl}/uploads/cards/${filename}`;
+      return res.json({ success: true, url });
+    } catch (err) {
+      console.error("Image upload error:", err);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to save image" });
+    }
   },
 );
 
