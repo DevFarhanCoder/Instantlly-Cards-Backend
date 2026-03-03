@@ -354,9 +354,13 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
         const userVoucherBalance = user?.voucherBalance || 0;
         // If requesting admin vouchers specifically
         if (source === "admin") {
+            // Published null-userId (global) templates are already injected into the
+            // regular response, so we only return user-specific admin-assigned vouchers
+            // here to avoid duplicates on the client.
             const query = {
                 source: "admin",
                 isPublished: true,
+                userId: { $exists: true, $ne: null }, // exclude global templates
             };
             const adminVouchers = await Voucher_1.default.find(query)
                 .sort({ publishedAt: -1 })
@@ -380,7 +384,9 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
         const publishedTemplates = await Voucher_1.default.find({
             isPublished: true,
             $or: [{ userId: { $exists: false } }, { userId: null }],
-        }).sort({ publishedAt: -1 }).lean();
+        })
+            .sort({ publishedAt: -1 })
+            .lean();
         const templatesToShow = publishedTemplates.length > 0 ? publishedTemplates : null;
         if (templatesToShow) {
             // Use DB-managed published templates — reversed so first published appears first
@@ -391,7 +397,9 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
                     companyName: template.companyName,
                     phoneNumber: template.phoneNumber,
                     address: template.address,
-                    title: template.title || template.description || template.companyName,
+                    title: template.title ||
+                        template.description ||
+                        template.companyName,
                     description: template.description,
                     MRP: template.MRP || template.amount,
                     amount: template.amount,
@@ -572,7 +580,9 @@ router.get("/vouchers/:voucherId", auth_1.requireAuth, async (req, res) => {
             publishedTemplate = await Voucher_1.default.findOne({
                 isPublished: true,
                 $or: [{ userId: { $exists: false } }, { userId: null }],
-            }).sort({ publishedAt: -1 }).lean();
+            })
+                .sort({ publishedAt: -1 })
+                .lean();
         }
         else {
             // Try to find a published template by real MongoDB ID
@@ -588,45 +598,49 @@ router.get("/vouchers/:voucherId", auth_1.requireAuth, async (req, res) => {
         if (isLegacyId || publishedTemplate) {
             const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin specialCredits");
             const isAdmin = user?.isVoucherAdmin === true;
-            const specialVoucher = publishedTemplate ? {
-                _id: publishedTemplate._id,
-                voucherNumber: publishedTemplate.voucherNumber,
-                companyName: publishedTemplate.companyName,
-                phoneNumber: publishedTemplate.phoneNumber,
-                address: publishedTemplate.address,
-                title: publishedTemplate.title || publishedTemplate.description || publishedTemplate.companyName,
-                description: publishedTemplate.description,
-                MRP: publishedTemplate.MRP || publishedTemplate.amount,
-                amount: publishedTemplate.amount,
-                discountPercentage: publishedTemplate.discountPercentage,
-                issueDate: publishedTemplate.issueDate || new Date(),
-                expiryDate: publishedTemplate.expiryDate,
-                validity: publishedTemplate.validity,
-                redeemedStatus: "unredeemed",
-                source: "instantlly-special",
-                isSpecialCreditsVoucher: true,
-                canContinueToDashboard: true,
-                isAdmin,
-            } : {
-                // Hardcoded fallback (no published template in DB yet)
-                _id: "instantlly-special-credits",
-                voucherNumber: "INSTANTLLY-SPECIAL",
-                companyName: "Instantlly",
-                phoneNumber: "+91 98674 77227",
-                address: "Jogeshwari, Mumbai",
-                title: "Sales Target at Special Discount",
-                description: "",
-                MRP: 1200,
-                amount: 1200,
-                discountPercentage: 40,
-                issueDate: new Date(),
-                expiryDate: new Date("2027-02-24"),
-                redeemedStatus: "unredeemed",
-                source: "instantlly-special",
-                isSpecialCreditsVoucher: true,
-                canContinueToDashboard: true,
-                isAdmin,
-            };
+            const specialVoucher = publishedTemplate
+                ? {
+                    _id: publishedTemplate._id,
+                    voucherNumber: publishedTemplate.voucherNumber,
+                    companyName: publishedTemplate.companyName,
+                    phoneNumber: publishedTemplate.phoneNumber,
+                    address: publishedTemplate.address,
+                    title: publishedTemplate.title ||
+                        publishedTemplate.description ||
+                        publishedTemplate.companyName,
+                    description: publishedTemplate.description,
+                    MRP: publishedTemplate.MRP || publishedTemplate.amount,
+                    amount: publishedTemplate.amount,
+                    discountPercentage: publishedTemplate.discountPercentage,
+                    issueDate: publishedTemplate.issueDate || new Date(),
+                    expiryDate: publishedTemplate.expiryDate,
+                    validity: publishedTemplate.validity,
+                    redeemedStatus: "unredeemed",
+                    source: "instantlly-special",
+                    isSpecialCreditsVoucher: true,
+                    canContinueToDashboard: true,
+                    isAdmin,
+                }
+                : {
+                    // Hardcoded fallback (no published template in DB yet)
+                    _id: "instantlly-special-credits",
+                    voucherNumber: "INSTANTLLY-SPECIAL",
+                    companyName: "Instantlly",
+                    phoneNumber: "+91 98674 77227",
+                    address: "Jogeshwari, Mumbai",
+                    title: "Sales Target at Special Discount",
+                    description: "",
+                    MRP: 1200,
+                    amount: 1200,
+                    discountPercentage: 40,
+                    issueDate: new Date(),
+                    expiryDate: new Date("2027-02-24"),
+                    redeemedStatus: "unredeemed",
+                    source: "instantlly-special",
+                    isSpecialCreditsVoucher: true,
+                    canContinueToDashboard: true,
+                    isAdmin,
+                };
             // For admin users, add special credits info
             if (isAdmin && user?.specialCredits?.availableSlots) {
                 specialVoucher.vouchersFigure = 122070300; // Show credit amount for admin
