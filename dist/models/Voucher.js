@@ -25,9 +25,19 @@ const VoucherSchema = new mongoose_1.Schema({
     voucherImages: { type: [String], default: [] },
     productVideoLink: { type: String },
     redeemedAt: { type: Date },
+    // Multiple use support
+    maxUses: { type: Number, default: 1 }, // Total number of times voucher can be used
+    remainingUses: { type: Number, default: 1 }, // Remaining uses
+    usageHistory: [
+        {
+            usedAt: { type: Date, default: Date.now },
+            usedBy: { type: mongoose_1.Schema.Types.ObjectId, ref: "User" },
+        },
+    ],
     // Admin-created voucher template fields
     companyLogo: { type: String }, // URL to logo
     companyName: { type: String, default: "Instantlly" },
+    title: { type: String }, // e.g. "Sales Target at Special Discount"
     phoneNumber: { type: String },
     address: { type: String },
     amount: { type: Number }, // Display amount
@@ -35,6 +45,8 @@ const VoucherSchema = new mongoose_1.Schema({
     validity: { type: String }, // e.g., "Valid till August 30th, 2026"
     voucherImage: { type: String }, // Main voucher detail image from admin
     description: { type: String },
+    // Minimum vouchers user must collect to unlock/use this voucher's credits
+    minVouchersRequired: { type: Number, default: 5 },
     // Publishing status
     isPublished: { type: Boolean, default: false },
     publishedAt: { type: Date },

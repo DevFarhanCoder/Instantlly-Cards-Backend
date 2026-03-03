@@ -455,10 +455,12 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
     const publishedTemplates = await Voucher.find({
       isPublished: true,
       $or: [{ userId: { $exists: false } }, { userId: null }],
-    }).sort({ publishedAt: -1 }).lean();
->>>>>>> e6ea153 (feat: replace hardcoded Instantlly voucher with admin-managed DB templates)
+    })
+      .sort({ publishedAt: -1 })
+      .lean();
 
-    const templatesToShow = publishedTemplates.length > 0 ? publishedTemplates : null;
+    const templatesToShow =
+      publishedTemplates.length > 0 ? publishedTemplates : null;
 
     if (templatesToShow) {
       // Use DB-managed published templates — reversed so first published appears first
@@ -469,7 +471,10 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
           companyName: template.companyName,
           phoneNumber: (template as any).phoneNumber,
           address: (template as any).address,
-          title: (template as any).title || template.description || template.companyName,
+          title:
+            (template as any).title ||
+            template.description ||
+            template.companyName,
           description: template.description,
           MRP: template.MRP || template.amount,
           amount: template.amount,
@@ -669,7 +674,9 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
       publishedTemplate = await Voucher.findOne({
         isPublished: true,
         $or: [{ userId: { $exists: false } }, { userId: null }],
-      }).sort({ publishedAt: -1 }).lean();
+      })
+        .sort({ publishedAt: -1 })
+        .lean();
     } else {
       // Try to find a published template by real MongoDB ID
       try {
@@ -687,45 +694,50 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
       );
       const isAdmin = user?.isVoucherAdmin === true;
 
-      const specialVoucher: any = publishedTemplate ? {
-        _id: publishedTemplate._id,
-        voucherNumber: publishedTemplate.voucherNumber,
-        companyName: publishedTemplate.companyName,
-        phoneNumber: (publishedTemplate as any).phoneNumber,
-        address: (publishedTemplate as any).address,
-        title: (publishedTemplate as any).title || publishedTemplate.description || publishedTemplate.companyName,
-        description: publishedTemplate.description,
-        MRP: publishedTemplate.MRP || publishedTemplate.amount,
-        amount: publishedTemplate.amount,
-        discountPercentage: publishedTemplate.discountPercentage,
-        issueDate: publishedTemplate.issueDate || new Date(),
-        expiryDate: publishedTemplate.expiryDate,
-        validity: (publishedTemplate as any).validity,
-        redeemedStatus: "unredeemed",
-        source: "instantlly-special",
-        isSpecialCreditsVoucher: true,
-        canContinueToDashboard: true,
-        isAdmin,
-      } : {
-        // Hardcoded fallback (no published template in DB yet)
-        _id: "instantlly-special-credits",
-        voucherNumber: "INSTANTLLY-SPECIAL",
-        companyName: "Instantlly",
-        phoneNumber: "+91 98674 77227",
-        address: "Jogeshwari, Mumbai",
-        title: "Sales Target at Special Discount",
-        description: "",
-        MRP: 1200,
-        amount: 1200,
-        discountPercentage: 40,
-        issueDate: new Date(),
-        expiryDate: new Date("2027-02-24"),
-        redeemedStatus: "unredeemed",
-        source: "instantlly-special",
-        isSpecialCreditsVoucher: true,
-        canContinueToDashboard: true,
-        isAdmin,
-      };
+      const specialVoucher: any = publishedTemplate
+        ? {
+            _id: publishedTemplate._id,
+            voucherNumber: publishedTemplate.voucherNumber,
+            companyName: publishedTemplate.companyName,
+            phoneNumber: (publishedTemplate as any).phoneNumber,
+            address: (publishedTemplate as any).address,
+            title:
+              (publishedTemplate as any).title ||
+              publishedTemplate.description ||
+              publishedTemplate.companyName,
+            description: publishedTemplate.description,
+            MRP: publishedTemplate.MRP || publishedTemplate.amount,
+            amount: publishedTemplate.amount,
+            discountPercentage: publishedTemplate.discountPercentage,
+            issueDate: publishedTemplate.issueDate || new Date(),
+            expiryDate: publishedTemplate.expiryDate,
+            validity: (publishedTemplate as any).validity,
+            redeemedStatus: "unredeemed",
+            source: "instantlly-special",
+            isSpecialCreditsVoucher: true,
+            canContinueToDashboard: true,
+            isAdmin,
+          }
+        : {
+            // Hardcoded fallback (no published template in DB yet)
+            _id: "instantlly-special-credits",
+            voucherNumber: "INSTANTLLY-SPECIAL",
+            companyName: "Instantlly",
+            phoneNumber: "+91 98674 77227",
+            address: "Jogeshwari, Mumbai",
+            title: "Sales Target at Special Discount",
+            description: "",
+            MRP: 1200,
+            amount: 1200,
+            discountPercentage: 40,
+            issueDate: new Date(),
+            expiryDate: new Date("2027-02-24"),
+            redeemedStatus: "unredeemed",
+            source: "instantlly-special",
+            isSpecialCreditsVoucher: true,
+            canContinueToDashboard: true,
+            isAdmin,
+          };
 
       // For admin users, add special credits info
       if (isAdmin && user?.specialCredits?.availableSlots) {
@@ -2465,9 +2477,7 @@ export function startAutoRefundScheduler(): void {
           if (totalVouchers >= minRequired) {
             // ✅ User has enough vouchers — extend expiry far out so we don't re-check
             await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
-              expiresAt: new Date(
-                Date.now() + 365 * 24 * 60 * 60 * 1000,
-              ),
+              expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
             });
             console.log(
               `✅ Slot ${slotDoc.slotNumber} for ${recipient.name}: vouchers satisfied (${totalVouchers}/${minRequired})`,

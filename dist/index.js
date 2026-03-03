@@ -66,9 +66,14 @@ const credits_1 = __importDefault(require("./routes/credits"));
 const feedback_1 = __importDefault(require("./routes/feedback"));
 const quiz_1 = __importDefault(require("./routes/quiz"));
 const businessPromotion_1 = __importDefault(require("./routes/businessPromotion"));
-const mlm_1 = __importDefault(require("./routes/mlm"));
+const mlm_1 = __importStar(require("./routes/mlm"));
 const business_listing_1 = __importDefault(require("./routes/business-listing"));
+const promotionPricing_1 = __importDefault(require("./routes/promotionPricing"));
 const designer_1 = __importDefault(require("./routes/designer"));
+const reviews_1 = __importDefault(require("./routes/reviews"));
+const enquiries_1 = __importDefault(require("./routes/enquiries"));
+const suggestions_1 = __importDefault(require("./routes/suggestions"));
+const locations_1 = __importDefault(require("./routes/locations"));
 const categories_1 = __importDefault(require("./routes/categories"));
 const socketService_1 = require("./services/socketService");
 const gridfsService_1 = require("./services/gridfsService");
@@ -311,10 +316,21 @@ async function startServer() {
         console.log("✅ Mounted /api/mlm routes (MLM credits, vouchers, commissions)");
         app.use("/api/business-listings", business_listing_1.default);
         console.log("✅ Mounted /api/business-listing routes (business listing search)");
+        app.use("/api/promotion-pricing", promotionPricing_1.default);
+        console.log("✅ Mounted /api/promotion-pricing routes (pricing catalog & orders)");
         app.use("/api/designer", designer_1.default);
         console.log("✅ Mounted /api/designer routes (designer login, requests, uploads)");
         app.use("/api/categories", categories_1.default);
         console.log("✅ Mounted /api/categories routes (categories, custom services management)");
+        // New Review & Enquiry System Routes
+        app.use("/api/reviews", reviews_1.default);
+        console.log("✅ Mounted /api/reviews routes (review management, stats, moderation)");
+        app.use("/api/enquiries", enquiries_1.default);
+        console.log("✅ Mounted /api/enquiries routes (enquiry management, responses, stats)");
+        app.use("/api/suggestions", suggestions_1.default);
+        console.log("✅ Mounted /api/suggestions routes (dynamic review suggestions)");
+        app.use("/api/locations", locations_1.default);
+        console.log("✅ Mounted /api/locations routes (user location, nearby businesses)");
         // Initialize Socket.IO service
         const socketService = new socketService_1.SocketService(io);
         console.log("🔌 Socket.IO service initialized");
@@ -341,6 +357,8 @@ async function startServer() {
         }
         (0, scheduler_1.startMlmScheduler)();
         console.log("✅ MLM scheduler started");
+        (0, mlm_1.startAutoRefundScheduler)();
+        console.log("✅ MLM auto-refund scheduler started");
         // Start the server
         const port = process.env.PORT || 3001;
         server.listen(port, () => {
