@@ -19,7 +19,7 @@ import Designer from "../models/Designer";
 import DesignerUpload from "../models/DesignerUpload";
 import DesignRequest from "../models/DesignRequest";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
-import { movePendingToApproved } from "../services/s3Service";
+import { movePendingToApproved, uploadToS3 } from "../services/s3Service";
 import SpecialCredit from "../models/SpecialCredit";
 
 const router = express.Router();
@@ -1961,8 +1961,6 @@ router.post(
 // ============================================
 // VOUCHER IMAGE UPLOAD
 // ============================================
-
-import { uploadToS3 } from "../services/s3Service";
 
 const voucherImageUpload = multer({
   storage: multer.memoryStorage(),
