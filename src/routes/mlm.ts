@@ -2201,8 +2201,10 @@ router.get(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
+      const { voucherId } = req.query;
+
       const user = await User.findById(req.userId).select(
-        "name phone level isVoucherAdmin specialCredits parentId voucherBalance",
+        "name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances",
       );
 
       if (!user) {
@@ -2212,8 +2214,18 @@ router.get(
         });
       }
 
-      // Get all slots
-      const slots = await SpecialCredit.find({ ownerId: req.userId })
+      // Filter slots by voucherId if provided (per-voucher isolation)
+      const slotQuery: any = { ownerId: req.userId };
+      if (voucherId) {
+        try {
+          slotQuery.voucherId = new mongoose.Types.ObjectId(
+            voucherId as string,
+          );
+        } catch (_) {}
+      }
+
+      // Get slots (filtered by voucher if specified)
+      const slots = await SpecialCredit.find(slotQuery)
         .populate("recipientId", "name phone")
         .sort({ slotNumber: 1 })
         .lean();
@@ -2246,9 +2258,18 @@ router.get(
       // Provide vouchers figure for admin and users with special credits
       let vouchersFigure = 0;
       if (isAdmin) {
-        // Admin uses voucherBalance field (a stored number, not actual documents)
-        vouchersFigure = user.voucherBalance || 0;
-      } else if (user.specialCredits?.availableSlots > 0) {
+        // Per-voucher balance if voucherId provided, else global voucherBalance
+        if (voucherId) {
+          const balMap = (user as any).voucherBalances;
+          if (balMap instanceof Map) {
+            vouchersFigure = balMap.get(String(voucherId)) || 0;
+          } else if (balMap && typeof balMap === "object") {
+            vouchersFigure = (balMap as any)[String(voucherId)] || 0;
+          }
+        } else {
+          vouchersFigure = (user as any).voucherBalance || 0;
+        }
+      } else if ((user as any).specialCredits?.availableSlots > 0) {
         // Regular users with special credits: count physical voucher docs + balance-based transfers
         const physicalCount = await Voucher.countDocuments({
           userId: req.userId,
@@ -2302,6 +2323,8 @@ router.get(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
+      const { voucherId } = req.query;
+
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin",
       );
@@ -2313,17 +2336,25 @@ router.get(
         });
       }
 
+      // Filter by voucherId if provided
+      const sentQuery: any = { ownerId: req.userId, status: "sent" };
+      const allQuery: any = { ownerId: req.userId };
+      if (voucherId) {
+        try {
+          const vid = new mongoose.Types.ObjectId(voucherId as string);
+          sentQuery.voucherId = vid;
+          allQuery.voucherId = vid;
+        } catch (_) {}
+      }
+
       // Get slots with recipients
-      const slots = await SpecialCredit.find({
-        ownerId: req.userId,
-        status: "sent",
-      })
+      const slots = await SpecialCredit.find(sentQuery)
         .populate("recipientId", "name phone level specialCredits")
         .sort({ slotNumber: 1 })
         .lean();
 
       // Get slots info - Check if user has ANY slots at all
-      const allSlots = await SpecialCredit.find({ ownerId: req.userId })
+      const allSlots = await SpecialCredit.find(allQuery)
         .sort({ slotNumber: 1 })
         .lean();
 

@@ -1,6 +1,9 @@
 ﻿// src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import { GridFSBucket } from "mongodb";
 import User from "../models/User";
 import Card from "../models/Card";
@@ -1952,6 +1955,53 @@ router.post(
       console.error("Error sending design to user:", error);
       res.status(500).json({ message: "Failed to send design to user" });
     }
+  },
+);
+
+// ============================================
+// VOUCHER IMAGE UPLOAD
+// ============================================
+
+const voucherImagesDir = path.join(__dirname, "../../uploads/cards");
+if (!fs.existsSync(voucherImagesDir)) {
+  fs.mkdirSync(voucherImagesDir, { recursive: true });
+}
+
+const voucherImageStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, voucherImagesDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `voucher-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+  },
+});
+
+const voucherImageUpload = multer({
+  storage: voucherImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files are allowed"));
+  },
+});
+
+/**
+ * POST /api/admin/upload-image
+ * Upload a voucher image (logo or voucher image) and return its public URL
+ */
+router.post(
+  "/upload-image",
+  adminAuth,
+  voucherImageUpload.single("image"),
+  (req: Request, res: Response) => {
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No image file provided" });
+    }
+    const baseUrl =
+      process.env.API_BASE_URL || "https://api.instantllycards.com";
+    const url = `${baseUrl}/uploads/cards/${req.file.filename}`;
+    return res.json({ success: true, url });
   },
 );
 

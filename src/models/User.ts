@@ -79,8 +79,12 @@ const UserSchema = new Schema(
     // Voucher admin flag
     isVoucherAdmin: { type: Boolean, default: false },
 
-    // Voucher balance - stored as a count, not as actual documents (for admin)
+    // Global voucher balance (legacy / admin-level)
     voucherBalance: { type: Number, default: 0 },
+
+    // Per-voucher balance map: { [voucherId]: count }
+    // Allows each admin-created voucher to have its own independent balance
+    voucherBalances: { type: Map, of: Number, default: {} },
   },
   { timestamps: true },
 );
