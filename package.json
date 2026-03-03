@@ -12,6 +12,11 @@
     "migrate:database": "ts-node src/scripts/migrate-to-new-database.ts",
     "setup-mlm-test": "ts-node src/scripts/setup-mlm-test-data.ts",
     "cleanup-dummy": "ts-node src/scripts/cleanup-dummy-data.ts",
+    "seed:instantlly-voucher": "ts-node src/scripts/seed-instantlly-voucher.ts",
+    "delete:old-instantlly-voucher": "ts-node src/scripts/delete-old-instantlly-voucher.ts",
+    "check-slots": "ts-node src/scripts/check-slots.ts",
+    "migrate:slots": "ts-node src/scripts/migrate-slots-to-new-voucher.ts",
+    "dedup-slots": "ts-node src/scripts/dedup-slots.ts",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },
