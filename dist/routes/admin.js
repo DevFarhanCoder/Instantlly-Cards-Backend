@@ -114,7 +114,7 @@ router.get("/users", adminAuth, async (req, res) => {
         }
         const [users, total] = await Promise.all([
             User_1.default.find(searchQuery)
-                .select("name phone profilePicture about createdAt credits")
+                .select("name phone profilePicture about createdAt credits voucherBalance isVoucherAdmin")
                 .sort(sortQuery)
                 .skip(skip)
                 .limit(limit),
