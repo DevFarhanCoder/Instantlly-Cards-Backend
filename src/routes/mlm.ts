@@ -424,9 +424,13 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     // If requesting admin vouchers specifically
     if (source === "admin") {
+      // Published null-userId (global) templates are already injected into the
+      // regular response, so we only return user-specific admin-assigned vouchers
+      // here to avoid duplicates on the client.
       const query: any = {
         source: "admin",
         isPublished: true,
+        userId: { $exists: true, $ne: null }, // exclude global templates
       };
 
       const adminVouchers = await Voucher.find(query)

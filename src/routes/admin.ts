@@ -2213,7 +2213,8 @@ router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
     }
 
     const query: any = { ownerId: (targetUser as any)._id };
-    if (voucherId) query.voucherId = voucherId;
+    if (voucherId)
+      query.voucherId = new mongoose.Types.ObjectId(voucherId as string);
 
     const slots = await SpecialCredit.find(query).populate("recipientId", "name phone").sort({ slotNumber: 1 }).lean();
     const creditPerSlot = SPECIAL_CREDIT_CHAIN_ADMIN[(targetUser as any).level || 0] || SPECIAL_CREDIT_CHAIN_ADMIN[0];
