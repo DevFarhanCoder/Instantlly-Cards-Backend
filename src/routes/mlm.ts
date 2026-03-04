@@ -2376,7 +2376,10 @@ router.get(
 
       const isAdmin = user.isVoucherAdmin === true;
       const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
-      const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
+      // Use the creditAmount stored on the actual slots (consistent for all slots in this voucher)
+      // Fall back to computed value only if no slots exist yet
+      const creditPerSlot =
+        allSlots[0]?.creditAmount || getSpecialCreditsForLevel(user.level || 0);
 
       // Format network users
       const networkUsers = slots.map((slot: any, index: number) => ({
