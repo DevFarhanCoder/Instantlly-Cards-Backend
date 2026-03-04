@@ -2240,7 +2240,10 @@ router.get(
 
       // Calculate total available credits
       const totalAvailableCredits = availableSlots * creditPerSlot;
-      const totalSentCredits = user.specialCredits?.totalSent || 0;
+      // When filtering by voucherId, compute sent credits from filtered slots only (not global total)
+      const totalSentCredits = voucherId
+        ? usedSlots * creditPerSlot
+        : user.specialCredits?.totalSent || 0;
 
       // Get network users who received special credits from this user
       const recipientIds = slots
