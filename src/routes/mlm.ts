@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { isValidObjectId } from "mongoose";
+import { isValidObjectId, Types } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
@@ -2218,9 +2218,7 @@ router.get(
       const slotQuery: any = { ownerId: req.userId };
       if (voucherId) {
         try {
-          slotQuery.voucherId = new mongoose.Types.ObjectId(
-            voucherId as string,
-          );
+          slotQuery.voucherId = new Types.ObjectId(voucherId as string);
         } catch (_) {}
       }
 
@@ -2341,7 +2339,7 @@ router.get(
       const allQuery: any = { ownerId: req.userId };
       if (voucherId) {
         try {
-          const vid = new mongoose.Types.ObjectId(voucherId as string);
+          const vid = new Types.ObjectId(voucherId as string);
           sentQuery.voucherId = vid;
           allQuery.voucherId = vid;
         } catch (_) {}
