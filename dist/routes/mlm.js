@@ -395,6 +395,8 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
                     _id: template._id,
                     voucherNumber: template.voucherNumber,
                     companyName: template.companyName,
+                    companyLogo: template.companyLogo || null,
+                    voucherImage: template.voucherImage || null,
                     phoneNumber: template.phoneNumber,
                     address: template.address,
                     title: template.title ||
@@ -575,6 +577,8 @@ router.get("/vouchers/:voucherId", auth_1.requireAuth, async (req, res) => {
                     _id: publishedTemplate._id,
                     voucherNumber: publishedTemplate.voucherNumber,
                     companyName: publishedTemplate.companyName,
+                    companyLogo: publishedTemplate.companyLogo || null,
+                    voucherImage: publishedTemplate.voucherImage || null,
                     phoneNumber: publishedTemplate.phoneNumber,
                     address: publishedTemplate.address,
                     title: publishedTemplate.title ||
@@ -1875,15 +1879,24 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
 // ✅ Get Special Credits Dashboard
 router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) => {
     try {
-        const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin specialCredits parentId voucherBalance");
+        const { voucherId } = req.query;
+        const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances");
         if (!user) {
             return res.status(404).json({
                 success: false,
                 message: "User not found",
             });
         }
-        // Get all slots
-        const slots = await SpecialCredit_1.default.find({ ownerId: req.userId })
+        // Filter slots by voucherId if provided (per-voucher isolation)
+        const slotQuery = { ownerId: req.userId };
+        if (voucherId) {
+            try {
+                slotQuery.voucherId = new mongoose_1.Types.ObjectId(voucherId);
+            }
+            catch (_) { }
+        }
+        // Get slots (filtered by voucher if specified)
+        const slots = await SpecialCredit_1.default.find(slotQuery)
             .populate("recipientId", "name phone")
             .sort({ slotNumber: 1 })
             .lean();
@@ -1908,8 +1921,19 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
         // Provide vouchers figure for admin and users with special credits
         let vouchersFigure = 0;
         if (isAdmin) {
-            // Admin uses voucherBalance field (a stored number, not actual documents)
-            vouchersFigure = user.voucherBalance || 0;
+            // Per-voucher balance if voucherId provided, else global voucherBalance
+            if (voucherId) {
+                const balMap = user.voucherBalances;
+                if (balMap instanceof Map) {
+                    vouchersFigure = balMap.get(String(voucherId)) || 0;
+                }
+                else if (balMap && typeof balMap === "object") {
+                    vouchersFigure = balMap[String(voucherId)] || 0;
+                }
+            }
+            else {
+                vouchersFigure = user.voucherBalance || 0;
+            }
         }
         else if (user.specialCredits?.availableSlots > 0) {
             // Regular users with special credits: count physical voucher docs + balance-based transfers
@@ -1960,6 +1984,7 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
 // ✅ Get network users with special credits info (for admin view)
 router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
     try {
+        const { voucherId } = req.query;
         const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin");
         if (!user) {
             return res.status(404).json({
@@ -1967,16 +1992,24 @@ router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
                 message: "User not found",
             });
         }
+        // Filter by voucherId if provided
+        const sentQuery = { ownerId: req.userId, status: "sent" };
+        const allQuery = { ownerId: req.userId };
+        if (voucherId) {
+            try {
+                const vid = new mongoose_1.Types.ObjectId(voucherId);
+                sentQuery.voucherId = vid;
+                allQuery.voucherId = vid;
+            }
+            catch (_) { }
+        }
         // Get slots with recipients
-        const slots = await SpecialCredit_1.default.find({
-            ownerId: req.userId,
-            status: "sent",
-        })
+        const slots = await SpecialCredit_1.default.find(sentQuery)
             .populate("recipientId", "name phone level specialCredits")
             .sort({ slotNumber: 1 })
             .lean();
         // Get slots info - Check if user has ANY slots at all
-        const allSlots = await SpecialCredit_1.default.find({ ownerId: req.userId })
+        const allSlots = await SpecialCredit_1.default.find(allQuery)
             .sort({ slotNumber: 1 })
             .lean();
         // If user has no slots in database, return empty array

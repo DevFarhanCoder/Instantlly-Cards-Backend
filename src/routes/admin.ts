@@ -1,6 +1,9 @@
 ﻿// src/routes/admin.ts
 import express, { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import { GridFSBucket } from "mongodb";
 import User from "../models/User";
 import Card from "../models/Card";
@@ -16,7 +19,7 @@ import Designer from "../models/Designer";
 import DesignerUpload from "../models/DesignerUpload";
 import DesignRequest from "../models/DesignRequest";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
-import { movePendingToApproved } from "../services/s3Service";
+import { movePendingToApproved, uploadToS3 } from "../services/s3Service";
 import SpecialCredit from "../models/SpecialCredit";
 
 const router = express.Router();
@@ -1951,6 +1954,47 @@ router.post(
     } catch (error) {
       console.error("Error sending design to user:", error);
       res.status(500).json({ message: "Failed to send design to user" });
+    }
+  },
+);
+
+// ============================================
+// VOUCHER IMAGE UPLOAD
+// ============================================
+
+const voucherImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files are allowed"));
+  },
+});
+
+/**
+ * POST /api/admin/upload-image
+ * Upload a voucher image (logo or voucher image) to S3 and return its public URL
+ */
+router.post(
+  "/upload-image",
+  adminAuth,
+  voucherImageUpload.single("image"),
+  async (req: Request, res: Response) => {
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No image file provided" });
+    }
+    try {
+      const ext = path.extname(req.file.originalname) || ".jpg";
+      const key = `voucher-images/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+      const { url } = await uploadToS3(req.file.buffer, key, req.file.mimetype);
+      return res.json({ success: true, url });
+    } catch (err) {
+      console.error("Voucher image upload error:", err);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to upload image" });
     }
   },
 );

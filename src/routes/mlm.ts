@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { isValidObjectId } from "mongoose";
+import { isValidObjectId, Types } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
@@ -473,6 +473,8 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
           _id: template._id,
           voucherNumber: template.voucherNumber,
           companyName: template.companyName,
+          companyLogo: (template as any).companyLogo || null,
+          voucherImage: (template as any).voucherImage || null,
           phoneNumber: (template as any).phoneNumber,
           address: (template as any).address,
           title:
@@ -676,6 +678,8 @@ router.get("/vouchers/:voucherId", requireAuth, async (req: AuthReq, res) => {
             _id: publishedTemplate._id,
             voucherNumber: publishedTemplate.voucherNumber,
             companyName: publishedTemplate.companyName,
+            companyLogo: (publishedTemplate as any).companyLogo || null,
+            voucherImage: (publishedTemplate as any).voucherImage || null,
             phoneNumber: (publishedTemplate as any).phoneNumber,
             address: (publishedTemplate as any).address,
             title:
@@ -1308,8 +1312,14 @@ router.get("/network/direct-buyers", requireAuth, async (req: AuthReq, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
     const skip = Number(req.query.skip) || 0;
+    const voucherId = req.query.voucherId as string | undefined;
 
-    const buyers = await getDirectBuyers(req.userId as string, limit, skip);
+    const buyers = await getDirectBuyers(
+      req.userId as string,
+      limit,
+      skip,
+      voucherId,
+    );
     res.json({ success: true, buyers });
   } catch (error) {
     console.error("MLM DIRECT BUYERS ERROR", error);
@@ -2197,8 +2207,10 @@ router.get(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
+      const { voucherId } = req.query;
+
       const user = await User.findById(req.userId).select(
-        "name phone level isVoucherAdmin specialCredits parentId voucherBalance",
+        "name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances",
       );
 
       if (!user) {
@@ -2208,8 +2220,16 @@ router.get(
         });
       }
 
-      // Get all slots
-      const slots = await SpecialCredit.find({ ownerId: req.userId })
+      // Filter slots by voucherId if provided (per-voucher isolation)
+      const slotQuery: any = { ownerId: req.userId };
+      if (voucherId) {
+        try {
+          slotQuery.voucherId = new Types.ObjectId(voucherId as string);
+        } catch (_) {}
+      }
+
+      // Get slots (filtered by voucher if specified)
+      const slots = await SpecialCredit.find(slotQuery)
         .populate("recipientId", "name phone")
         .sort({ slotNumber: 1 })
         .lean();
@@ -2226,7 +2246,10 @@ router.get(
 
       // Calculate total available credits
       const totalAvailableCredits = availableSlots * creditPerSlot;
-      const totalSentCredits = user.specialCredits?.totalSent || 0;
+      // When filtering by voucherId, compute sent credits from filtered slots only (not global total)
+      const totalSentCredits = voucherId
+        ? usedSlots * creditPerSlot
+        : user.specialCredits?.totalSent || 0;
 
       // Get network users who received special credits from this user
       const recipientIds = slots
@@ -2242,9 +2265,18 @@ router.get(
       // Provide vouchers figure for admin and users with special credits
       let vouchersFigure = 0;
       if (isAdmin) {
-        // Admin uses voucherBalance field (a stored number, not actual documents)
-        vouchersFigure = user.voucherBalance || 0;
-      } else if (user.specialCredits?.availableSlots > 0) {
+        // Per-voucher balance if voucherId provided, else global voucherBalance
+        if (voucherId) {
+          const balMap = (user as any).voucherBalances;
+          if (balMap instanceof Map) {
+            vouchersFigure = balMap.get(String(voucherId)) || 0;
+          } else if (balMap && typeof balMap === "object") {
+            vouchersFigure = (balMap as any)[String(voucherId)] || 0;
+          }
+        } else {
+          vouchersFigure = (user as any).voucherBalance || 0;
+        }
+      } else if ((user as any).specialCredits?.availableSlots > 0) {
         // Regular users with special credits: count physical voucher docs + balance-based transfers
         const physicalCount = await Voucher.countDocuments({
           userId: req.userId,
@@ -2298,6 +2330,8 @@ router.get(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
+      const { voucherId } = req.query;
+
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin",
       );
@@ -2309,17 +2343,25 @@ router.get(
         });
       }
 
+      // Filter by voucherId if provided
+      const sentQuery: any = { ownerId: req.userId, status: "sent" };
+      const allQuery: any = { ownerId: req.userId };
+      if (voucherId) {
+        try {
+          const vid = new Types.ObjectId(voucherId as string);
+          sentQuery.voucherId = vid;
+          allQuery.voucherId = vid;
+        } catch (_) {}
+      }
+
       // Get slots with recipients
-      const slots = await SpecialCredit.find({
-        ownerId: req.userId,
-        status: "sent",
-      })
+      const slots = await SpecialCredit.find(sentQuery)
         .populate("recipientId", "name phone level specialCredits")
         .sort({ slotNumber: 1 })
         .lean();
 
       // Get slots info - Check if user has ANY slots at all
-      const allSlots = await SpecialCredit.find({ ownerId: req.userId })
+      const allSlots = await SpecialCredit.find(allQuery)
         .sort({ slotNumber: 1 })
         .lean();
 
@@ -2340,7 +2382,10 @@ router.get(
 
       const isAdmin = user.isVoucherAdmin === true;
       const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
-      const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
+      // Use the creditAmount stored on the actual slots (consistent for all slots in this voucher)
+      // Fall back to computed value only if no slots exist yet
+      const creditPerSlot =
+        allSlots[0]?.creditAmount || getSpecialCreditsForLevel(user.level || 0);
 
       // Format network users
       const networkUsers = slots.map((slot: any, index: number) => ({

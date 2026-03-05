@@ -6,6 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // src/routes/admin.ts
 const express_1 = __importDefault(require("express"));
 const mongoose_1 = __importDefault(require("mongoose"));
+const multer_1 = __importDefault(require("multer"));
+const path_1 = __importDefault(require("path"));
 const User_1 = __importDefault(require("../models/User"));
 const Card_1 = __importDefault(require("../models/Card"));
 const Message_1 = __importDefault(require("../models/Message"));
@@ -1576,6 +1578,42 @@ router.post("/received-designs/:id/send-to-user", async (req, res) => {
     }
 });
 // ============================================
+// VOUCHER IMAGE UPLOAD
+// ============================================
+const voucherImageUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (_req, file, cb) => {
+        if (file.mimetype.startsWith("image/"))
+            cb(null, true);
+        else
+            cb(new Error("Only image files are allowed"));
+    },
+});
+/**
+ * POST /api/admin/upload-image
+ * Upload a voucher image (logo or voucher image) to S3 and return its public URL
+ */
+router.post("/upload-image", adminAuth, voucherImageUpload.single("image"), async (req, res) => {
+    if (!req.file) {
+        return res
+            .status(400)
+            .json({ success: false, message: "No image file provided" });
+    }
+    try {
+        const ext = path_1.default.extname(req.file.originalname) || ".jpg";
+        const key = `voucher-images/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+        const { url } = await (0, s3Service_1.uploadToS3)(req.file.buffer, key, req.file.mimetype);
+        return res.json({ success: true, url });
+    }
+    catch (err) {
+        console.error("Voucher image upload error:", err);
+        return res
+            .status(500)
+            .json({ success: false, message: "Failed to upload image" });
+    }
+});
+// ============================================
 // ADMIN VOUCHER MANAGEMENT
 // ============================================
 const Voucher_1 = __importDefault(require("../models/Voucher"));
@@ -1926,9 +1964,7 @@ router.post("/mlm/slots/initialize", adminAuth, async (req, res) => {
     try {
         const { adminUserId, voucherId } = req.body;
         if (!adminUserId || !voucherId)
-            return res
-                .status(400)
-                .json({
+            return res.status(400).json({
                 success: false,
                 message: "adminUserId and voucherId are required",
             });
@@ -1998,9 +2034,7 @@ router.post("/mlm/slots/increase", adminAuth, async (req, res) => {
     try {
         const { voucherId, count, adminUserId } = req.body;
         if (!voucherId || !count || count < 1)
-            return res
-                .status(400)
-                .json({
+            return res.status(400).json({
                 success: false,
                 message: "voucherId and count (>=1) are required",
             });
@@ -2013,9 +2047,7 @@ router.post("/mlm/slots/increase", adminAuth, async (req, res) => {
             ? await User_1.default.findById(adminUserId).lean()
             : await User_1.default.findOne({ isVoucherAdmin: true }).lean();
         if (!admin)
-            return res
-                .status(404)
-                .json({
+            return res.status(404).json({
                 success: false,
                 message: "No admin user found. Initialize slots first.",
             });
