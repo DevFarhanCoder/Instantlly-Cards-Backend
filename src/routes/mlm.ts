@@ -2368,6 +2368,34 @@ router.get(
       // If user has no slots in database, return empty array
       // This prevents generating placeholders for users who never received special credits
       if (allSlots.length === 0) {
+        const isAdminUser = user.isVoucherAdmin === true;
+        // For admin viewing a brand-new voucher (no slots created yet),
+        // return 10 placeholder slots so the dashboard shows correctly
+        if (isAdminUser && voucherId) {
+          const ADMIN_SLOTS = 10;
+          const creditPerSlot = getSpecialCreditsForLevel(
+            (user as any).level || 0,
+          );
+          const placeholders = Array.from({ length: ADMIN_SLOTS }, (_, i) => ({
+            slotNumber: i + 1,
+            name: "",
+            phone: "",
+            credits: creditPerSlot,
+            sentAt: null,
+            recipientLevel: null,
+            isPlaceholder: true,
+          }));
+          return res.json({
+            success: true,
+            networkUsers: placeholders,
+            summary: {
+              totalSlots: ADMIN_SLOTS,
+              usedSlots: 0,
+              availableSlots: ADMIN_SLOTS,
+              creditPerSlot,
+            },
+          });
+        }
         return res.json({
           success: true,
           networkUsers: [],
