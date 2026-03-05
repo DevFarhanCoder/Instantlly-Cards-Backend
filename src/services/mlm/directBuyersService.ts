@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import User from "../../models/User";
-import Voucher from "../../models/Voucher";
+import SpecialCredit from "../../models/SpecialCredit";
 
 export async function getDirectBuyers(
   parentId: string,
@@ -11,20 +11,22 @@ export async function getDirectBuyers(
   let userFilter: Record<string, any> = { parentId };
 
   if (voucherId) {
-    // Find user IDs who own a voucher with this creditId (voucher package)
-    const matchingVouchers = await Voucher.find({
-      creditId: new mongoose.Types.ObjectId(voucherId),
+    // Find users who received a SpecialCredit slot from this owner for this voucher
+    const sentSlots = await SpecialCredit.find({
+      ownerId: new mongoose.Types.ObjectId(parentId),
+      voucherId: new mongoose.Types.ObjectId(voucherId),
+      status: "sent",
     })
-      .select("userId")
+      .select("recipientId")
       .lean();
 
-    const buyerIds = [
-      ...new Set(
-        matchingVouchers
-          .map((v) => (v.userId as any)?.toString())
-          .filter(Boolean),
-      ),
-    ].map((id) => new mongoose.Types.ObjectId(id));
+    const buyerIds = sentSlots
+      .map((s) => (s.recipientId as any)?.toString())
+      .filter(Boolean)
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    // If voucherId provided but no buyers yet, return empty immediately
+    if (buyerIds.length === 0) return [];
 
     userFilter = { parentId, _id: { $in: buyerIds } };
   }
