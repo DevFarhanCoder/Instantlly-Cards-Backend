@@ -1312,8 +1312,14 @@ router.get("/network/direct-buyers", requireAuth, async (req: AuthReq, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
     const skip = Number(req.query.skip) || 0;
+    const voucherId = req.query.voucherId as string | undefined;
 
-    const buyers = await getDirectBuyers(req.userId as string, limit, skip);
+    const buyers = await getDirectBuyers(
+      req.userId as string,
+      limit,
+      skip,
+      voucherId,
+    );
     res.json({ success: true, buyers });
   } catch (error) {
     console.error("MLM DIRECT BUYERS ERROR", error);
