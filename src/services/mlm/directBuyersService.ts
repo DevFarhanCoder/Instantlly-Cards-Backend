@@ -1,11 +1,35 @@
+import mongoose from "mongoose";
 import User from "../../models/User";
+import Voucher from "../../models/Voucher";
 
 export async function getDirectBuyers(
   parentId: string,
   limit: number,
   skip: number,
+  voucherId?: string,
 ) {
-  const directUsers = await User.find({ parentId })
+  let userFilter: Record<string, any> = { parentId };
+
+  if (voucherId) {
+    // Find user IDs who own a voucher with this creditId (voucher package)
+    const matchingVouchers = await Voucher.find({
+      creditId: new mongoose.Types.ObjectId(voucherId),
+    })
+      .select("userId")
+      .lean();
+
+    const buyerIds = [
+      ...new Set(
+        matchingVouchers
+          .map((v) => (v.userId as any)?.toString())
+          .filter(Boolean),
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+
+    userFilter = { parentId, _id: { $in: buyerIds } };
+  }
+
+  const directUsers = await User.find(userFilter)
     .select("name phone level createdAt")
     .sort({ createdAt: -1 })
     .skip(skip)
