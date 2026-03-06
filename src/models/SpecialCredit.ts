@@ -83,7 +83,12 @@ const SpecialCreditSchema = new Schema(
 // Compound index for efficient queries
 SpecialCreditSchema.index({ ownerId: 1, slotNumber: 1 });
 SpecialCreditSchema.index({ ownerId: 1, status: 1 });
-SpecialCreditSchema.index({ ownerId: 1, voucherId: 1, slotNumber: 1 });
+// V2: unique per (owner, voucher, slotNumber) — prevents duplicate slots at DB level.
+// sparse: true so rows without voucherId (legacy data) are excluded from the constraint.
+SpecialCreditSchema.index(
+  { ownerId: 1, voucherId: 1, slotNumber: 1 },
+  { unique: true, sparse: true },
+);
 
 export default models.SpecialCredit ||
   model("SpecialCredit", SpecialCreditSchema);

@@ -85,8 +85,36 @@ const UserSchema = new Schema(
     // Per-voucher balance map: { [voucherId]: count }
     // Allows each admin-created voucher to have its own independent balance
     voucherBalances: { type: Map, of: Number, default: {} },
+
+    // ── V2 fields ──────────────────────────────────────────────────────────
+
+    // Ordered ancestor chain from root down to this user's parent.
+    // Cached to avoid $graphLookup on every read. Updated on link/unlink.
+    ancestors: {
+      type: [{ type: Schema.Types.ObjectId, ref: "User" }],
+      default: [],
+    },
+
+    // Explicit role to drive NetworkRules.maxDirectByRole lookups.
+    // Derived from isVoucherAdmin but stored independently so rule checks
+    // don't have to join the voucher-admin flag.
+    role: {
+      type: String,
+      enum: ["admin", "user"],
+      default: "user",
+    },
+
+    // Soft-delete support: deleted users are hidden from the tree but their
+    // historical records (NetworkEvent, SlotEvent, etc.) are preserved.
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
+
+// V2 indexes
+UserSchema.index({ ancestors: 1 });
+UserSchema.index({ role: 1, parentId: 1 });
+UserSchema.index({ isDeleted: 1, parentId: 1 });
 
 export default models.User || model("User", UserSchema);
