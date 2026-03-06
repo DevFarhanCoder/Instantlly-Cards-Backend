@@ -1149,6 +1149,20 @@ router.post(
         $inc: { voucherBalance: -qty },
       });
 
+      // Resolve per-voucher amount from the voucher template (if voucherId provided)
+      let perVoucherAmount = 1200; // default MRP
+      if (voucherId) {
+        const voucherTemplate = await Voucher.findById(voucherId)
+          .select("amount MRP")
+          .lean();
+        if (voucherTemplate) {
+          perVoucherAmount =
+            (voucherTemplate as any).amount ||
+            (voucherTemplate as any).MRP ||
+            1200;
+        }
+      }
+
       // Save transfer log for history tracking
       await VoucherTransferLog.create({
         senderId: req.userId,
@@ -1158,6 +1172,7 @@ router.post(
         recipientName: recipient.name,
         recipientPhone: recipient.phone,
         quantity: qty,
+        amount: perVoucherAmount,
         transferredAt: new Date(),
         ...(voucherId ? { voucherId } : {}),
       });
@@ -1358,15 +1373,15 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
     history.vouchers.sent = Array.from(vouchersSentMap.values());
 
     // Merge balance-based transfer logs into sent/received
-    const VOUCHER_MRP = 1200; // ₹1200 per voucher
+    const VOUCHER_MRP = 1200; // fallback only — logs now store their own amount
     const logSentEntries = voucherLogsSent.map((log: any) => ({
       type: "voucher",
       direction: "sent",
       voucherNumber: null,
       voucherNumbers: [],
       companyName: "Instantlly",
-      amount: VOUCHER_MRP,
-      totalAmount: VOUCHER_MRP * log.quantity,
+      amount: log.amount ?? VOUCHER_MRP,
+      totalAmount: (log.amount ?? VOUCHER_MRP) * log.quantity,
       count: log.quantity,
       recipient: {
         id: log.recipientId?.toString(),
@@ -1382,8 +1397,8 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
       direction: "received",
       voucherNumber: null,
       companyName: "Instantlly",
-      amount: VOUCHER_MRP,
-      totalAmount: VOUCHER_MRP * log.quantity,
+      amount: log.amount ?? VOUCHER_MRP,
+      totalAmount: (log.amount ?? VOUCHER_MRP) * log.quantity,
       count: log.quantity,
       sender: {
         id: log.senderId?.toString(),

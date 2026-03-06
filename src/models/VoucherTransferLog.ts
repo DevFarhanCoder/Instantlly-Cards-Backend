@@ -8,6 +8,8 @@ export interface IVoucherTransferLog extends Document {
   recipientName?: string;
   recipientPhone?: string;
   quantity: number;
+  // Per-voucher amount at the time of transfer (snapshot). Falls back to 1200 if not set.
+  amount?: number;
   transferredAt: Date;
   voucherId?: mongoose.Types.ObjectId;
 }
@@ -21,6 +23,8 @@ const VoucherTransferLogSchema: Schema = new Schema(
     recipientName: { type: String },
     recipientPhone: { type: String },
     quantity: { type: Number, required: true, default: 1 },
+    // Per-voucher amount snapshot (e.g. 1200 for Instantlly, different for other vouchers)
+    amount: { type: Number },
     transferredAt: { type: Date, default: Date.now },
     voucherId: { type: Schema.Types.ObjectId, ref: "Voucher", index: true },
   },
