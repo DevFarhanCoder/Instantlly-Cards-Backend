@@ -2424,13 +2424,13 @@ router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/admin/mlm/slots/initialize  Body: { adminUserId, voucherId }
+// POST /api/admin/mlm/slots/initialize  Body: { adminUserId, voucherId, creditAmount? }
 router.post(
   "/mlm/slots/initialize",
   adminAuth,
   async (req: Request, res: Response) => {
     try {
-      const { adminUserId, voucherId } = req.body;
+      const { adminUserId, voucherId, creditAmount: customCreditAmount } = req.body;
       if (!adminUserId || !voucherId)
         return res.status(400).json({
           success: false,
@@ -2475,7 +2475,11 @@ router.post(
         });
       }
 
-      const creditAmount = SPECIAL_CREDIT_CHAIN_ADMIN[0];
+      // Use custom credit amount if provided, otherwise fall back to chain default
+      const creditAmount =
+        customCreditAmount && Number(customCreditAmount) > 0
+          ? Number(customCreditAmount)
+          : SPECIAL_CREDIT_CHAIN_ADMIN[0];
       const toCreate = [];
       for (let i = existingCount + 1; i <= 30; i++) {
         toCreate.push({
@@ -2503,16 +2507,17 @@ router.post(
   },
 );
 
-// POST /api/admin/mlm/slots/increase  Body: { voucherId, count, adminUserId? }
+// POST /api/admin/mlm/slots/increase  Body: { voucherId, count, adminUserId?, creditAmount? }
 router.post(
   "/mlm/slots/increase",
   adminAuth,
   async (req: Request, res: Response) => {
     try {
-      const { voucherId, count, adminUserId } = req.body as {
+      const { voucherId, count, adminUserId, creditAmount: customCreditAmount } = req.body as {
         voucherId: string;
         count: number;
         adminUserId?: string;
+        creditAmount?: number;
       };
       if (!voucherId || !count || count < 1)
         return res.status(400).json({
@@ -2542,9 +2547,12 @@ router.post(
         .sort({ slotNumber: -1 })
         .lean();
       const startFrom = lastSlot ? (lastSlot as any).slotNumber + 1 : 1;
+
+      // Use custom credit amount if provided, otherwise fall back to chain default
       const creditAmount =
-        SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] ||
-        SPECIAL_CREDIT_CHAIN_ADMIN[0];
+        customCreditAmount && Number(customCreditAmount) > 0
+          ? Number(customCreditAmount)
+          : SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] || SPECIAL_CREDIT_CHAIN_ADMIN[0];
 
       const newSlots = [];
       for (let i = startFrom; i < startFrom + count; i++) {
