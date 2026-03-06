@@ -40,6 +40,7 @@ export async function sendSlot(
   recipientPhone: string,
   actorId: string,
   voucherId?: string,
+  expiresAt?: Date,
 ): Promise<void> {
   const session = await mongoose.startSession();
   try {
@@ -61,6 +62,7 @@ export async function sendSlot(
           recipientName,
           recipientPhone,
           sentAt: now,
+          ...(expiresAt ? { expiresAt } : {}),
         },
         { session },
       );

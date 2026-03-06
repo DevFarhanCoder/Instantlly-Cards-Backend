@@ -2300,6 +2300,9 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
+    const timerStartedAt = new Date();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
     // V2: send slot atomically + write SlotEvent via SlotService
     await sendSlot(
       slot._id.toString(),
@@ -2308,6 +2311,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       recipient.phone,
       req.userId as string,
       (slot as any).voucherId?.toString(),
+      expiresAt,
     );
     // Re-fetch slot after update so downstream reads see the new state
     slot = (await SpecialCredit.findById(slot._id))!;
@@ -2363,7 +2367,13 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       }
     }
 
-    await recipient.save();
+    // Persist recipient credit counters without overwriting NetworkService linkage fields.
+    await User.findByIdAndUpdate(recipient._id, {
+      "specialCredits.balance": recipient.specialCredits.balance,
+      "specialCredits.totalReceived": recipient.specialCredits.totalReceived,
+      "specialCredits.availableSlots": recipient.specialCredits.availableSlots,
+      ...(recipient.level ? { level: recipient.level } : {}),
+    });
 
     // Add credits to recipient's WALLET
     await addCredits(recipient._id.toString(), slot.creditAmount);
@@ -2373,8 +2383,6 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     const recipientLevel = recipient.level;
     const recipientSlots = [];
     const slotCreditAmount = slot.creditAmount / 5; // Divide equally among 5 slots
-    const timerStartedAt = new Date();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     const currentVoucherCount = await getVoucherCountForTemplate(
       recipient._id.toString(),
       ((slot as any).voucherId as Types.ObjectId) || voucherObjectId,
