@@ -1,7 +1,9 @@
 // src/routes/categories.ts
 import express, { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
 import Category from "../models/Category";
 import CustomService from "../models/CustomService";
+import BusinessPromotion from "../models/BusinessPromotion";
 import Card from "../models/Card";
 import User from "../models/User";
 
@@ -521,6 +523,114 @@ router.delete("/admin/custom-service/:id", adminAuth, async (req: Request, res: 
   } catch (error: any) {
     console.error("Error deleting custom service:", error);
     res.status(500).json({ success: false, error: "Failed to delete custom service" });
+  }
+});
+
+// POST /api/categories/admin/upload-companies - Bulk upload companies via CSV for a subcategory
+// Body: { subcategory: string, category: string, rows: Array<{ businessName, ownerName, description, phone, whatsapp, email, website, area, city, state, pincode, listingType }> }
+router.post("/admin/upload-companies", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { subcategory, category, rows } = req.body;
+
+    if (!subcategory || !Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "subcategory and rows[] are required",
+      });
+    }
+
+    // Placeholder ObjectId for admin-imported records (no real user)
+    const ADMIN_PLACEHOLDER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
+    const results: { created: number; skipped: number; errors: string[] } = {
+      created: 0,
+      skipped: 0,
+      errors: [],
+    };
+
+    for (const row of rows) {
+      try {
+        if (!row.businessName?.trim() || !row.phone?.trim()) {
+          results.skipped++;
+          results.errors.push(`Skipped: missing businessName or phone (${row.businessName || "—"})`);
+          continue;
+        }
+
+        // category array: [subcategory, parentCategory] so listing is found by subcategory filter
+        const categoryArray: string[] = [subcategory.trim()];
+        if (category && category.trim() !== subcategory.trim()) {
+          categoryArray.push(category.trim());
+        }
+
+        await BusinessPromotion.create({
+          userId: ADMIN_PLACEHOLDER_ID,
+          businessName: row.businessName.trim(),
+          ownerName: (row.ownerName || row.businessName).trim(),
+          description: row.description?.trim() || "",
+          category: categoryArray,
+          phone: row.phone.trim(),
+          whatsapp: row.whatsapp?.trim() || row.phone.trim(),
+          email: row.email?.trim() || "",
+          website: row.website?.trim() || "",
+          area: row.area?.trim() || "",
+          city: row.city?.trim() || "",
+          state: row.state?.trim() || "",
+          pincode: row.pincode?.trim() || "",
+          landmark: row.landmark?.trim() || "",
+          listingType: row.listingType === "promoted" ? "promoted" : "free",
+          listingIntent: row.listingType === "promoted" ? "promoted" : "free",
+          status: "active",
+          isActive: true,
+          currentStep: "location",
+          progress: 100,
+          stepIndex: 4,
+          paymentStatus: row.listingType === "promoted" ? "paid" : "not_required",
+        });
+
+        results.created++;
+      } catch (rowErr: any) {
+        results.skipped++;
+        results.errors.push(`${row.businessName}: ${rowErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Upload complete: ${results.created} created, ${results.skipped} skipped`,
+      created: results.created,
+      skipped: results.skipped,
+      errors: results.errors,
+    });
+  } catch (error: any) {
+    console.error("Error uploading companies:", error);
+    res.status(500).json({ success: false, error: "Failed to upload companies" });
+  }
+});
+
+// PUT /api/categories/admin/category/:id - Update category name, icon, or isActive
+router.put("/admin/category/:id", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, icon, isActive } = req.body;
+
+    const category = await Category.findById(id);
+    if (!category) {
+      return res.status(404).json({ success: false, error: "Category not found" });
+    }
+
+    if (name !== undefined && name.trim()) category.name = name.trim();
+    if (icon !== undefined) category.icon = icon;
+    if (isActive !== undefined) category.isActive = Boolean(isActive);
+
+    await category.save();
+
+    res.json({
+      success: true,
+      message: `Category "${category.name}" updated`,
+      data: category,
+    });
+  } catch (error: any) {
+    console.error("Error updating category:", error);
+    res.status(500).json({ success: false, error: "Failed to update category" });
   }
 });
 
