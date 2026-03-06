@@ -73,7 +73,10 @@ async function getVoucherCountForTemplate(
       }),
       User.findById(userId).select("voucherBalance").lean(),
     ]);
-    return Math.max(0, physicalCount + Number((user as any)?.voucherBalance || 0));
+    return Math.max(
+      0,
+      physicalCount + Number((user as any)?.voucherBalance || 0),
+    );
   }
 
   const [physicalCount, user] = await Promise.all([
@@ -122,7 +125,9 @@ async function reconcileTransferUnlocksForUser(
     );
 
     if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
-      await MlmTransfer.findByIdAndUpdate(transfer._id, { currentVoucherCount });
+      await MlmTransfer.findByIdAndUpdate(transfer._id, {
+        currentVoucherCount,
+      });
       continue;
     }
 
@@ -2179,7 +2184,8 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       voucherId?: string;
     };
     const voucherObjectId = asObjectId(voucherId);
-    const requiredVoucherCount = await getVoucherTemplateRequiredCount(voucherId);
+    const requiredVoucherCount =
+      await getVoucherTemplateRequiredCount(voucherId);
 
     if (!recipientPhone) {
       return res.status(400).json({
@@ -2259,7 +2265,8 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     // Check if slot is currently locked by a timed transfer
     if ((slot as any).isLocked && (slot as any).lockExpiresAt) {
-      const lockMs = new Date((slot as any).lockExpiresAt).getTime() - Date.now();
+      const lockMs =
+        new Date((slot as any).lockExpiresAt).getTime() - Date.now();
       if (lockMs > 0) {
         return res.status(403).json({
           success: false,
@@ -2430,7 +2437,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       const existingSlot = await SpecialCredit.findOne({
         ownerId: recipient._id,
         slotNumber: i,
-        ...(((slot as any).voucherId || voucherObjectId)
+        ...((slot as any).voucherId || voucherObjectId
           ? { voucherId: (slot as any).voucherId || voucherObjectId }
           : {}),
       });
@@ -2586,7 +2593,9 @@ router.get(
       const activeTransfers = await MlmTransfer.find({
         receiverId: req.userId,
         status: { $in: ["pending_unlock", "unlocked"] },
-        ...(activeTransferVoucherId ? { voucherId: activeTransferVoucherId } : {}),
+        ...(activeTransferVoucherId
+          ? { voucherId: activeTransferVoucherId }
+          : {}),
       })
         .sort({ createdAt: -1 })
         .limit(20)
@@ -2811,7 +2820,9 @@ export function startAutoRefundScheduler(): void {
           const minRequired =
             transfer?.requiredVoucherCount ||
             (slotDoc.voucherId
-              ? await getVoucherTemplateRequiredCount(slotDoc.voucherId.toString())
+              ? await getVoucherTemplateRequiredCount(
+                  slotDoc.voucherId.toString(),
+                )
               : 5);
 
           if (totalVouchers >= minRequired) {

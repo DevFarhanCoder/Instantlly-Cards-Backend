@@ -2237,7 +2237,8 @@ router.post(
       let assignedCount = 0;
 
       if (userIds && Array.isArray(userIds) && userIds.length > 0) {
-        const templateId = (voucherTemplate as any).templateId || voucherTemplate._id;
+        const templateId =
+          (voucherTemplate as any).templateId || voucherTemplate._id;
         // Create individual voucher copies for each user
         const voucherCopies = userIds.map((userId) => ({
           ...voucherTemplate.toObject(),
@@ -2430,7 +2431,11 @@ router.post(
   adminAuth,
   async (req: Request, res: Response) => {
     try {
-      const { adminUserId, voucherId, creditAmount: customCreditAmount } = req.body;
+      const {
+        adminUserId,
+        voucherId,
+        creditAmount: customCreditAmount,
+      } = req.body;
       if (!adminUserId || !voucherId)
         return res.status(400).json({
           success: false,
@@ -2513,7 +2518,12 @@ router.post(
   adminAuth,
   async (req: Request, res: Response) => {
     try {
-      const { voucherId, count, adminUserId, creditAmount: customCreditAmount } = req.body as {
+      const {
+        voucherId,
+        count,
+        adminUserId,
+        creditAmount: customCreditAmount,
+      } = req.body as {
         voucherId: string;
         count: number;
         adminUserId?: string;
@@ -2552,7 +2562,8 @@ router.post(
       const creditAmount =
         customCreditAmount && Number(customCreditAmount) > 0
           ? Number(customCreditAmount)
-          : SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] || SPECIAL_CREDIT_CHAIN_ADMIN[0];
+          : SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] ||
+            SPECIAL_CREDIT_CHAIN_ADMIN[0];
 
       const newSlots = [];
       for (let i = startFrom; i < startFrom + count; i++) {
