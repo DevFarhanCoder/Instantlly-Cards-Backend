@@ -1259,7 +1259,7 @@ router.put(
   async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      const { voucherBalance, reason } = req.body;
+      const { voucherBalance, reason, voucherId } = req.body;
 
       if (
         voucherBalance === undefined ||
@@ -1279,11 +1279,21 @@ router.put(
           .json({ success: false, message: "User not found" });
       }
 
-      const oldBalance = (user as any).voucherBalance || 0;
       const newBalance = parseInt(String(voucherBalance));
-      const diff = newBalance - oldBalance;
 
-      user.set({ voucherBalance: newBalance });
+      let oldBalance: number;
+      if (voucherId) {
+        // Per-voucher balance update using voucherBalances map
+        const balMap = (user as any).voucherBalances || {};
+        const vidStr = String(voucherId);
+        oldBalance = Number(balMap[vidStr] || 0);
+        const updated = { ...balMap, [vidStr]: newBalance };
+        user.set({ voucherBalances: updated });
+      } else {
+        oldBalance = (user as any).voucherBalance || 0;
+        user.set({ voucherBalance: newBalance });
+      }
+      const diff = newBalance - oldBalance;
       await user.save();
 
       try {
@@ -1371,7 +1381,7 @@ router.get(
 
       const user = await User.findById(userId)
         .select(
-          "name phone credits voucherBalance isVoucherAdmin specialCredits level",
+          "name phone credits voucherBalance voucherBalances isVoucherAdmin specialCredits level",
         )
         .lean();
 
@@ -1418,7 +1428,17 @@ router.get(
           availableSlots: availableSlots.length,
           usedSlots: sentSlots.length,
           networkUsers: uniqueRecipients,
-          voucherBalance: (user as any).voucherBalance || 0,
+          voucherBalance: (() => {
+            if (voucherId) {
+              const balMap = (user as any).voucherBalances;
+              if (balMap instanceof Map)
+                return Number(balMap.get(String(voucherId)) || 0);
+              if (balMap && typeof balMap === "object")
+                return Number(balMap[String(voucherId)] || 0);
+              return 0;
+            }
+            return (user as any).voucherBalance || 0;
+          })(),
           generalCredits: (user as any).credits || 0,
           isVoucherAdmin: (user as any).isVoucherAdmin || false,
         },
