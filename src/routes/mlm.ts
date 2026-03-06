@@ -24,6 +24,8 @@ import {
   calculatePurchaseDiscount,
 } from "../services/mlm/discountService";
 import { updateAncestorDownlineCounts } from "../services/mlm/downlineService";
+import { linkUser } from "../services/mlm/networkService";
+import { sendSlot } from "../services/mlm/slotService";
 
 const router = Router();
 
@@ -422,25 +424,30 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Link receiver to sender if not already linked
-    if (receiver.parentId && receiver.parentId.toString() !== req.userId) {
-      return res.status(400).json({
-        success: false,
-        message: "Receiver already linked to another parent",
-      });
-    }
-
-    if (!receiver.parentId) {
-      receiver.parentId = req.userId as any;
-      receiver.level = Math.min((senderUser as any)?.level || 0, 9) + 1;
-      receiver.directCount = receiver.directCount || 0;
-      await receiver.save();
-
-      // Update sender's direct count
-      await User.findByIdAndUpdate(req.userId, { $inc: { directCount: 1 } });
-
-      // Update downline counts for all ancestors
-      await updateAncestorDownlineCounts(receiverId);
+    // Link receiver to sender if not already linked (V2: transactional via NetworkService)
+    try {
+      await linkUser(
+        receiverId,
+        req.userId as string,
+        req.userId as string,
+        "credit-transfer",
+      );
+    } catch (linkErr: any) {
+      if (linkErr.message?.includes("already linked to another parent")) {
+        return res.status(400).json({
+          success: false,
+          message: "Receiver already linked to another parent",
+        });
+      }
+      // Any other link error (cap exceeded, depth, etc.) is surfaced as 400
+      if (
+        linkErr.message?.includes("already linked to this exact parent") ||
+        linkErr.message?.includes("already linked to another parent")
+      ) {
+        // No need to re-throw — just continue below
+      } else {
+        throw linkErr;
+      }
     }
 
     // Create credits (payment pending state)
@@ -1093,7 +1100,7 @@ router.post(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
-      const { recipientPhone, quantity = 1 } = req.body;
+      const { recipientPhone, quantity = 1, voucherId } = req.body;
 
       // Check if user is admin
       const admin = await User.findById(req.userId).select(
@@ -1152,6 +1159,7 @@ router.post(
         recipientPhone: recipient.phone,
         quantity: qty,
         transferredAt: new Date(),
+        ...(voucherId ? { voucherId } : {}),
       });
 
       res.json({
@@ -1172,31 +1180,42 @@ router.post(
 
 router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { limit = 50 } = req.query;
+    const { limit = 50, voucherId } = req.query;
 
-    // Get special credits sent by this user
+    // Build voucher filter for SpecialCredit and VoucherTransferLog
+    let vidFilter: any = {};
+    if (voucherId) {
+      try {
+        vidFilter = { voucherId: new Types.ObjectId(voucherId as string) };
+      } catch (_) {}
+    }
+
+    // Get special credits sent by this user (scoped to voucher if provided)
     const specialCreditsSent = await SpecialCredit.find({
       ownerId: req.userId,
       status: "sent",
+      ...vidFilter,
     })
       .populate("recipientId", "name phone")
       .sort({ sentAt: -1 })
       .limit(Number(limit))
       .lean();
 
-    // Get special credits received by this user
+    // Get special credits received by this user (scoped to voucher if provided)
     const specialCreditsReceived = await SpecialCredit.find({
       recipientId: req.userId,
       status: "sent",
+      ...vidFilter,
     })
       .populate("ownerId", "name phone")
       .sort({ sentAt: -1 })
       .limit(Number(limit))
       .lean();
 
-    // Get balance-based voucher transfer logs (admin-transfer uses voucherBalance counters)
+    // Get balance-based voucher transfer logs (scoped to voucher if provided)
     const voucherLogsSent = await VoucherTransferLog.find({
       senderId: req.userId,
+      ...(voucherId ? vidFilter : {}),
     })
       .sort({ transferredAt: -1 })
       .limit(Number(limit))
@@ -1204,6 +1223,7 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
 
     const voucherLogsReceived = await VoucherTransferLog.find({
       recipientId: req.userId,
+      ...(voucherId ? vidFilter : {}),
     })
       .sort({ transferredAt: -1 })
       .limit(Number(limit))
@@ -1844,27 +1864,27 @@ router.post("/admin/mlm-transfer", async (req, res) => {
       await adminUser.save();
     }
 
-    // Check if recipient already has a parent
-    if (recipient.parentId && recipient.parentId.toString() !== adminUserId) {
-      return res.status(400).json({
-        success: false,
-        message: `${recipient.name} is already linked to another parent in the network`,
-      });
-    }
-
-    // Link recipient to Admin (if not already linked)
+    // Link recipient to Admin (if not already linked) — V2: transactional via NetworkService
     let isNewLink = false;
-    if (!recipient.parentId) {
-      recipient.parentId = adminUserId as any;
-      recipient.level = 1; // One level below Admin
-      await recipient.save();
-
-      // Update Admin's direct count
-      await User.findByIdAndUpdate(adminUserId, { $inc: { directCount: 1 } });
-
-      // Update downline counts for all ancestors (Admin in this case)
-      await updateAncestorDownlineCounts(recipient._id.toString());
+    try {
+      await linkUser(
+        recipient._id.toString(),
+        adminUserId,
+        adminUserId,
+        "admin-transfer",
+      );
       isNewLink = true;
+    } catch (linkErr: any) {
+      if (linkErr.message?.includes("already linked to another parent")) {
+        return res.status(400).json({
+          success: false,
+          message: `${recipient.name} is already linked to another parent in the network`,
+        });
+      }
+      // Idempotent: user is already linked to this admin — that's fine
+      if (!linkErr.message?.includes("already linked to this exact parent")) {
+        throw linkErr;
+      }
     }
 
     // Add credits to recipient's MLM wallet
@@ -2280,18 +2300,17 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Update slot
-    slot.status = "sent";
-    slot.recipientId = recipient._id as any;
-    slot.recipientName = recipient.name;
-    slot.recipientPhone = recipient.phone;
-    slot.sentAt = new Date();
-    if (voucherObjectId) {
-      slot.voucherId = voucherObjectId as any;
-    }
-    // Auto-refund if recipient doesn't collect required vouchers within 1 hour
-    slot.expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-    await slot.save();
+    // V2: send slot atomically + write SlotEvent via SlotService
+    await sendSlot(
+      slot._id.toString(),
+      recipient._id.toString(),
+      recipient.name,
+      recipient.phone,
+      req.userId as string,
+      (slot as any).voucherId?.toString(),
+    );
+    // Re-fetch slot after update so downstream reads see the new state
+    slot = (await SpecialCredit.findById(slot._id))!;
 
     // Update sender's special credits stats
     if (!sender.specialCredits) {
@@ -2328,11 +2347,20 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       recipient.level = (sender.level || 0) + 1;
     }
 
-    // Link recipient to sender if not already linked
-    if (!recipient.parentId) {
-      recipient.parentId = req.userId as any;
-      sender.directCount = (sender.directCount || 0) + 1;
-      await sender.save();
+    // V2: link recipient to sender via NetworkService (transactional)
+    try {
+      await linkUser(
+        recipient._id.toString(),
+        req.userId as string,
+        req.userId as string,
+        "special-credit-send",
+      );
+    } catch (linkErr: any) {
+      // Idempotent: user already linked to this sender — fine to continue
+      if (!linkErr.message?.includes("already linked to this exact parent")) {
+        // Already linked to another parent or cap exceeded — surface as error
+        throw linkErr;
+      }
     }
 
     await recipient.save();
