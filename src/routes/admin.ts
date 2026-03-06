@@ -2048,7 +2048,9 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
     }
 
     // Create voucher template (without userId - will be assigned when published to users)
+    const templateObjectId = new mongoose.Types.ObjectId();
     const voucher = await Voucher.create({
+      _id: templateObjectId,
       voucherNumber,
       companyLogo,
       companyName,
@@ -2070,6 +2072,7 @@ router.post("/vouchers", adminAuth, async (req: Request, res: Response) => {
       createdByAdmin: null,
       source: "admin",
       redeemedStatus: "unredeemed",
+      templateId: templateObjectId,
       minVouchersRequired:
         minVouchersRequired !== undefined
           ? parseInt(String(minVouchersRequired))
@@ -2234,6 +2237,7 @@ router.post(
       let assignedCount = 0;
 
       if (userIds && Array.isArray(userIds) && userIds.length > 0) {
+        const templateId = (voucherTemplate as any).templateId || voucherTemplate._id;
         // Create individual voucher copies for each user
         const voucherCopies = userIds.map((userId) => ({
           ...voucherTemplate.toObject(),
@@ -2242,6 +2246,7 @@ router.post(
           originalOwner: userId,
           voucherNumber: uuidv4().replace(/-/g, "").slice(0, 12).toUpperCase(),
           creditId: null,
+          templateId,
         }));
 
         await Voucher.insertMany(voucherCopies);

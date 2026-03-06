@@ -62,6 +62,16 @@ const SpecialCreditSchema = new Schema(
     // Timestamps
     sentAt: { type: Date },
     expiresAt: { type: Date },
+    // Child slots are locked until transfer unlock condition is met.
+    isLocked: { type: Boolean, default: false, index: true },
+    lockReason: { type: String },
+    lockExpiresAt: { type: Date },
+    unlockedAt: { type: Date },
+    transferId: {
+      type: Schema.Types.ObjectId,
+      ref: "MlmTransfer",
+      index: true,
+    },
 
     // Source - who created this slot
     sourceSlotId: {
@@ -84,6 +94,7 @@ const SpecialCreditSchema = new Schema(
 SpecialCreditSchema.index({ ownerId: 1, slotNumber: 1 });
 SpecialCreditSchema.index({ ownerId: 1, status: 1 });
 SpecialCreditSchema.index({ ownerId: 1, voucherId: 1, slotNumber: 1 });
+SpecialCreditSchema.index({ ownerId: 1, transferId: 1, isLocked: 1 });
 
 export default models.SpecialCredit ||
   model("SpecialCredit", SpecialCreditSchema);
