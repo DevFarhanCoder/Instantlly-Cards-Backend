@@ -9,6 +9,7 @@ export interface IVoucherTransferLog extends Document {
   recipientPhone?: string;
   quantity: number;
   transferredAt: Date;
+  voucherId?: mongoose.Types.ObjectId;
 }
 
 const VoucherTransferLogSchema: Schema = new Schema(
@@ -21,6 +22,7 @@ const VoucherTransferLogSchema: Schema = new Schema(
     recipientPhone: { type: String },
     quantity: { type: Number, required: true, default: 1 },
     transferredAt: { type: Date, default: Date.now },
+    voucherId: { type: Schema.Types.ObjectId, ref: "Voucher", index: true },
   },
   { timestamps: true },
 );

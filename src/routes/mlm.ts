@@ -935,7 +935,7 @@ router.post(
   requireAuth,
   async (req: AuthReq, res) => {
     try {
-      const { recipientPhone, quantity = 1 } = req.body;
+      const { recipientPhone, quantity = 1, voucherId } = req.body;
 
       // Check if user is admin
       const admin = await User.findById(req.userId).select(
@@ -993,6 +993,7 @@ router.post(
         recipientPhone: recipient.phone,
         quantity: qty,
         transferredAt: new Date(),
+        ...(voucherId ? { voucherId } : {}),
       });
 
       res.json({
@@ -1013,31 +1014,42 @@ router.post(
 
 router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
   try {
-    const { limit = 50 } = req.query;
+    const { limit = 50, voucherId } = req.query;
 
-    // Get special credits sent by this user
+    // Build voucher filter for SpecialCredit and VoucherTransferLog
+    let vidFilter: any = {};
+    if (voucherId) {
+      try {
+        vidFilter = { voucherId: new Types.ObjectId(voucherId as string) };
+      } catch (_) {}
+    }
+
+    // Get special credits sent by this user (scoped to voucher if provided)
     const specialCreditsSent = await SpecialCredit.find({
       ownerId: req.userId,
       status: "sent",
+      ...vidFilter,
     })
       .populate("recipientId", "name phone")
       .sort({ sentAt: -1 })
       .limit(Number(limit))
       .lean();
 
-    // Get special credits received by this user
+    // Get special credits received by this user (scoped to voucher if provided)
     const specialCreditsReceived = await SpecialCredit.find({
       recipientId: req.userId,
       status: "sent",
+      ...vidFilter,
     })
       .populate("ownerId", "name phone")
       .sort({ sentAt: -1 })
       .limit(Number(limit))
       .lean();
 
-    // Get balance-based voucher transfer logs (admin-transfer uses voucherBalance counters)
+    // Get balance-based voucher transfer logs (scoped to voucher if provided)
     const voucherLogsSent = await VoucherTransferLog.find({
       senderId: req.userId,
+      ...(voucherId ? vidFilter : {}),
     })
       .sort({ transferredAt: -1 })
       .limit(Number(limit))
@@ -1045,6 +1057,7 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
 
     const voucherLogsReceived = await VoucherTransferLog.find({
       recipientId: req.userId,
+      ...(voucherId ? vidFilter : {}),
     })
       .sort({ transferredAt: -1 })
       .limit(Number(limit))
