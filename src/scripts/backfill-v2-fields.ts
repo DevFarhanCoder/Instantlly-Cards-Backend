@@ -48,12 +48,15 @@ async function computeAncestors(
   const chain: mongoose.Types.ObjectId[] = [];
   const visited = new Set<string>();
   let current = await User.findById(userId).select("parentId").lean();
-  let parentId: mongoose.Types.ObjectId | null = (current as any)?.parentId ?? null;
+  let parentId: mongoose.Types.ObjectId | null =
+    (current as any)?.parentId ?? null;
 
   while (parentId) {
     const pStr = parentId.toString();
     if (visited.has(pStr)) {
-      console.warn(`  ⚠  Cycle detected at ${pStr} while computing ancestors for ${userId}`);
+      console.warn(
+        `  ⚠  Cycle detected at ${pStr} while computing ancestors for ${userId}`,
+      );
       break;
     }
     visited.add(pStr);
@@ -96,7 +99,9 @@ async function seedNetworkRules() {
 
 async function backfillAncestors() {
   console.log("\n[2/5] Backfilling User.ancestors...");
-  const usersWithParent = await User.find({ parentId: { $exists: true, $ne: null } })
+  const usersWithParent = await User.find({
+    parentId: { $exists: true, $ne: null },
+  })
     .select("_id parentId ancestors")
     .lean();
 
@@ -137,7 +142,9 @@ async function recalcDirectCounts() {
 }
 
 async function recalcDownlineCounts() {
-  console.log("\n[4/5] Recalculating User.downlineCount (recursive, may be slow)...");
+  console.log(
+    "\n[4/5] Recalculating User.downlineCount (recursive, may be slow)...",
+  );
   const allUsers = await User.find({}).select("_id").lean();
   let updated = 0;
 

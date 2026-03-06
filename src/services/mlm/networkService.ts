@@ -29,13 +29,18 @@ async function buildAncestors(
   session?: mongoose.ClientSession,
 ): Promise<mongoose.Types.ObjectId[]> {
   const opts = session ? { session } : {};
-  const user = await User.findById(userId).select("parentId ancestors").session(session ?? null).lean();
+  const user = await User.findById(userId)
+    .select("parentId ancestors")
+    .session(session ?? null)
+    .lean();
   if (!user) return [];
-  if ((user as any).ancestors?.length) return (user as any).ancestors as mongoose.Types.ObjectId[];
+  if ((user as any).ancestors?.length)
+    return (user as any).ancestors as mongoose.Types.ObjectId[];
 
   // Fallback: walk up the chain (used when ancestors cache is cold)
   const chain: mongoose.Types.ObjectId[] = [];
-  let currentId: mongoose.Types.ObjectId | null = (user as any).parentId ?? null;
+  let currentId: mongoose.Types.ObjectId | null =
+    (user as any).parentId ?? null;
   const visited = new Set<string>();
 
   while (currentId) {
@@ -43,11 +48,15 @@ async function buildAncestors(
     if (visited.has(idStr)) break; // Cycle guard
     visited.add(idStr);
     chain.unshift(currentId); // prepend so index 0 = root
-    const parent = await User.findById(currentId).select("parentId ancestors").lean();
+    const parent = await User.findById(currentId)
+      .select("parentId ancestors")
+      .lean();
     if (!parent) break;
     if ((parent as any).ancestors?.length) {
       // Parent has cached ancestors — prepend them and stop walking
-      chain.unshift(...((parent as any).ancestors as mongoose.Types.ObjectId[]));
+      chain.unshift(
+        ...((parent as any).ancestors as mongoose.Types.ObjectId[]),
+      );
       break;
     }
     currentId = (parent as any).parentId ?? null;
@@ -80,7 +89,9 @@ async function incrementAncestorDownline(
  * still works before the backfill script is run.
  */
 export async function getNetworkRules(): Promise<INetworkRules> {
-  const rules = await NetworkRules.findById("default").lean() as INetworkRules | null;
+  const rules = (await NetworkRules.findById(
+    "default",
+  ).lean()) as INetworkRules | null;
   if (rules) return rules;
   return {
     _id: "default",
@@ -155,7 +166,9 @@ export async function linkUser(
       // Enforce parent direct-buyer cap
       const rules = await getNetworkRules();
       const parentRole: string = (parent as any).role ?? "user";
-      const maxDirect: number = (rules.maxDirectByRole as any)[parentRole] ?? rules.maxDirectByRole.user;
+      const maxDirect: number =
+        (rules.maxDirectByRole as any)[parentRole] ??
+        rules.maxDirectByRole.user;
       const currentDirect = (parent as any).directCount ?? 0;
 
       if (currentDirect >= maxDirect) {

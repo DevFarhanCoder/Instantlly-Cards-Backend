@@ -273,7 +273,12 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
 
     // Link receiver to sender if not already linked (V2: transactional via NetworkService)
     try {
-      await linkUser(receiverId, req.userId as string, req.userId as string, "credit-transfer");
+      await linkUser(
+        receiverId,
+        req.userId as string,
+        req.userId as string,
+        "credit-transfer",
+      );
     } catch (linkErr: any) {
       if (linkErr.message?.includes("already linked to another parent")) {
         return res.status(400).json({
@@ -282,8 +287,10 @@ router.post("/credits/transfer", requireAuth, async (req: AuthReq, res) => {
         });
       }
       // Any other link error (cap exceeded, depth, etc.) is surfaced as 400
-      if (linkErr.message?.includes("already linked to this exact parent") ||
-          linkErr.message?.includes("already linked to another parent")) {
+      if (
+        linkErr.message?.includes("already linked to this exact parent") ||
+        linkErr.message?.includes("already linked to another parent")
+      ) {
         // No need to re-throw — just continue below
       } else {
         throw linkErr;
@@ -1701,7 +1708,12 @@ router.post("/admin/mlm-transfer", async (req, res) => {
     // Link recipient to Admin (if not already linked) — V2: transactional via NetworkService
     let isNewLink = false;
     try {
-      await linkUser(recipient._id.toString(), adminUserId, adminUserId, "admin-transfer");
+      await linkUser(
+        recipient._id.toString(),
+        adminUserId,
+        adminUserId,
+        "admin-transfer",
+      );
       isNewLink = true;
     } catch (linkErr: any) {
       if (linkErr.message?.includes("already linked to another parent")) {
@@ -2142,7 +2154,12 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     // V2: link recipient to sender via NetworkService (transactional)
     try {
-      await linkUser(recipient._id.toString(), req.userId as string, req.userId as string, "special-credit-send");
+      await linkUser(
+        recipient._id.toString(),
+        req.userId as string,
+        req.userId as string,
+        "special-credit-send",
+      );
     } catch (linkErr: any) {
       // Idempotent: user already linked to this sender — fine to continue
       if (!linkErr.message?.includes("already linked to this exact parent")) {
