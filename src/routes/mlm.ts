@@ -2129,14 +2129,16 @@ function getSpecialCreditsForLevel(level: number): number {
 }
 
 // Compute how many slots a recipient gets: senderSlotCreditAmount / recipientLevelCreditPerSlot
-// Falls back to 5 if credits-per-slot at recipient level is 0 (shouldn't happen in normal chain)
+// Falls back to 5 if the configured level amount does not yield a usable slot count.
+// This keeps test/admin custom credit amounts (for example 10,000) distributable.
 function computeRecipientSlots(
   grantedCredits: number,
   recipientLevel: number,
 ): number {
   const creditPerSlot = getSpecialCreditsForLevel(recipientLevel);
   if (creditPerSlot <= 0) return 5;
-  return Math.round(grantedCredits / creditPerSlot);
+  const computed = Math.round(grantedCredits / creditPerSlot);
+  return computed >= 1 ? computed : 5;
 }
 
 // ✅ Initialize Admin's Special Credit Slots
