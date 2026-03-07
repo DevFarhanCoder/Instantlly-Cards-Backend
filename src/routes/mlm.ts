@@ -31,7 +31,10 @@ const router = Router();
 
 const CREDIT_EXPIRY_MINUTES = 60;
 const TRANSFER_EXPIRY_HOURS = 48;
-const VOUCHER_PURCHASE_TIMEOUT_MINUTES = 60; // 1 hour to complete purchase
+const VOUCHER_PURCHASE_TIMEOUT_MINUTES = Math.max(
+  1,
+  Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 60),
+);
 const CONNECTION_TIMEOUT_HOURS = 48; // 2 days to connect 5 people
 const MIN_VOUCHERS_TO_UNLOCK = 5; // Must share 5 vouchers to unlock credit transfer
 const DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE = 5;
@@ -44,6 +47,103 @@ function asObjectId(id?: string | null): Types.ObjectId | null {
   } catch {
     return null;
   }
+}
+
+type VoucherScopeType =
+  | "none"
+  | "legacy"
+  | "template"
+  | "instance"
+  | "campaign_or_template_id"
+  | "invalid";
+
+type VoucherScope = {
+  requestedVoucherId: string | null;
+  detectedType: VoucherScopeType;
+  canonicalVoucherId: Types.ObjectId | null;
+  matchedVoucherId: Types.ObjectId | null;
+};
+
+async function resolveVoucherScope(
+  voucherId?: string | null,
+): Promise<VoucherScope> {
+  const requestedVoucherId = voucherId || null;
+  if (!voucherId) {
+    return {
+      requestedVoucherId,
+      detectedType: "none",
+      canonicalVoucherId: null,
+      matchedVoucherId: null,
+    };
+  }
+
+  if (voucherId === "instantlly-special-credits") {
+    const publishedTemplate = await Voucher.findOne({
+      isPublished: true,
+      $or: [{ userId: { $exists: false } }, { userId: null }],
+    })
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .select("_id templateId")
+      .lean();
+
+    if (!publishedTemplate) {
+      return {
+        requestedVoucherId,
+        detectedType: "legacy",
+        canonicalVoucherId: null,
+        matchedVoucherId: null,
+      };
+    }
+    const canonical =
+      ((publishedTemplate as any).templateId as Types.ObjectId) ||
+      ((publishedTemplate as any)._id as Types.ObjectId);
+    return {
+      requestedVoucherId,
+      detectedType: "legacy",
+      canonicalVoucherId: canonical,
+      matchedVoucherId: (publishedTemplate as any)._id as Types.ObjectId,
+    };
+  }
+
+  const objectId = asObjectId(voucherId);
+  if (!objectId) {
+    return {
+      requestedVoucherId,
+      detectedType: "invalid",
+      canonicalVoucherId: null,
+      matchedVoucherId: null,
+    };
+  }
+
+  const voucherDoc = await Voucher.findById(objectId)
+    .select("_id templateId")
+    .lean();
+
+  if (!voucherDoc) {
+    // Accept campaign/template id directly even if this collection row is absent.
+    return {
+      requestedVoucherId,
+      detectedType: "campaign_or_template_id",
+      canonicalVoucherId: objectId,
+      matchedVoucherId: null,
+    };
+  }
+
+  const templateId = (voucherDoc as any).templateId as
+    | Types.ObjectId
+    | undefined;
+  const detectedType =
+    templateId && templateId.toString() !== (voucherDoc as any)._id.toString()
+      ? "instance"
+      : "template";
+
+  return {
+    requestedVoucherId,
+    detectedType,
+    canonicalVoucherId:
+      templateId || ((voucherDoc as any)._id as Types.ObjectId),
+    matchedVoucherId: (voucherDoc as any)._id as Types.ObjectId,
+  };
 }
 
 async function getVoucherTemplateRequiredCount(
@@ -609,6 +709,8 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     // Regular user vouchers
     const query: any = { userId: req.userId };
+    // Hide unpublished admin-assigned copies from end-user list.
+    query.$or = [{ source: { $ne: "admin" } }, { isPublished: true }];
     if (status) query.redeemedStatus = status;
 
     const userVouchers = await Voucher.find(query)
@@ -1143,16 +1245,30 @@ router.post(
           .json({ success: false, message: "Recipient not found" });
       }
 
-      // Increment recipient's voucherBalance (no physical documents created)
-      await User.findByIdAndUpdate(recipient._id, {
-        $inc: { voucherBalance: qty },
-      });
-      await reconcileTransferUnlocksForUser(recipient._id.toString());
+      const voucherObjectId = asObjectId(voucherId);
+      const voucherBalanceInc: Record<string, number> = {
+        voucherBalance: qty,
+      };
+      const voucherBalanceDec: Record<string, number> = {
+        voucherBalance: -qty,
+      };
 
-      // Deduct from admin's voucherBalance
-      await User.findByIdAndUpdate(req.userId, {
-        $inc: { voucherBalance: -qty },
-      });
+      // Keep template-level balances in sync for unlock logic.
+      if (voucherObjectId) {
+        const key = `voucherBalances.${voucherObjectId.toString()}`;
+        voucherBalanceInc[key] = qty;
+        voucherBalanceDec[key] = -qty;
+      }
+
+      // Increment recipient voucher balances (global + template scoped when available)
+      await User.findByIdAndUpdate(recipient._id, { $inc: voucherBalanceInc });
+      await reconcileTransferUnlocksForUser(
+        recipient._id.toString(),
+        voucherObjectId || undefined,
+      );
+
+      // Deduct from admin balances
+      await User.findByIdAndUpdate(req.userId, { $inc: voucherBalanceDec });
 
       // Resolve per-voucher amount from the voucher template (if voucherId provided)
       let perVoucherAmount = 1200; // default MRP
@@ -1464,12 +1580,47 @@ router.get("/network/tree", requireAuth, async (req: AuthReq, res) => {
   try {
     const depth = Math.min(Number(req.query.depth) || 2, 4);
     const perParentLimit = Math.min(Number(req.query.perParentLimit) || 5, 10);
+    const voucherId = req.query.voucherId as string | undefined;
+    const voucherScope = await resolveVoucherScope(voucherId);
 
     const tree = await buildNetworkTree(
       req.userId as string,
       depth,
       perParentLimit,
+      voucherScope.canonicalVoucherId?.toString(),
     );
+
+    if (voucherId) {
+      const [matchedSlots, matchedTransfers] = await Promise.all([
+        voucherScope.canonicalVoucherId
+          ? SpecialCredit.countDocuments({
+              ownerId: req.userId,
+              voucherId: voucherScope.canonicalVoucherId,
+              status: "sent",
+            })
+          : Promise.resolve(0),
+        voucherScope.canonicalVoucherId
+          ? MlmTransfer.countDocuments({
+              senderId: req.userId,
+              voucherId: voucherScope.canonicalVoucherId,
+            })
+          : Promise.resolve(0),
+      ]);
+      console.log("[MLM_TREE_SCOPE_DEBUG]", {
+        userId: req.userId,
+        incomingVoucherId: voucherId,
+        detectedVoucherType: voucherScope.detectedType,
+        resolvedCanonicalVoucherId:
+          voucherScope.canonicalVoucherId?.toString() || null,
+        matchedVoucherDocId: voucherScope.matchedVoucherId?.toString() || null,
+        matchedSlotCount: matchedSlots,
+        matchedTransferCount: matchedTransfers,
+        finalDirectChildrenCount: Array.isArray((tree as any)?.directChildren)
+          ? (tree as any).directChildren.length
+          : 0,
+      });
+    }
+
     res.json({ success: true, tree });
   } catch (error) {
     console.error("MLM TREE ERROR", error);
@@ -1512,12 +1663,13 @@ router.get("/network/direct-buyers", requireAuth, async (req: AuthReq, res) => {
     const limit = Math.min(Number(req.query.limit) || 10, 50);
     const skip = Number(req.query.skip) || 0;
     const voucherId = req.query.voucherId as string | undefined;
+    const voucherScope = await resolveVoucherScope(voucherId);
 
     const buyers = await getDirectBuyers(
       req.userId as string,
       limit,
       skip,
-      voucherId,
+      voucherScope.canonicalVoucherId?.toString(),
     );
     res.json({ success: true, buyers });
   } catch (error) {
@@ -1584,7 +1736,7 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
         .sort({ slotNumber: 1 })
         .lean();
 
-      const totalSlots = getSlotsForUser(true);
+      const totalSlots = specialCreditSlots.length;
       const creditPerSlot = getSpecialCreditsForLevel((user as any).level || 0);
       const availableSlots = specialCreditSlots.filter(
         (s: any) => s.status === "available",
@@ -1629,10 +1781,7 @@ router.get("/overview", requireAuth, async (req: AuthReq, res) => {
         totalNetworkUsers,
         virtualCommission: discountSummary.virtualCommission || 0, // Discount equivalent
         currentDiscountPercent: discountSummary.discountPercent || 0,
-        // Include vouchersFigure for any user who has a voucherBalance > 0
-        ...((user as any).voucherBalance > 0
-          ? { vouchersFigure: (user as any).voucherBalance }
-          : {}),
+        vouchersFigure: (user as any).voucherBalance || 0,
       },
       structuralCreditPool,
       baseMrp: MLM_BASE_MRP,
@@ -1962,16 +2111,16 @@ router.post("/admin/mlm-transfer", async (req, res) => {
 
 // Credit calculation per level (divides by 5 each level)
 const SPECIAL_CREDIT_CHAIN = [
-  14648436000, // Level 0 (Admin)
-  2929686000, // Level 1
-  585936000, // Level 2
-  117186000, // Level 3
-  23436000, // Level 4
-  4686000, // Level 5
-  936000, // Level 6
-  186000, // Level 7
-  36000, // Level 8
-  6000, // Level 9
+  29296872000, // Level 0 (Admin)
+  5859372000, // Level 1
+  1171872000, // Level 2
+  234372000, // Level 3
+  46872000, // Level 4
+  9372000, // Level 5
+  1872000, // Level 6
+  372000, // Level 7
+  72000, // Level 8
+  12000, // Level 9
 ];
 
 // Calculate credits for a given level
@@ -1980,9 +2129,15 @@ function getSpecialCreditsForLevel(level: number): number {
   return SPECIAL_CREDIT_CHAIN[level];
 }
 
-// Get number of slots for user (30 for admin, 5 for others)
-function getSlotsForUser(isAdmin: boolean): number {
-  return isAdmin ? 30 : 5;
+// Compute how many slots a recipient gets: senderSlotCreditAmount / recipientLevelCreditPerSlot
+// Falls back to 5 if credits-per-slot at recipient level is 0 (shouldn't happen in normal chain)
+function computeRecipientSlots(
+  grantedCredits: number,
+  recipientLevel: number,
+): number {
+  const creditPerSlot = getSpecialCreditsForLevel(recipientLevel);
+  if (creditPerSlot <= 0) return 5;
+  return Math.round(grantedCredits / creditPerSlot);
 }
 
 // ✅ Initialize Admin's Special Credit Slots
@@ -2014,6 +2169,15 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
       });
     }
 
+    // Parse slotCount from request (required — no default hardcode)
+    const slotCount = parseInt(String(req.body.slotCount));
+    if (!slotCount || slotCount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "slotCount is required and must be >= 1",
+      });
+    }
+
     // Mark as voucher admin
     admin.isVoucherAdmin = true;
     admin.level = 0; // Admin is level 0
@@ -2025,11 +2189,11 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
         balance: 0,
         totalReceived: 0,
         totalSent: 0,
-        availableSlots: 30,
+        availableSlots: slotCount,
         usedSlots: 0,
       };
     } else {
-      admin.specialCredits.availableSlots = 30;
+      admin.specialCredits.availableSlots = slotCount;
     }
 
     await admin.save();
@@ -2039,20 +2203,20 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
       ownerId: adminUserId,
     });
 
-    if (existingSlots >= 30) {
+    if (existingSlots >= slotCount) {
       return res.json({
         success: true,
-        message: "Admin already has 30 special credit slots initialized",
+        message: `Admin already has ${existingSlots} special credit slots initialized`,
         slots: existingSlots,
       });
     }
 
-    // Create/extend to 30 slots for admin
+    // Create slots from existingSlots+1 up to slotCount
     const slots = [];
-    const adminCreditAmount = getSpecialCreditsForLevel(0); // 29,296,872,000
+    const adminCreditAmount = getSpecialCreditsForLevel(0);
     const startFrom = existingSlots + 1;
 
-    for (let i = startFrom; i <= 30; i++) {
+    for (let i = startFrom; i <= slotCount; i++) {
       const slot = await SpecialCredit.create({
         ownerId: adminUserId,
         slotNumber: i,
@@ -2065,7 +2229,7 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Admin special credit slots initialized",
+      message: `Admin special credit slots initialized (${slotCount} total)`,
       admin: {
         id: admin._id,
         name: admin.name,
@@ -2073,6 +2237,7 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
         isVoucherAdmin: true,
       },
       slots: slots.length,
+      totalSlots: slotCount,
       creditPerSlot: adminCreditAmount,
     });
   } catch (error) {
@@ -2084,6 +2249,9 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
 // ✅ Get Special Credit Slots for current user
 router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
   try {
+    const voucherId = req.query.voucherId as string | undefined;
+    const voucherScope = await resolveVoucherScope(voucherId);
+
     const user = await User.findById(req.userId).select(
       "name phone level isVoucherAdmin specialCredits",
     );
@@ -2096,62 +2264,42 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
     }
 
     // Get user's slots
-    const slots = await SpecialCredit.find({ ownerId: req.userId })
+    const slotQuery: any = { ownerId: req.userId };
+    if (voucherScope.canonicalVoucherId) {
+      slotQuery.voucherId = voucherScope.canonicalVoucherId;
+    }
+
+    const slots = await SpecialCredit.find(slotQuery)
       .populate("recipientId", "name phone")
       .sort({ slotNumber: 1 })
       .lean();
 
-    // Calculate expected slots
-    const isAdmin = user.isVoucherAdmin === true;
-    const expectedSlots = getSlotsForUser(isAdmin);
-    const creditAmount = getSpecialCreditsForLevel(user.level || 0);
+    // Format slots: map directly from DB records (slots are created by initialize / auto-created on receive)
+    const formattedSlots = slots.map((slot: any) => {
+      const lockUntil = slot.lockExpiresAt
+        ? new Date(slot.lockExpiresAt).getTime()
+        : 0;
+      const lockLeftSeconds = Math.max(
+        0,
+        Math.floor((lockUntil - Date.now()) / 1000),
+      );
+      return {
+        slotNumber: slot.slotNumber,
+        status: slot.status,
+        creditAmount: slot.creditAmount,
+        recipientName: slot.recipientName || null,
+        recipientPhone: slot.recipientPhone || null,
+        recipientId: slot.recipientId?._id?.toString() || null,
+        sentAt: slot.sentAt || null,
+        isAvailable: slot.status === "available",
+        transferId: slot.transferId?.toString() || null,
+        isLocked: !!slot.isLocked && lockLeftSeconds > 0,
+        lockReason: slot.lockReason || null,
+        timeLeftSeconds: lockLeftSeconds,
+      };
+    });
 
-    // Format slots response
-    const formattedSlots = [];
-    for (let i = 1; i <= expectedSlots; i++) {
-      const slot = slots.find((s: any) => s.slotNumber === i);
-
-      if (slot) {
-        const lockUntil = (slot as any).lockExpiresAt
-          ? new Date((slot as any).lockExpiresAt).getTime()
-          : 0;
-        const lockLeftSeconds = Math.max(
-          0,
-          Math.floor((lockUntil - Date.now()) / 1000),
-        );
-        formattedSlots.push({
-          slotNumber: i,
-          status: (slot as any).status,
-          creditAmount: (slot as any).creditAmount,
-          recipientName: (slot as any).recipientName || null,
-          recipientPhone: (slot as any).recipientPhone || null,
-          recipientId: (slot as any).recipientId?._id?.toString() || null,
-          sentAt: (slot as any).sentAt || null,
-          isAvailable: (slot as any).status === "available",
-          transferId: (slot as any).transferId?.toString() || null,
-          isLocked: !!(slot as any).isLocked && lockLeftSeconds > 0,
-          lockReason: (slot as any).lockReason || null,
-          timeLeftSeconds: lockLeftSeconds,
-        });
-      } else {
-        // Placeholder for empty slot
-        formattedSlots.push({
-          slotNumber: i,
-          status: "available",
-          creditAmount,
-          recipientName: null,
-          recipientPhone: null,
-          recipientId: null,
-          sentAt: null,
-          isAvailable: true,
-          transferId: null,
-          isLocked: false,
-          lockReason: null,
-          timeLeftSeconds: 0,
-        });
-      }
-    }
-
+    const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
     res.json({
       success: true,
       user: {
@@ -2163,10 +2311,10 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
       },
       slots: formattedSlots,
       summary: {
-        totalSlots: expectedSlots,
+        totalSlots: formattedSlots.length,
         availableSlots: formattedSlots.filter((s) => s.isAvailable).length,
         usedSlots: formattedSlots.filter((s) => !s.isAvailable).length,
-        creditPerSlot: creditAmount,
+        creditPerSlot: formattedSlots[0]?.creditAmount ?? creditPerSlot,
       },
     });
   } catch (error) {
@@ -2183,9 +2331,16 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       slotNumber: number;
       voucherId?: string;
     };
-    const voucherObjectId = asObjectId(voucherId);
-    const requiredVoucherCount =
-      await getVoucherTemplateRequiredCount(voucherId);
+    const voucherScope = await resolveVoucherScope(voucherId);
+    if (voucherId && voucherScope.detectedType === "invalid") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid voucherId" });
+    }
+    const voucherObjectId = voucherScope.canonicalVoucherId;
+    const requiredVoucherCount = await getVoucherTemplateRequiredCount(
+      voucherObjectId?.toString() || undefined,
+    );
 
     if (!recipientPhone) {
       return res.status(400).json({
@@ -2213,9 +2368,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Check slot availability
     const isAdmin = sender.isVoucherAdmin === true;
-    const maxSlots = getSlotsForUser(isAdmin);
 
     // Non-admin users need at least 5 vouchers to send special credits
     if (!isAdmin) {
@@ -2236,30 +2389,21 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       }
     }
 
-    if (slotNumber > maxSlots) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid slot number. Maximum slots: ${maxSlots}`,
-      });
-    }
-
-    // Find or create the slot
+    // Find the slot — must be pre-created (by initialize for admin, or auto-created when credits were received)
     let slot = await SpecialCredit.findOne({
       ownerId: req.userId,
       slotNumber,
       ...(voucherObjectId ? { voucherId: voucherObjectId } : {}),
     });
 
-    // If slot doesn't exist, create it
     if (!slot) {
-      const creditAmount = getSpecialCreditsForLevel(sender.level || 0);
-      slot = await SpecialCredit.create({
+      const totalSlots = await SpecialCredit.countDocuments({
         ownerId: req.userId,
-        voucherId: voucherObjectId || undefined,
-        slotNumber,
-        creditAmount,
-        status: "available",
-        level: sender.level || 0,
+        ...(voucherObjectId ? { voucherId: voucherObjectId } : {}),
+      });
+      return res.status(400).json({
+        success: false,
+        message: `Slot ${slotNumber} not found. You have ${totalSlots} slot(s) initialized.`,
       });
     }
 
@@ -2323,7 +2467,9 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     }
 
     const timerStartedAt = new Date();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const expiresAt = new Date(
+      Date.now() + VOUCHER_PURCHASE_TIMEOUT_MINUTES * 60 * 1000,
+    );
 
     // V2: send slot atomically + write SlotEvent via SlotService
     await sendSlot(
@@ -2344,7 +2490,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
         balance: 0,
         totalReceived: 0,
         totalSent: 0,
-        availableSlots: maxSlots,
+        availableSlots: 0,
         usedSlots: 0,
       };
     }
@@ -2363,10 +2509,16 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       };
     }
 
+    // Compute how many slots recipient gets: grantedCredits / creditPerSlotAtRecipientLevel
+    const numRecipientSlots = computeRecipientSlots(
+      slot.creditAmount,
+      recipient.level || (sender.level || 0) + 1,
+    );
+
     // Add credits to recipient
     recipient.specialCredits.balance += slot.creditAmount;
     recipient.specialCredits.totalReceived += slot.creditAmount;
-    recipient.specialCredits.availableSlots = 5; // Recipients get 5 slots
+    recipient.specialCredits.availableSlots = numRecipientSlots;
 
     // Set recipient's level if not already set
     if (!recipient.level || recipient.level === 0) {
@@ -2404,7 +2556,9 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     // Each slot gets: (received amount) / 5
     const recipientLevel = recipient.level;
     const recipientSlots = [];
-    const slotCreditAmount = slot.creditAmount / 5; // Divide equally among 5 slots
+    const slotCreditAmount =
+      getSpecialCreditsForLevel(recipientLevel) ||
+      Math.round(slot.creditAmount / numRecipientSlots);
     const currentVoucherCount = await getVoucherCountForTemplate(
       recipient._id.toString(),
       ((slot as any).voucherId as Types.ObjectId) || voucherObjectId,
@@ -2416,9 +2570,9 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       voucherId: ((slot as any).voucherId as Types.ObjectId) || voucherObjectId,
       sourceSlotId: slot._id,
       amount: slot.creditAmount,
-      slotCount: 5,
+      slotCount: numRecipientSlots,
       slotAmount: slotCreditAmount,
-      slots: Array.from({ length: 5 }).map((_, idx) => ({
+      slots: Array.from({ length: numRecipientSlots }).map((_, idx) => ({
         slotNumber: idx + 1,
         amount: slotCreditAmount,
         isLocked: !shouldUnlockImmediately,
@@ -2426,14 +2580,14 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       requiredVoucherCount,
       baselineVoucherCount: currentVoucherCount,
       currentVoucherCount,
-      unlockedSlots: shouldUnlockImmediately ? 5 : 0,
+      unlockedSlots: shouldUnlockImmediately ? numRecipientSlots : 0,
       timerStartedAt,
       expiresAt,
       unlockedAt: shouldUnlockImmediately ? new Date() : null,
       status: shouldUnlockImmediately ? "unlocked" : "pending_unlock",
     });
 
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= numRecipientSlots; i++) {
       const existingSlot = await SpecialCredit.findOne({
         ownerId: recipient._id,
         slotNumber: i,
@@ -2491,6 +2645,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
         expiresAt: transfer.expiresAt,
         timeLeftSeconds: transferTimeLeftSeconds(transfer.expiresAt),
         recipientSlotsCreated: recipientSlots.length,
+        numRecipientSlots,
         recipientSlotAmount: slotCreditAmount,
         recipientSlots: recipientSlots.map((s) => ({
           slotNumber: s.slotNumber,
@@ -2512,6 +2667,7 @@ router.get(
   async (req: AuthReq, res) => {
     try {
       const { voucherId } = req.query;
+      const voucherScope = await resolveVoucherScope(voucherId as string);
 
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances",
@@ -2524,12 +2680,16 @@ router.get(
         });
       }
 
+      const activeTransferVoucherId = voucherScope.canonicalVoucherId;
+      await reconcileTransferUnlocksForUser(
+        req.userId as string,
+        activeTransferVoucherId || undefined,
+      );
+
       // Filter slots by voucherId if provided (per-voucher isolation)
       const slotQuery: any = { ownerId: req.userId };
-      if (voucherId) {
-        try {
-          slotQuery.voucherId = new Types.ObjectId(voucherId as string);
-        } catch (_) {}
+      if (activeTransferVoucherId) {
+        slotQuery.voucherId = activeTransferVoucherId;
       }
 
       // Get slots (filtered by voucher if specified)
@@ -2540,8 +2700,9 @@ router.get(
 
       // Calculate stats
       const isAdmin = user.isVoucherAdmin === true;
-      const totalSlots = getSlotsForUser(isAdmin);
-      const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
+      const totalSlots = slots.length;
+      const creditPerSlot =
+        slots[0]?.creditAmount ?? getSpecialCreditsForLevel(user.level || 0);
 
       const availableSlots = slots.filter(
         (s: any) => s.status === "available",
@@ -2551,7 +2712,7 @@ router.get(
       // Calculate total available credits
       const totalAvailableCredits = availableSlots * creditPerSlot;
       // When filtering by voucherId, compute sent credits from filtered slots only (not global total)
-      const totalSentCredits = voucherId
+      const totalSentCredits = activeTransferVoucherId
         ? usedSlots * creditPerSlot
         : user.specialCredits?.totalSent || 0;
 
@@ -2570,12 +2731,13 @@ router.get(
       let vouchersFigure = 0;
       if (isAdmin) {
         // Per-voucher balance if voucherId provided, else global voucherBalance
-        if (voucherId) {
+        if (activeTransferVoucherId) {
+          const canonicalVoucherId = activeTransferVoucherId.toString();
           const balMap = (user as any).voucherBalances;
           if (balMap instanceof Map) {
-            vouchersFigure = balMap.get(String(voucherId)) || 0;
+            vouchersFigure = balMap.get(canonicalVoucherId) || 0;
           } else if (balMap && typeof balMap === "object") {
-            vouchersFigure = (balMap as any)[String(voucherId)] || 0;
+            vouchersFigure = (balMap as any)[canonicalVoucherId] || 0;
           }
         } else {
           vouchersFigure = (user as any).voucherBalance || 0;
@@ -2589,7 +2751,6 @@ router.get(
         vouchersFigure = physicalCount + ((user as any).voucherBalance || 0);
       }
 
-      const activeTransferVoucherId = asObjectId((voucherId as string) || null);
       const activeTransfers = await MlmTransfer.find({
         receiverId: req.userId,
         status: { $in: ["pending_unlock", "unlocked"] },
@@ -2659,6 +2820,7 @@ router.get(
   async (req: AuthReq, res) => {
     try {
       const { voucherId } = req.query;
+      const voucherScope = await resolveVoucherScope(voucherId as string);
 
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin",
@@ -2674,12 +2836,9 @@ router.get(
       // Filter by voucherId if provided
       const sentQuery: any = { ownerId: req.userId, status: "sent" };
       const allQuery: any = { ownerId: req.userId };
-      if (voucherId) {
-        try {
-          const vid = new Types.ObjectId(voucherId as string);
-          sentQuery.voucherId = vid;
-          allQuery.voucherId = vid;
-        } catch (_) {}
+      if (voucherScope.canonicalVoucherId) {
+        sentQuery.voucherId = voucherScope.canonicalVoucherId;
+        allQuery.voucherId = voucherScope.canonicalVoucherId;
       }
 
       // Get slots with recipients
@@ -2710,7 +2869,7 @@ router.get(
       }
 
       const isAdmin = user.isVoucherAdmin === true;
-      const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
+      const totalSlots = allSlots.length;
       // Use the creditAmount stored on the actual slots (consistent for all slots in this voucher)
       // Fall back to computed value only if no slots exist yet
       const creditPerSlot =

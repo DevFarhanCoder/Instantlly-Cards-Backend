@@ -1,10 +1,13 @@
+import mongoose from "mongoose";
 import User from "../../models/User";
+import SpecialCredit from "../../models/SpecialCredit";
 import { getStructuralCreditPool } from "../../utils/mlm";
 
 export async function buildNetworkTree(
   rootId: string,
   depth: number,
   perParentLimit: number,
+  voucherId?: string,
 ) {
   const rootUser = await User.findById(rootId).select(
     "name phone parentId level directCount createdAt",
@@ -29,10 +32,48 @@ export async function buildNetworkTree(
   nodeMap.set(rootId, root);
 
   for (let d = 0; d < depth; d += 1) {
-    const children = await User.find({ parentId: { $in: currentParents } })
-      .select("name phone parentId level directCount createdAt")
-      .sort({ createdAt: 1 })
-      .lean();
+    let children: any[] = [];
+    if (voucherId && mongoose.isValidObjectId(voucherId)) {
+      const voucherObjectId = new mongoose.Types.ObjectId(voucherId);
+      const ownerObjectIds = currentParents.map(
+        (id) => new mongoose.Types.ObjectId(id),
+      );
+
+      // Voucher-aware tree: only include child links that came from sent slots
+      // for the selected voucher template.
+      const sentSlots = await SpecialCredit.find({
+        ownerId: { $in: ownerObjectIds },
+        voucherId: voucherObjectId,
+        status: "sent",
+        recipientId: { $exists: true, $ne: null },
+      })
+        .select("ownerId recipientId sentAt")
+        .sort({ sentAt: 1, createdAt: 1 })
+        .lean();
+
+      const allowedRecipientIds = [
+        ...new Set(
+          sentSlots
+            .map((slot: any) => slot.recipientId?.toString())
+            .filter(Boolean),
+        ),
+      ].map((id) => new mongoose.Types.ObjectId(id));
+
+      if (allowedRecipientIds.length > 0) {
+        children = (await User.find({
+          parentId: { $in: ownerObjectIds },
+          _id: { $in: allowedRecipientIds },
+        })
+          .select("name phone parentId level directCount createdAt")
+          .sort({ createdAt: 1 })
+          .lean()) as any[];
+      }
+    } else {
+      children = (await User.find({ parentId: { $in: currentParents } })
+        .select("name phone parentId level directCount createdAt")
+        .sort({ createdAt: 1 })
+        .lean()) as any[];
+    }
 
     if (children.length === 0) break;
 
@@ -52,13 +93,17 @@ export async function buildNetworkTree(
       const group = grouped[parentId] || [];
       const limitedChildren = group.slice(0, perParentLimit);
 
+      if (voucherId) {
+        parentNode.directCount = limitedChildren.length;
+      }
+
       parentNode.directChildren = limitedChildren.map((child) => {
         const node = {
           id: child._id.toString(),
           name: child.name,
           phone: child.phone,
           level: child.level || 0,
-          directCount: child.directCount || 0,
+          directCount: voucherId ? 0 : child.directCount || 0,
           joinedDate: child.createdAt,
           structuralCreditPool: getStructuralCreditPool(child.level || 1),
           directChildren: [],
