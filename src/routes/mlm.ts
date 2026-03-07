@@ -2745,12 +2745,11 @@ router.get(
           vouchersFigure = (user as any).voucherBalance || 0;
         }
       } else if ((user as any).specialCredits?.availableSlots > 0) {
-        // Regular users with special credits: count physical voucher docs + balance-based transfers
-        const physicalCount = await Voucher.countDocuments({
-          userId: req.userId,
-          redeemedStatus: { $ne: "redeemed" },
-        });
-        vouchersFigure = physicalCount + ((user as any).voucherBalance || 0);
+        // Regular users must see voucher counts scoped to the active voucher when provided.
+        vouchersFigure = await getVoucherCountForTemplate(
+          req.userId as string,
+          activeTransferVoucherId || undefined,
+        );
       }
 
       const activeTransfers = await MlmTransfer.find({
