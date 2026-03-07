@@ -219,10 +219,9 @@ async function reconcileTransferUnlocksForUser(
 
   const transfers = await MlmTransfer.find(query).lean();
   for (const transfer of transfers as any[]) {
-    const currentVoucherCount = await getVoucherCountForTemplate(
-      userId,
-      transfer.voucherId,
-    );
+    // Count ALL unredeemed vouchers globally — the unlock requirement is based on the
+    // total number of vouchers a user holds across all campaigns, not campaign-specific.
+    const currentVoucherCount = await getVoucherCountForTemplate(userId);
 
     if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
       await MlmTransfer.findByIdAndUpdate(transfer._id, {
@@ -2559,9 +2558,10 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     const slotCreditAmount =
       getSpecialCreditsForLevel(recipientLevel) ||
       Math.round(slot.creditAmount / numRecipientSlots);
+    // Count ALL unredeemed vouchers globally — the unlock requirement is based on the
+    // total vouchers a user holds (any campaign), not campaign-specific vouchers.
     const currentVoucherCount = await getVoucherCountForTemplate(
       recipient._id.toString(),
-      ((slot as any).voucherId as Types.ObjectId) || voucherObjectId,
     );
     const shouldUnlockImmediately = currentVoucherCount >= requiredVoucherCount;
     const transfer = await MlmTransfer.create({
