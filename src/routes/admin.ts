@@ -26,6 +26,25 @@ import SpecialCredit from "../models/SpecialCredit";
 
 const router = express.Router();
 
+async function resolveVoucherScopeForAdmin(
+  voucherId?: string | null,
+): Promise<mongoose.Types.ObjectId | null> {
+  if (!voucherId || !mongoose.isValidObjectId(voucherId)) return null;
+
+  const voucherDoc = await Voucher.findById(voucherId)
+    .select("_id templateId")
+    .lean();
+
+  if (!voucherDoc) {
+    return new mongoose.Types.ObjectId(voucherId);
+  }
+
+  return (
+    ((voucherDoc as any).templateId as mongoose.Types.ObjectId) ||
+    ((voucherDoc as any)._id as mongoose.Types.ObjectId)
+  );
+}
+
 async function getVoucherCountForTemplate(
   userId: string,
   voucherId?: mongoose.Types.ObjectId,
@@ -2501,6 +2520,8 @@ const SPECIAL_CREDIT_CHAIN_ADMIN = [
 router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
   try {
     const { voucherId, userId } = req.query;
+    console.log("📊 ADMIN MLM SLOTS - Request received", { voucherId, userId });
+
     if (voucherId && !mongoose.isValidObjectId(voucherId as string)) {
       return res
         .status(400)
@@ -2513,6 +2534,12 @@ router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
       : await User.findOne({ isVoucherAdmin: true })
           .select("name phone level isVoucherAdmin specialCredits")
           .lean();
+
+    console.log("👤 ADMIN MLM SLOTS - Target user", {
+      userFound: !!targetUser,
+      userId: (targetUser as any)?._id?.toString(),
+      userName: (targetUser as any)?.name,
+    });
 
     if (!targetUser) {
       return res.json({
@@ -2529,13 +2556,42 @@ router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
     }
 
     const query: any = { ownerId: (targetUser as any)._id };
-    if (voucherId)
-      query.voucherId = new mongoose.Types.ObjectId(voucherId as string);
+    if (voucherId) {
+      // prefer raw ObjectId when valid so admin views are scoped per-voucher
+      // and don't accidentally collapse multiple vouchers under a template.
+      let rawVoucherId: mongoose.Types.ObjectId | null = null;
+      if (mongoose.isValidObjectId(voucherId as string)) {
+        rawVoucherId = new mongoose.Types.ObjectId(voucherId as string);
+      }
+      if (rawVoucherId) {
+        query.voucherId = rawVoucherId;
+      } else {
+        const canonicalVoucherId = await resolveVoucherScopeForAdmin(
+          voucherId as string,
+        );
+        if (!canonicalVoucherId) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Voucher not found" });
+        }
+        query.voucherId = canonicalVoucherId;
+      }
+    }
+
+    console.log("🔎 ADMIN MLM SLOTS - Query for slots", {
+      query: JSON.stringify(query),
+    });
 
     const slots = await SpecialCredit.find(query)
       .populate("recipientId", "name phone")
       .sort({ slotNumber: 1 })
       .lean();
+
+    console.log("📦 ADMIN MLM SLOTS - Slots retrieved", {
+      count: slots.length,
+      slotNumbers: (slots as any[]).map((s) => s.slotNumber),
+    });
+
     const creditPerSlot =
       SPECIAL_CREDIT_CHAIN_ADMIN[(targetUser as any).level || 0] ||
       SPECIAL_CREDIT_CHAIN_ADMIN[0];
@@ -2567,9 +2623,25 @@ router.get("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
         creditPerSlot,
       },
     });
+
+    console.log("✅ ADMIN MLM SLOTS - Success", {
+      userId: (targetUser as any)._id.toString(),
+      voucherId: req.query.voucherId,
+      totalSlots: formattedSlots.length,
+      availableSlots: formattedSlots.filter((s: any) => s.isAvailable).length,
+    });
   } catch (error) {
-    console.error("ADMIN MLM SLOTS ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("❌ ADMIN MLM SLOTS ERROR", {
+      voucherId: req.query.voucherId,
+      userId: req.query.userId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error",
+      debug: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : String(error)) : undefined,
+    });
   }
 });
 
@@ -2590,10 +2662,19 @@ router.post(
           success: false,
           message: "adminUserId and voucherId are required",
         });
+      // the voucherId coming from the client might already be a bare ObjectId
+      // which we should respect; otherwise fall back to the resolver logic.
+      let canonicalVoucherId: mongoose.Types.ObjectId | null = null;
       if (!mongoose.isValidObjectId(voucherId)) {
+        // not an ObjectId string -> lookup via resolver
+        canonicalVoucherId = await resolveVoucherScopeForAdmin(voucherId);
+      } else {
+        canonicalVoucherId = new mongoose.Types.ObjectId(voucherId);
+      }
+      if (!canonicalVoucherId) {
         return res
-          .status(400)
-          .json({ success: false, message: "Invalid voucherId" });
+          .status(404)
+          .json({ success: false, message: "Voucher not found" });
       }
       const slotCount = parseInt(String(rawSlotCount));
       if (!slotCount || slotCount < 1) {
@@ -2631,7 +2712,7 @@ router.post(
 
       const existingCount = await SpecialCredit.countDocuments({
         ownerId: adminUserId,
-        voucherId,
+        voucherId: canonicalVoucherId,
       });
       if (existingCount >= slotCount) {
         return res.json({
@@ -2650,7 +2731,7 @@ router.post(
       for (let i = existingCount + 1; i <= slotCount; i++) {
         toCreate.push({
           ownerId: adminUserId,
-          voucherId,
+          voucherId: canonicalVoucherId,
           slotNumber: i,
           creditAmount,
           status: "available",
@@ -2700,6 +2781,12 @@ router.post(
           .status(400)
           .json({ success: false, message: "Invalid voucherId" });
       }
+      const canonicalVoucherId = await resolveVoucherScopeForAdmin(voucherId);
+      if (!canonicalVoucherId) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Voucher not found" });
+      }
 
       const voucher = await Voucher.findById(voucherId).lean();
       if (!voucher)
@@ -2718,7 +2805,7 @@ router.post(
 
       const lastSlot = await SpecialCredit.findOne({
         ownerId: admin._id,
-        voucherId,
+        voucherId: canonicalVoucherId,
       })
         .sort({ slotNumber: -1 })
         .lean();
@@ -2735,7 +2822,7 @@ router.post(
       for (let i = startFrom; i < startFrom + count; i++) {
         newSlots.push({
           ownerId: admin._id,
-          voucherId,
+          voucherId: canonicalVoucherId,
           slotNumber: i,
           creditAmount,
           status: "available",
@@ -2782,6 +2869,12 @@ router.delete("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
       return res
         .status(400)
         .json({ success: false, message: "Invalid voucherId" });
+    const canonicalVoucherId = await resolveVoucherScopeForAdmin(voucherId);
+    if (!canonicalVoucherId) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Voucher not found" });
+    }
     if (!deleteAll && (!Array.isArray(slotNumbers) || slotNumbers.length === 0))
       return res.status(400).json({
         success: false,
@@ -2805,7 +2898,7 @@ router.delete("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
 
     const query: any = {
       ownerId,
-      voucherId: new mongoose.Types.ObjectId(voucherId),
+      voucherId: canonicalVoucherId,
     };
     if (!deleteAll) query.slotNumber = { $in: slotNumbers };
 
@@ -2815,7 +2908,7 @@ router.delete("/mlm/slots", adminAuth, async (req: Request, res: Response) => {
     // Sync availableSlots count on user
     const remaining = await SpecialCredit.countDocuments({
       ownerId,
-      voucherId: new mongoose.Types.ObjectId(voucherId),
+      voucherId: canonicalVoucherId,
     });
     await User.findByIdAndUpdate(ownerId, {
       $set: { "specialCredits.availableSlots": remaining },

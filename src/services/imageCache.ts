@@ -67,7 +67,7 @@ class ImageCache {
     
     const ageSeconds = Math.round(age / 1000);
     const sizeKB = (cached.size / 1024).toFixed(2);
-    console.log(`✅ [CACHE HIT] Serving image from cache (${sizeKB} KB, age: ${ageSeconds}s): ${key}`);
+    // console.log(`✅ [CACHE HIT] Serving image from cache (${sizeKB} KB, age: ${ageSeconds}s): ${key}`);
     
     return cached.buffer;
   }
@@ -106,7 +106,7 @@ class ImageCache {
 
     const sizeKB = (size / 1024).toFixed(2);
     const cacheSizeMB = (this.currentSizeBytes / 1024 / 1024).toFixed(2);
-    console.log(`💾 [CACHE SET] Stored image ${key} (${sizeKB} KB) - Cache: ${this.cache.size} images, ${cacheSizeMB} MB`);
+    // console.log(`💾 [CACHE SET] Stored image ${key} (${sizeKB} KB) - Cache: ${this.cache.size} images, ${cacheSizeMB} MB`);
   }
 
   /**

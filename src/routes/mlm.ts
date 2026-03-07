@@ -25,7 +25,7 @@ import {
 } from "../services/mlm/discountService";
 import { updateAncestorDownlineCounts } from "../services/mlm/downlineService";
 import { linkUser } from "../services/mlm/networkService";
-import { sendSlot } from "../services/mlm/slotService";
+import { refundSlot, sendSlot } from "../services/mlm/slotService";
 
 const router = Router();
 
@@ -219,9 +219,10 @@ async function reconcileTransferUnlocksForUser(
 
   const transfers = await MlmTransfer.find(query).lean();
   for (const transfer of transfers as any[]) {
-    // Count ALL unredeemed vouchers globally — the unlock requirement is based on the
-    // total number of vouchers a user holds across all campaigns, not campaign-specific.
-    const currentVoucherCount = await getVoucherCountForTemplate(userId);
+    const currentVoucherCount = await getVoucherCountForTemplate(
+      userId,
+      (transfer.voucherId as Types.ObjectId) || voucherId || undefined,
+    );
 
     if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
       await MlmTransfer.findByIdAndUpdate(transfer._id, {
@@ -2264,9 +2265,16 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
-    // Get user's slots
+    // Get user's slots.  Use the raw voucherId provided by client when possible – the
+    // original behaviour used `canonicalVoucherId` which collapses instances into
+    // their template, leading to shared slot pools.  We want per-voucher isolation
+    // so prefer the parsed `voucherId` and only fall back to canonical when none is
+    // supplied.
     const slotQuery: any = { ownerId: req.userId };
-    if (voucherScope.canonicalVoucherId) {
+    const rawVoucherObject = asObjectId(voucherId);
+    if (rawVoucherObject) {
+      slotQuery.voucherId = rawVoucherObject;
+    } else if (voucherScope.canonicalVoucherId) {
       slotQuery.voucherId = voucherScope.canonicalVoucherId;
     }
 
@@ -2326,22 +2334,52 @@ router.get("/special-credits/slots", requireAuth, async (req: AuthReq, res) => {
 
 // ✅ Send Special Credits to a user by phone number
 router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
+  let sentSlotId: string | null = null;
+  let senderIdForRollback: string | null = null;
+  let recipientIdForRollback: string | null = null;
+  let transferIdForRollback: string | null = null;
+  let recipientSourceSlotIdForRollback: string | null = null;
+  let senderCreditAmountForRollback = 0;
+  let recipientSlotCountForRollback = 0;
+  let recipientCreditAmountForRollback = 0;
   try {
     const { recipientPhone, slotNumber, voucherId } = req.body as {
       recipientPhone: string;
       slotNumber: number;
       voucherId?: string;
     };
+    console.log("📤 SPECIAL CREDITS SEND - Request received", {
+      userId: req.userId,
+      recipientPhone,
+      slotNumber,
+      voucherId,
+    });
+
     const voucherScope = await resolveVoucherScope(voucherId);
+    console.log("📋 SPECIAL CREDITS SEND - Resolved voucher scope", {
+      detectedType: voucherScope.detectedType,
+      canonicalVoucherId: voucherScope.canonicalVoucherId?.toString(),
+    });
+
     if (voucherId && voucherScope.detectedType === "invalid") {
       return res
         .status(400)
         .json({ success: false, message: "Invalid voucherId" });
     }
-    const voucherObjectId = voucherScope.canonicalVoucherId;
+    // determine which voucher id should drive slots/send operations.  prefer the
+    // exact id passed by the client (parsed to ObjectId) so each voucher has its own
+    // pool; fall back to the canonical (template) id only when no id was supplied.
+    const parsedVoucher = asObjectId(voucherId);
+    const voucherObjectId = parsedVoucher || voucherScope.canonicalVoucherId;
     const requiredVoucherCount = await getVoucherTemplateRequiredCount(
       voucherObjectId?.toString() || undefined,
     );
+
+    console.log("📌 SPECIAL CREDITS SEND - Parsed voucher", {
+      parsedVoucher: parsedVoucher?.toString(),
+      voucherObjectId: voucherObjectId?.toString(),
+      requiredVoucherCount,
+    });
 
     if (!recipientPhone) {
       return res.status(400).json({
@@ -2361,6 +2399,12 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     const sender = await User.findById(req.userId).select(
       "name phone level isVoucherAdmin specialCredits voucherBalance",
     );
+
+    console.log("👤 SPECIAL CREDITS SEND - Sender fetched", {
+      senderId: req.userId,
+      senderExists: !!sender,
+      senderName: (sender as any)?.name,
+    });
 
     if (!sender) {
       return res.status(404).json({
@@ -2391,10 +2435,22 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     }
 
     // Find the slot — must be pre-created (by initialize for admin, or auto-created when credits were received)
+    console.log("🔍 SPECIAL CREDITS SEND - Looking for slot", {
+      ownerId: req.userId,
+      slotNumber,
+      voucherId: voucherObjectId?.toString(),
+    });
+
     let slot = await SpecialCredit.findOne({
       ownerId: req.userId,
       slotNumber,
       ...(voucherObjectId ? { voucherId: voucherObjectId } : {}),
+    });
+
+    console.log("🎯 SPECIAL CREDITS SEND - Slot lookup result", {
+      slotFound: !!slot,
+      slotStatus: (slot as any)?.status,
+      slotId: (slot as any)?._id?.toString(),
     });
 
     if (!slot) {
@@ -2482,6 +2538,10 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       (slot as any).voucherId?.toString(),
       expiresAt,
     );
+    sentSlotId = slot._id.toString();
+    senderIdForRollback = sender._id.toString();
+    recipientIdForRollback = recipient._id.toString();
+    recipientSourceSlotIdForRollback = slot._id.toString();
     // Re-fetch slot after update so downstream reads see the new state
     slot = (await SpecialCredit.findById(slot._id))!;
 
@@ -2498,6 +2558,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     sender.specialCredits.totalSent += slot.creditAmount;
     sender.specialCredits.usedSlots += 1;
     await sender.save();
+    senderCreditAmountForRollback = slot.creditAmount;
 
     // Initialize recipient's special credits if not exists
     if (!recipient.specialCredits) {
@@ -2520,6 +2581,8 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     recipient.specialCredits.balance += slot.creditAmount;
     recipient.specialCredits.totalReceived += slot.creditAmount;
     recipient.specialCredits.availableSlots = numRecipientSlots;
+    recipientCreditAmountForRollback = slot.creditAmount;
+    recipientSlotCountForRollback = numRecipientSlots;
 
     // Set recipient's level if not already set
     if (!recipient.level || recipient.level === 0) {
@@ -2560,10 +2623,11 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     const slotCreditAmount =
       getSpecialCreditsForLevel(recipientLevel) ||
       Math.round(slot.creditAmount / numRecipientSlots);
-    // Count ALL unredeemed vouchers globally — the unlock requirement is based on the
-    // total vouchers a user holds (any campaign), not campaign-specific vouchers.
     const currentVoucherCount = await getVoucherCountForTemplate(
       recipient._id.toString(),
+      ((slot as any).voucherId as Types.ObjectId) ||
+        voucherObjectId ||
+        undefined,
     );
     const shouldUnlockImmediately = currentVoucherCount >= requiredVoucherCount;
     const transfer = await MlmTransfer.create({
@@ -2588,6 +2652,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       unlockedAt: shouldUnlockImmediately ? new Date() : null,
       status: shouldUnlockImmediately ? "unlocked" : "pending_unlock",
     });
+    transferIdForRollback = transfer._id.toString();
 
     for (let i = 1; i <= numRecipientSlots; i++) {
       const existingSlot = await SpecialCredit.findOne({
@@ -2618,6 +2683,13 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
         recipientSlots.push(newSlot);
       }
     }
+
+    console.log("✅ SPECIAL CREDITS SEND - About to return success", {
+      transferId: transfer._id.toString(),
+      recipientId: recipient._id.toString(),
+      amount: slot.creditAmount,
+      status: transfer.status,
+    });
 
     res.json({
       success: true,
@@ -2657,8 +2729,107 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
       },
     });
   } catch (error) {
-    console.error("SPECIAL CREDITS SEND ERROR", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    if (sentSlotId) {
+      try {
+        if (transferIdForRollback) {
+          await SpecialCredit.deleteMany({
+            ownerId: recipientIdForRollback,
+            transferId: transferIdForRollback,
+          });
+          await MlmTransfer.findByIdAndDelete(transferIdForRollback);
+        } else if (recipientSourceSlotIdForRollback && recipientIdForRollback) {
+          await SpecialCredit.deleteMany({
+            ownerId: recipientIdForRollback,
+            sourceSlotId: recipientSourceSlotIdForRollback,
+          });
+        }
+
+        if (recipientIdForRollback && recipientCreditAmountForRollback > 0) {
+          const recipientUser = await User.findById(recipientIdForRollback)
+            .select("specialCredits")
+            .lean();
+          const currentSpecialCredits = (recipientUser as any)?.specialCredits || {};
+
+          await User.findByIdAndUpdate(recipientIdForRollback, {
+            $set: {
+              "specialCredits.balance": Math.max(
+                0,
+                Number(currentSpecialCredits.balance || 0) -
+                  recipientCreditAmountForRollback,
+              ),
+              "specialCredits.totalReceived": Math.max(
+                0,
+                Number(currentSpecialCredits.totalReceived || 0) -
+                  recipientCreditAmountForRollback,
+              ),
+              "specialCredits.availableSlots": Math.max(
+                0,
+                Number(currentSpecialCredits.availableSlots || 0) -
+                  recipientSlotCountForRollback,
+              ),
+            },
+          });
+
+          try {
+            await subtractCredits(
+              recipientIdForRollback,
+              recipientCreditAmountForRollback,
+            );
+          } catch (_) {
+            // Wallet rollback is best-effort.
+          }
+        }
+
+        if (senderIdForRollback && senderCreditAmountForRollback > 0) {
+          const senderUser = await User.findById(senderIdForRollback)
+            .select("specialCredits")
+            .lean();
+          const currentSpecialCredits = (senderUser as any)?.specialCredits || {};
+
+          await User.findByIdAndUpdate(senderIdForRollback, {
+            $set: {
+              "specialCredits.totalSent": Math.max(
+                0,
+                Number(currentSpecialCredits.totalSent || 0) -
+                  senderCreditAmountForRollback,
+              ),
+              "specialCredits.usedSlots": Math.max(
+                0,
+                Number(currentSpecialCredits.usedSlots || 0) - 1,
+              ),
+            },
+          });
+        }
+
+        await refundSlot(
+          sentSlotId,
+          req.userId as string,
+          "rollback_after_special_credit_send_failure",
+        );
+      } catch (rollbackError) {
+        console.error("❌ SPECIAL CREDITS SEND ROLLBACK ERROR", {
+          sentSlotId,
+          transferIdForRollback,
+          recipientIdForRollback,
+          rollbackError:
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError),
+        });
+      }
+    }
+
+    console.error("❌ SPECIAL CREDITS SEND ERROR", {
+      userId: req.userId,
+      body: req.body,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error",
+      debug: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.message : String(error)) : undefined,
+    });
   }
 });
 
@@ -2682,15 +2853,23 @@ router.get(
         });
       }
 
+      // for unlock logic we still consult canonical id – unlocking should be
+      // evaluated on the campaign/template level when applicable, but slot
+      // filtering below is per‑voucher.
       const activeTransferVoucherId = voucherScope.canonicalVoucherId;
       await reconcileTransferUnlocksForUser(
         req.userId as string,
         activeTransferVoucherId || undefined,
       );
 
-      // Filter slots by voucherId if provided (per-voucher isolation)
+      // Filter slots by the explicit voucherId if provided, otherwise fall back to
+      // canonical.  this ensures that even if a voucher accidentally has its
+      // templateId set to itself we treat it as a standalone pool.
       const slotQuery: any = { ownerId: req.userId };
-      if (activeTransferVoucherId) {
+      const rawVoucherObject = asObjectId(voucherId as string | undefined);
+      if (rawVoucherObject) {
+        slotQuery.voucherId = rawVoucherObject;
+      } else if (activeTransferVoucherId) {
         slotQuery.voucherId = activeTransferVoucherId;
       }
 

@@ -81,6 +81,89 @@ async function incrementAncestorDownline(
   );
 }
 
+function isTransactionUnsupportedError(error: any): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(
+    "Transaction numbers are only allowed on a replica set member or mongos",
+  );
+}
+
+async function incrementAncestorDownlineWithoutSession(
+  ancestorIds: mongoose.Types.ObjectId[],
+  delta: 1 | -1,
+) {
+  if (!ancestorIds.length) return;
+  await User.updateMany(
+    { _id: { $in: ancestorIds } },
+    { $inc: { downlineCount: delta } },
+  );
+}
+
+async function linkUserWithoutTransaction(
+  userId: string,
+  parentId: string,
+  actorId: string,
+  reason = "",
+): Promise<void> {
+  const [user, parent] = await Promise.all([
+    User.findById(userId),
+    User.findById(parentId),
+  ]);
+
+  if (!user) throw new Error(`User ${userId} not found`);
+  if (!parent) throw new Error(`Parent ${parentId} not found`);
+
+  const currentParentId = (user as any).parentId;
+  if (currentParentId && currentParentId.toString() === parentId) return;
+  if (currentParentId && currentParentId.toString() !== parentId) {
+    throw new Error(
+      `User ${userId} is already linked to another parent (${currentParentId})`,
+    );
+  }
+
+  const rules = await getNetworkRules();
+  const parentRole: string = (parent as any).role ?? "user";
+  const maxDirect: number =
+    (rules.maxDirectByRole as any)[parentRole] ?? rules.maxDirectByRole.user;
+  const currentDirect = (parent as any).directCount ?? 0;
+
+  if (currentDirect >= maxDirect) {
+    throw new Error(
+      `Parent ${parentId} has reached the maximum direct-buyer limit (${maxDirect}) for role '${parentRole}'`,
+    );
+  }
+
+  const parentLevel = (parent as any).level ?? 0;
+  if (parentLevel + 1 > rules.maxDepth) {
+    throw new Error(`Adding user would exceed max depth of ${rules.maxDepth}`);
+  }
+
+  const parentAncestors: mongoose.Types.ObjectId[] =
+    (parent as any).ancestors ?? [];
+  const newAncestors = [
+    ...parentAncestors,
+    parent._id as mongoose.Types.ObjectId,
+  ];
+
+  await User.findByIdAndUpdate(userId, {
+    parentId,
+    level: parentLevel + 1,
+    ancestors: newAncestors,
+  });
+
+  await User.findByIdAndUpdate(parentId, { $inc: { directCount: 1 } });
+  await incrementAncestorDownlineWithoutSession(newAncestors, 1);
+
+  await NetworkEvent.create({
+    type: "LINK",
+    userId,
+    oldParentId: null,
+    newParentId: parentId,
+    actorId,
+    reason,
+  });
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -226,6 +309,11 @@ export async function linkUser(
         { session },
       );
     });
+  } catch (error) {
+    if (!isTransactionUnsupportedError(error)) {
+      throw error;
+    }
+    await linkUserWithoutTransaction(userId, parentId, actorId, reason);
   } finally {
     await session.endSession();
   }
