@@ -18,7 +18,7 @@ const VoucherModel: any = Voucher;
 const DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE = 5;
 const VOUCHER_PURCHASE_TIMEOUT_MINUTES = Math.max(
   1,
-  Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 60),
+  Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 5),
 );
 const SPECIAL_CREDIT_CHAIN = [
   29296872000, 5859372000, 1171872000, 234372000, 46872000, 9372000, 1872000,
@@ -401,3 +401,4 @@ run().catch((error) => {
   console.error("repair-orphan-special-credit-transfers failed", error);
   process.exit(1);
 });
+

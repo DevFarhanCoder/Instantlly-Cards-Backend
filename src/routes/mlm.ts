@@ -33,12 +33,26 @@ const CREDIT_EXPIRY_MINUTES = 60;
 const TRANSFER_EXPIRY_HOURS = 48;
 const VOUCHER_PURCHASE_TIMEOUT_MINUTES = Math.max(
   1,
-  Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 60),
+  Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 5),
+);
+const AUTO_REFUND_CHECK_INTERVAL_MS = Math.max(
+  15 * 1000,
+  Math.min(
+    60 * 1000,
+    Math.floor((VOUCHER_PURCHASE_TIMEOUT_MINUTES * 60 * 1000) / 10),
+  ),
 );
 const CONNECTION_TIMEOUT_HOURS = 48; // 2 days to connect 5 people
 const MIN_VOUCHERS_TO_UNLOCK = 5; // Must share 5 vouchers to unlock credit transfer
 const DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE = 5;
 const DISTRIBUTION_CREDIT_AMOUNT = 146484360000; // Credits per distribution entry
+
+function getVoucherTimeoutReason(): string {
+  if (VOUCHER_PURCHASE_TIMEOUT_MINUTES % 60 === 0) {
+    return `required_vouchers_not_met_within_${VOUCHER_PURCHASE_TIMEOUT_MINUTES / 60}h`;
+  }
+  return `required_vouchers_not_met_within_${VOUCHER_PURCHASE_TIMEOUT_MINUTES}m`;
+}
 
 function asObjectId(id?: string | null): Types.ObjectId | null {
   if (!id) return null;
@@ -205,6 +219,110 @@ function transferTimeLeftSeconds(expiresAt?: Date | string | null): number {
   return Math.max(0, Math.floor(ms / 1000));
 }
 
+async function refundExpiredPendingTransfer(
+  transfer: any,
+  currentVoucherCount: number,
+  now: Date,
+) {
+  const timedOutTransfer = await MlmTransfer.findOneAndUpdate(
+    { _id: transfer._id, status: "pending_unlock" },
+    {
+      status: "returned_timeout",
+      currentVoucherCount,
+      returnedAt: now,
+      returnReason: getVoucherTimeoutReason(),
+    },
+    { new: true },
+  );
+  if (!timedOutTransfer) return;
+
+  const sourceSlotId = transfer.sourceSlotId;
+  const recipientId = transfer.receiverId?.toString();
+  const senderId = transfer.senderId?.toString();
+  const transferAmount = Number(transfer.amount || 0);
+  const recipientSlotCount = Math.max(
+    1,
+    Number(transfer.slotCount || 0) || 5,
+  );
+
+  if (sourceSlotId) {
+    await SpecialCredit.findByIdAndUpdate(sourceSlotId, {
+      status: "available",
+      recipientId: null,
+      recipientName: null,
+      recipientPhone: null,
+      sentAt: null,
+      expiresAt: null,
+    });
+  }
+
+  if (recipientId) {
+    const recipient = await User.findById(recipientId)
+      .select("specialCredits")
+      .lean();
+
+    if ((recipient as any)?.specialCredits) {
+      await User.findByIdAndUpdate(recipientId, {
+        "specialCredits.balance": Math.max(
+          0,
+          Number((recipient as any).specialCredits.balance || 0) - transferAmount,
+        ),
+        "specialCredits.totalReceived": Math.max(
+          0,
+          Number((recipient as any).specialCredits.totalReceived || 0) -
+            transferAmount,
+        ),
+        "specialCredits.availableSlots": Math.max(
+          0,
+          Number((recipient as any).specialCredits.availableSlots || 0) -
+            recipientSlotCount,
+        ),
+      });
+    }
+
+    if (transferAmount > 0) {
+      try {
+        await subtractCredits(recipientId, transferAmount);
+      } catch (_) {
+        // Wallet rollback is best-effort.
+      }
+    }
+
+    if (sourceSlotId) {
+      await SpecialCredit.deleteMany({
+        ownerId: recipientId,
+        sourceSlotId,
+      });
+    }
+
+    await SpecialCredit.updateMany(
+      { ownerId: recipientId, transferId: transfer._id },
+      {
+        $set: {
+          isLocked: false,
+          lockReason: "returned_timeout",
+        },
+      },
+    );
+  }
+
+  if (senderId && transferAmount > 0) {
+    const sender = await User.findById(senderId).select("specialCredits").lean();
+    if ((sender as any)?.specialCredits) {
+      await User.findByIdAndUpdate(senderId, {
+        "specialCredits.totalSent": Math.max(
+          0,
+          Number((sender as any).specialCredits.totalSent || 0) - transferAmount,
+        ),
+        "specialCredits.usedSlots": Math.max(
+          0,
+          Number((sender as any).specialCredits.usedSlots || 0) - 1,
+        ),
+      });
+    }
+  }
+}
+
 async function reconcileTransferUnlocksForUser(
   userId: string,
   voucherId?: Types.ObjectId | null,
@@ -213,7 +331,6 @@ async function reconcileTransferUnlocksForUser(
   const query: any = {
     receiverId: new Types.ObjectId(userId),
     status: "pending_unlock",
-    expiresAt: { $gt: now },
   };
   if (voucherId) query.voucherId = voucherId;
 
@@ -223,6 +340,14 @@ async function reconcileTransferUnlocksForUser(
       userId,
       (transfer.voucherId as Types.ObjectId) || voucherId || undefined,
     );
+
+    if (
+      transfer?.expiresAt &&
+      new Date(transfer.expiresAt).getTime() <= now.getTime()
+    ) {
+      await refundExpiredPendingTransfer(transfer, currentVoucherCount, now);
+      continue;
+    }
 
     if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
       await MlmTransfer.findByIdAndUpdate(transfer._id, {
@@ -1705,6 +1830,8 @@ router.get(
 
 router.get("/overview", requireAuth, async (req: AuthReq, res) => {
   try {
+    await reconcileTransferUnlocksForUser(req.userId as string);
+
     const user = await User.findById(req.userId).select(
       "name phone level directCount downlineCount parentId createdAt isVoucherAdmin specialCredits voucherBalance",
     );
@@ -2415,20 +2542,18 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
 
     const isAdmin = sender.isVoucherAdmin === true;
 
-    // Non-admin users need at least 5 vouchers to send special credits
+    // Non-admin users must meet the selected voucher campaign's minimum voucher requirement
     if (!isAdmin) {
-      const voucherDocCount = await Voucher.countDocuments({
-        userId: req.userId,
-        redeemedStatus: { $ne: "redeemed" },
-      });
-      const totalVouchers =
-        voucherDocCount + ((sender as any).voucherBalance || 0);
+      const totalVouchers = await getVoucherCountForTemplate(
+        req.userId as string,
+        voucherObjectId || undefined,
+      );
 
-      if (totalVouchers < 5) {
+      if (totalVouchers < requiredVoucherCount) {
         return res.status(403).json({
           success: false,
-          message: `You need at least 5 vouchers to send special credits. Current vouchers: ${totalVouchers}`,
-          requiredVouchers: 5,
+          message: `You need at least ${requiredVoucherCount} vouchers to send special credits for this campaign. Current vouchers: ${totalVouchers}`,
+          requiredVouchers: requiredVoucherCount,
           currentVouchers: totalVouchers,
         });
       }
@@ -2580,7 +2705,7 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     // Add credits to recipient
     recipient.specialCredits.balance += slot.creditAmount;
     recipient.specialCredits.totalReceived += slot.creditAmount;
-    recipient.specialCredits.availableSlots = numRecipientSlots;
+    recipient.specialCredits.availableSlots += numRecipientSlots;
     recipientCreditAmountForRollback = slot.creditAmount;
     recipientSlotCountForRollback = numRecipientSlots;
 
@@ -2620,9 +2745,10 @@ router.post("/special-credits/send", requireAuth, async (req: AuthReq, res) => {
     // Each slot gets: (received amount) / 5
     const recipientLevel = recipient.level;
     const recipientSlots = [];
-    const slotCreditAmount =
-      getSpecialCreditsForLevel(recipientLevel) ||
-      Math.round(slot.creditAmount / numRecipientSlots);
+    const slotCreditAmount = Math.max(
+      1,
+      Math.round(slot.creditAmount / numRecipientSlots),
+    );
     const currentVoucherCount = await getVoucherCountForTemplate(
       recipient._id.toString(),
       ((slot as any).voucherId as Types.ObjectId) ||
@@ -2842,6 +2968,15 @@ router.get(
       const { voucherId } = req.query;
       const voucherScope = await resolveVoucherScope(voucherId as string);
 
+      // for unlock logic we still consult canonical id – unlocking should be
+      // evaluated on the campaign/template level when applicable, but slot
+      // filtering below is per‑voucher.
+      const activeTransferVoucherId = voucherScope.canonicalVoucherId;
+      await reconcileTransferUnlocksForUser(
+        req.userId as string,
+        activeTransferVoucherId || undefined,
+      );
+
       const user = await User.findById(req.userId).select(
         "name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances",
       );
@@ -2852,15 +2987,6 @@ router.get(
           message: "User not found",
         });
       }
-
-      // for unlock logic we still consult canonical id – unlocking should be
-      // evaluated on the campaign/template level when applicable, but slot
-      // filtering below is per‑voucher.
-      const activeTransferVoucherId = voucherScope.canonicalVoucherId;
-      await reconcileTransferUnlocksForUser(
-        req.userId as string,
-        activeTransferVoucherId || undefined,
-      );
 
       // Filter slots by the explicit voucherId if provided, otherwise fall back to
       // canonical.  this ensures that even if a voucher accidentally has its
@@ -3103,18 +3229,18 @@ router.get(
 
 // ============================================
 // AUTO-REFUND SCHEDULER
-// Checks every 5 minutes for expired special-credit slots.
+// Checks periodically for expired special-credit slots.
 // If recipient hasn't collected required vouchers, credits are refunded.
 // ============================================
 
 export function startAutoRefundScheduler(): void {
-  const CHECK_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+  const CHECK_INTERVAL_MS = AUTO_REFUND_CHECK_INTERVAL_MS;
 
   const runCheck = async () => {
     try {
       const now = new Date();
 
-      // Find sent slots whose 1-hour window has expired
+      // Find sent slots whose unlock window has expired
       const expiredSlots = await SpecialCredit.find({
         status: "sent",
         expiresAt: { $lt: now },
@@ -3203,98 +3329,19 @@ export function startAutoRefundScheduler(): void {
           );
 
           if (transfer) {
-            const timeoutUpdate = await MlmTransfer.findOneAndUpdate(
-              { _id: transfer._id, status: "pending_unlock" },
-              {
-                status: "returned_timeout",
-                currentVoucherCount: totalVouchers,
-                returnedAt: new Date(),
-                returnReason: "required_vouchers_not_met_within_1h",
-              },
-              { new: true },
-            );
-            if (!timeoutUpdate) {
-              // Already handled by another worker cycle
-              continue;
-            }
-          }
-
-          // Reset the slot to available
-          await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
-            status: "available",
-            recipientId: null,
-            recipientName: null,
-            recipientPhone: null,
-            sentAt: null,
-            expiresAt: null,
-          });
-
-          // Deduct credits from recipient's special-credits balance
-          if (recipient.specialCredits) {
-            const newBalance = Math.max(
-              0,
-              (recipient.specialCredits.balance || 0) - slotDoc.creditAmount,
-            );
-            const newReceived = Math.max(
-              0,
-              (recipient.specialCredits.totalReceived || 0) -
-                slotDoc.creditAmount,
-            );
-            const newSlots = Math.max(
-              0,
-              (recipient.specialCredits.availableSlots || 0) - 5,
-            );
-            await User.findByIdAndUpdate(recipient._id, {
-              "specialCredits.balance": newBalance,
-              "specialCredits.totalReceived": newReceived,
-              "specialCredits.availableSlots": newSlots,
+            await refundExpiredPendingTransfer(transfer, totalVouchers, now);
+          } else {
+            // Reset the slot to available even if the transfer row is already gone.
+            await SpecialCredit.findByIdAndUpdate(slotDoc._id, {
+              status: "available",
+              recipientId: null,
+              recipientName: null,
+              recipientPhone: null,
+              sentAt: null,
+              expiresAt: null,
             });
           }
 
-          // Also deduct from recipient's MLM wallet
-          try {
-            await subtractCredits(
-              recipient._id.toString(),
-              slotDoc.creditAmount,
-            );
-          } catch (_) {
-            /* wallet may already be at 0 */
-          }
-
-          // Remove recipient's 5 sub-slots (the ones sourced from this slot)
-          await SpecialCredit.deleteMany({
-            ownerId: recipient._id,
-            sourceSlotId: slotDoc._id,
-            status: "available",
-          });
-          if (transfer) {
-            await SpecialCredit.updateMany(
-              { ownerId: recipient._id, transferId: transfer._id },
-              {
-                $set: {
-                  isLocked: false,
-                  lockReason: "returned_timeout",
-                },
-              },
-            );
-          }
-
-          // Restore sender's stats
-          const sender = await User.findById(slotDoc.ownerId?._id);
-          if (sender && sender.specialCredits) {
-            const restoredSent = Math.max(
-              0,
-              (sender.specialCredits.totalSent || 0) - slotDoc.creditAmount,
-            );
-            const restoredUsed = Math.max(
-              0,
-              (sender.specialCredits.usedSlots || 0) - 1,
-            );
-            await User.findByIdAndUpdate(sender._id, {
-              "specialCredits.totalSent": restoredSent,
-              "specialCredits.usedSlots": restoredUsed,
-            });
-          }
         } catch (innerErr) {
           console.error(
             `Auto-refund failed for slot ${slotDoc._id}:`,
@@ -3307,10 +3354,13 @@ export function startAutoRefundScheduler(): void {
     }
   };
 
-  // Run immediately on startup, then repeat every 5 minutes
+  // Run shortly after startup, then repeat on the configured interval.
   setTimeout(runCheck, 30_000); // first run 30s after startup
   setInterval(runCheck, CHECK_INTERVAL_MS);
-  console.log("✅ MLM Auto-refund scheduler started (5-min interval)");
+  console.log(
+    `✅ MLM Auto-refund scheduler started (${Math.floor(CHECK_INTERVAL_MS / 1000)}s interval, ${VOUCHER_PURCHASE_TIMEOUT_MINUTES}m timeout)`,
+  );
 }
 
 export default router;
+
