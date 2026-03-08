@@ -49,6 +49,13 @@ const VoucherSchema = new Schema(
     description: { type: String },
     // Minimum vouchers user must collect to unlock/use this voucher's credits
     minVouchersRequired: { type: Number, default: 5 },
+    // Stable reference to the admin voucher template/campaign.
+    // For templates, templateId == _id. User copies inherit templateId from template.
+    templateId: {
+      type: Schema.Types.ObjectId,
+      ref: "Voucher",
+      index: true,
+    },
 
     // Publishing status
     isPublished: { type: Boolean, default: false },
@@ -77,5 +84,6 @@ const VoucherSchema = new Schema(
 );
 
 VoucherSchema.index({ userId: 1, redeemedStatus: 1 });
+VoucherSchema.index({ userId: 1, templateId: 1, redeemedStatus: 1 });
 
 export default models.Voucher || model("Voucher", VoucherSchema);

@@ -9,6 +9,7 @@ const mongoose_1 = require("mongoose");
 const auth_1 = require("../middleware/auth");
 const User_1 = __importDefault(require("../models/User"));
 const MlmCredit_1 = __importDefault(require("../models/MlmCredit"));
+const MlmTransfer_1 = __importDefault(require("../models/MlmTransfer"));
 const Voucher_1 = __importDefault(require("../models/Voucher"));
 const SpecialCredit_1 = __importDefault(require("../models/SpecialCredit"));
 const VoucherTransferLog_1 = __importDefault(require("../models/VoucherTransferLog"));
@@ -20,14 +21,175 @@ const treeService_1 = require("../services/mlm/treeService");
 const creditDashboardService_1 = require("../services/mlm/creditDashboardService");
 const directBuyersService_1 = require("../services/mlm/directBuyersService");
 const discountService_1 = require("../services/mlm/discountService");
-const downlineService_1 = require("../services/mlm/downlineService");
+const networkService_1 = require("../services/mlm/networkService");
+const slotService_1 = require("../services/mlm/slotService");
 const router = (0, express_1.Router)();
 const CREDIT_EXPIRY_MINUTES = 60;
 const TRANSFER_EXPIRY_HOURS = 48;
-const VOUCHER_PURCHASE_TIMEOUT_MINUTES = 60; // 1 hour to complete purchase
+const VOUCHER_PURCHASE_TIMEOUT_MINUTES = Math.max(1, Number(process.env.SPECIAL_CREDIT_UNLOCK_TIMEOUT_MINUTES || 60));
 const CONNECTION_TIMEOUT_HOURS = 48; // 2 days to connect 5 people
 const MIN_VOUCHERS_TO_UNLOCK = 5; // Must share 5 vouchers to unlock credit transfer
+const DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE = 5;
 const DISTRIBUTION_CREDIT_AMOUNT = 146484360000; // Credits per distribution entry
+function asObjectId(id) {
+    if (!id)
+        return null;
+    try {
+        return new mongoose_1.Types.ObjectId(id);
+    }
+    catch {
+        return null;
+    }
+}
+async function resolveVoucherScope(voucherId) {
+    const requestedVoucherId = voucherId || null;
+    if (!voucherId) {
+        return {
+            requestedVoucherId,
+            detectedType: "none",
+            canonicalVoucherId: null,
+            matchedVoucherId: null,
+        };
+    }
+    if (voucherId === "instantlly-special-credits") {
+        const publishedTemplate = await Voucher_1.default.findOne({
+            isPublished: true,
+            $or: [{ userId: { $exists: false } }, { userId: null }],
+        })
+            .sort({ publishedAt: -1, createdAt: -1 })
+            .select("_id templateId")
+            .lean();
+        if (!publishedTemplate) {
+            return {
+                requestedVoucherId,
+                detectedType: "legacy",
+                canonicalVoucherId: null,
+                matchedVoucherId: null,
+            };
+        }
+        const canonical = publishedTemplate.templateId ||
+            publishedTemplate._id;
+        return {
+            requestedVoucherId,
+            detectedType: "legacy",
+            canonicalVoucherId: canonical,
+            matchedVoucherId: publishedTemplate._id,
+        };
+    }
+    const objectId = asObjectId(voucherId);
+    if (!objectId) {
+        return {
+            requestedVoucherId,
+            detectedType: "invalid",
+            canonicalVoucherId: null,
+            matchedVoucherId: null,
+        };
+    }
+    const voucherDoc = await Voucher_1.default.findById(objectId)
+        .select("_id templateId")
+        .lean();
+    if (!voucherDoc) {
+        // Accept campaign/template id directly even if this collection row is absent.
+        return {
+            requestedVoucherId,
+            detectedType: "campaign_or_template_id",
+            canonicalVoucherId: objectId,
+            matchedVoucherId: null,
+        };
+    }
+    const templateId = voucherDoc.templateId;
+    const detectedType = templateId && templateId.toString() !== voucherDoc._id.toString()
+        ? "instance"
+        : "template";
+    return {
+        requestedVoucherId,
+        detectedType,
+        canonicalVoucherId: templateId || voucherDoc._id,
+        matchedVoucherId: voucherDoc._id,
+    };
+}
+async function getVoucherTemplateRequiredCount(voucherId) {
+    const objectId = asObjectId(voucherId);
+    if (!objectId)
+        return DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE;
+    const voucher = await Voucher_1.default.findById(objectId)
+        .select("minVouchersRequired")
+        .lean();
+    return Math.max(0, Number(voucher?.minVouchersRequired) ||
+        DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE);
+}
+async function getVoucherCountForTemplate(userId, voucherId) {
+    if (!voucherId) {
+        const [physicalCount, user] = await Promise.all([
+            Voucher_1.default.countDocuments({
+                userId: new mongoose_1.Types.ObjectId(userId),
+                redeemedStatus: { $ne: "redeemed" },
+            }),
+            User_1.default.findById(userId).select("voucherBalance").lean(),
+        ]);
+        return Math.max(0, physicalCount + Number(user?.voucherBalance || 0));
+    }
+    const [physicalCount, user] = await Promise.all([
+        Voucher_1.default.countDocuments({
+            userId: new mongoose_1.Types.ObjectId(userId),
+            redeemedStatus: { $ne: "redeemed" },
+            $or: [{ templateId: voucherId }, { _id: voucherId }],
+        }),
+        User_1.default.findById(userId).select("voucherBalances").lean(),
+    ]);
+    let balanceCount = 0;
+    const balanceMap = user?.voucherBalances;
+    if (balanceMap instanceof Map) {
+        balanceCount = Number(balanceMap.get(String(voucherId)) || 0);
+    }
+    else if (balanceMap && typeof balanceMap === "object") {
+        balanceCount = Number(balanceMap[String(voucherId)] || 0);
+    }
+    return Math.max(0, physicalCount + balanceCount);
+}
+function transferTimeLeftSeconds(expiresAt) {
+    if (!expiresAt)
+        return 0;
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    return Math.max(0, Math.floor(ms / 1000));
+}
+async function reconcileTransferUnlocksForUser(userId, voucherId) {
+    const now = new Date();
+    const query = {
+        receiverId: new mongoose_1.Types.ObjectId(userId),
+        status: "pending_unlock",
+        expiresAt: { $gt: now },
+    };
+    if (voucherId)
+        query.voucherId = voucherId;
+    const transfers = await MlmTransfer_1.default.find(query).lean();
+    for (const transfer of transfers) {
+        const currentVoucherCount = await getVoucherCountForTemplate(userId, transfer.voucherId);
+        if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
+            await MlmTransfer_1.default.findByIdAndUpdate(transfer._id, {
+                currentVoucherCount,
+            });
+            continue;
+        }
+        await MlmTransfer_1.default.findByIdAndUpdate(transfer._id, {
+            status: "unlocked",
+            currentVoucherCount,
+            unlockedSlots: transfer.slotCount || 5,
+            unlockedAt: now,
+        });
+        await SpecialCredit_1.default.updateMany({
+            ownerId: transfer.receiverId,
+            transferId: transfer._id,
+            isLocked: true,
+        }, {
+            $set: {
+                isLocked: false,
+                lockReason: null,
+                unlockedAt: now,
+            },
+        });
+    }
+}
 // ============================================
 // DISTRIBUTION CREDITS
 // ============================================
@@ -53,6 +215,13 @@ router.get("/distribution-credits", auth_1.requireAuth, async (req, res) => {
             });
             // Check if credits are locked (need 5 vouchers shared)
             const isLocked = vouchersShared < MIN_VOUCHERS_TO_UNLOCK;
+            const activeTransfer = await MlmTransfer_1.default.findOne({
+                senderId: req.userId,
+                receiverId: child._id,
+                status: { $in: ["pending_unlock", "unlocked"] },
+            })
+                .sort({ createdAt: -1 })
+                .lean();
             // Calculate time left to connect (2 days from creation)
             const createdAt = new Date(child.createdAt);
             const timeoutAt = new Date(createdAt.getTime() + CONNECTION_TIMEOUT_HOURS * 60 * 60 * 1000);
@@ -68,6 +237,16 @@ router.get("/distribution-credits", auth_1.requireAuth, async (req, res) => {
                 vouchersShared,
                 isLocked,
                 timeLeft: `${hoursLeft}h ${minutesLeft}m`,
+                transferId: activeTransfer?._id?.toString() || null,
+                slotNumber: 1,
+                lockReason: activeTransfer
+                    ? activeTransfer.status === "pending_unlock"
+                        ? `Need ${activeTransfer.requiredVoucherCount} vouchers for this campaign`
+                        : null
+                    : null,
+                timeLeftSeconds: activeTransfer
+                    ? transferTimeLeftSeconds(activeTransfer.expiresAt)
+                    : 0,
             };
         }));
         res.json({ success: true, credits: distributionCredits });
@@ -125,6 +304,7 @@ router.post("/vouchers/purchase", auth_1.requireAuth, async (req, res) => {
             });
             vouchers.push(voucher);
         }
+        await reconcileTransferUnlocksForUser(req.userId);
         // Set connection timeout (2 days to connect 5 people)
         const connectionExpiresAt = new Date(Date.now() + CONNECTION_TIMEOUT_HOURS * 60 * 60 * 1000);
         res.json({
@@ -161,10 +341,29 @@ router.get("/credits/dashboard", auth_1.requireAuth, async (req, res) => {
     try {
         const wallet = await (0, walletService_1.getOrCreateWallet)(req.userId);
         const dashboard = await (0, creditDashboardService_1.getCreditDashboard)(req.userId);
+        const activeTransfers = await MlmTransfer_1.default.find({
+            receiverId: req.userId,
+            status: { $in: ["pending_unlock", "unlocked"] },
+        })
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .lean();
         res.json({
             success: true,
             creditBalance: wallet.creditBalance,
             ...dashboard,
+            activeTransfers: activeTransfers.map((t) => ({
+                transferId: t._id.toString(),
+                status: t.status,
+                requiredVoucherCount: t.requiredVoucherCount || 0,
+                currentVoucherCount: t.currentVoucherCount || 0,
+                timerStartedAt: t.timerStartedAt,
+                expiresAt: t.expiresAt,
+                timeLeftSeconds: transferTimeLeftSeconds(t.expiresAt),
+                slotCount: t.slotCount || 5,
+                slotAmount: t.slotAmount || 0,
+                unlockedSlots: t.unlockedSlots || 0,
+            })),
         });
     }
     catch (error) {
@@ -225,22 +424,25 @@ router.post("/credits/transfer", auth_1.requireAuth, async (req, res) => {
                 isLocked: true,
             });
         }
-        // Link receiver to sender if not already linked
-        if (receiver.parentId && receiver.parentId.toString() !== req.userId) {
-            return res.status(400).json({
-                success: false,
-                message: "Receiver already linked to another parent",
-            });
+        // Link receiver to sender if not already linked (V2: transactional via NetworkService)
+        try {
+            await (0, networkService_1.linkUser)(receiverId, req.userId, req.userId, "credit-transfer");
         }
-        if (!receiver.parentId) {
-            receiver.parentId = req.userId;
-            receiver.level = Math.min(senderUser?.level || 0, 9) + 1;
-            receiver.directCount = receiver.directCount || 0;
-            await receiver.save();
-            // Update sender's direct count
-            await User_1.default.findByIdAndUpdate(req.userId, { $inc: { directCount: 1 } });
-            // Update downline counts for all ancestors
-            await (0, downlineService_1.updateAncestorDownlineCounts)(receiverId);
+        catch (linkErr) {
+            if (linkErr.message?.includes("already linked to another parent")) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Receiver already linked to another parent",
+                });
+            }
+            // Any other link error (cap exceeded, depth, etc.) is surfaced as 400
+            if (linkErr.message?.includes("already linked to this exact parent") ||
+                linkErr.message?.includes("already linked to another parent")) {
+                // No need to re-throw — just continue below
+            }
+            else {
+                throw linkErr;
+            }
         }
         // Create credits (payment pending state)
         const createdCredits = [];
@@ -371,6 +573,8 @@ router.get("/vouchers", auth_1.requireAuth, async (req, res) => {
         }
         // Regular user vouchers
         const query = { userId: req.userId };
+        // Hide unpublished admin-assigned copies from end-user list.
+        query.$or = [{ source: { $ne: "admin" } }, { isPublished: true }];
         if (status)
             query.redeemedStatus = status;
         const userVouchers = await Voucher_1.default.find(query)
@@ -773,6 +977,8 @@ router.post("/vouchers/:voucherId/transfer", auth_1.requireAuth, async (req, res
             transferredAt: new Date(),
         });
         await voucher.save();
+        await reconcileTransferUnlocksForUser(recipient._id.toString(), voucher.templateId ||
+            voucher._id);
         // Populate recipient info for response
         await voucher.populate("userId", "name phone");
         res.json({
@@ -789,7 +995,7 @@ router.post("/vouchers/:voucherId/transfer", auth_1.requireAuth, async (req, res
 // Admin voucher transfer - create new vouchers for recipient
 router.post("/vouchers/admin-transfer", auth_1.requireAuth, async (req, res) => {
     try {
-        const { recipientPhone, quantity = 1 } = req.body;
+        const { recipientPhone, quantity = 1, voucherId } = req.body;
         // Check if user is admin
         const admin = await User_1.default.findById(req.userId).select("isVoucherAdmin level name phone");
         const isAdmin = admin?.isVoucherAdmin === true;
@@ -819,14 +1025,37 @@ router.post("/vouchers/admin-transfer", auth_1.requireAuth, async (req, res) => 
                 .status(404)
                 .json({ success: false, message: "Recipient not found" });
         }
-        // Increment recipient's voucherBalance (no physical documents created)
-        await User_1.default.findByIdAndUpdate(recipient._id, {
-            $inc: { voucherBalance: qty },
-        });
-        // Deduct from admin's voucherBalance
-        await User_1.default.findByIdAndUpdate(req.userId, {
-            $inc: { voucherBalance: -qty },
-        });
+        const voucherObjectId = asObjectId(voucherId);
+        const voucherBalanceInc = {
+            voucherBalance: qty,
+        };
+        const voucherBalanceDec = {
+            voucherBalance: -qty,
+        };
+        // Keep template-level balances in sync for unlock logic.
+        if (voucherObjectId) {
+            const key = `voucherBalances.${voucherObjectId.toString()}`;
+            voucherBalanceInc[key] = qty;
+            voucherBalanceDec[key] = -qty;
+        }
+        // Increment recipient voucher balances (global + template scoped when available)
+        await User_1.default.findByIdAndUpdate(recipient._id, { $inc: voucherBalanceInc });
+        await reconcileTransferUnlocksForUser(recipient._id.toString(), voucherObjectId || undefined);
+        // Deduct from admin balances
+        await User_1.default.findByIdAndUpdate(req.userId, { $inc: voucherBalanceDec });
+        // Resolve per-voucher amount from the voucher template (if voucherId provided)
+        let perVoucherAmount = 1200; // default MRP
+        if (voucherId) {
+            const voucherTemplate = await Voucher_1.default.findById(voucherId)
+                .select("amount MRP")
+                .lean();
+            if (voucherTemplate) {
+                perVoucherAmount =
+                    voucherTemplate.amount ||
+                        voucherTemplate.MRP ||
+                        1200;
+            }
+        }
         // Save transfer log for history tracking
         await VoucherTransferLog_1.default.create({
             senderId: req.userId,
@@ -836,7 +1065,9 @@ router.post("/vouchers/admin-transfer", auth_1.requireAuth, async (req, res) => 
             recipientName: recipient.name,
             recipientPhone: recipient.phone,
             quantity: qty,
+            amount: perVoucherAmount,
             transferredAt: new Date(),
+            ...(voucherId ? { voucherId } : {}),
         });
         res.json({
             success: true,
@@ -854,34 +1085,46 @@ router.post("/vouchers/admin-transfer", auth_1.requireAuth, async (req, res) => 
 // ============================================
 router.get("/transfer-history", auth_1.requireAuth, async (req, res) => {
     try {
-        const { limit = 50 } = req.query;
-        // Get special credits sent by this user
+        const { limit = 50, voucherId } = req.query;
+        // Build voucher filter for SpecialCredit and VoucherTransferLog
+        let vidFilter = {};
+        if (voucherId) {
+            try {
+                vidFilter = { voucherId: new mongoose_1.Types.ObjectId(voucherId) };
+            }
+            catch (_) { }
+        }
+        // Get special credits sent by this user (scoped to voucher if provided)
         const specialCreditsSent = await SpecialCredit_1.default.find({
             ownerId: req.userId,
             status: "sent",
+            ...vidFilter,
         })
             .populate("recipientId", "name phone")
             .sort({ sentAt: -1 })
             .limit(Number(limit))
             .lean();
-        // Get special credits received by this user
+        // Get special credits received by this user (scoped to voucher if provided)
         const specialCreditsReceived = await SpecialCredit_1.default.find({
             recipientId: req.userId,
             status: "sent",
+            ...vidFilter,
         })
             .populate("ownerId", "name phone")
             .sort({ sentAt: -1 })
             .limit(Number(limit))
             .lean();
-        // Get balance-based voucher transfer logs (admin-transfer uses voucherBalance counters)
+        // Get balance-based voucher transfer logs (scoped to voucher if provided)
         const voucherLogsSent = await VoucherTransferLog_1.default.find({
             senderId: req.userId,
+            ...(voucherId ? vidFilter : {}),
         })
             .sort({ transferredAt: -1 })
             .limit(Number(limit))
             .lean();
         const voucherLogsReceived = await VoucherTransferLog_1.default.find({
             recipientId: req.userId,
+            ...(voucherId ? vidFilter : {}),
         })
             .sort({ transferredAt: -1 })
             .limit(Number(limit))
@@ -1004,15 +1247,15 @@ router.get("/transfer-history", auth_1.requireAuth, async (req, res) => {
         // Convert map to array
         history.vouchers.sent = Array.from(vouchersSentMap.values());
         // Merge balance-based transfer logs into sent/received
-        const VOUCHER_MRP = 1200; // ₹1200 per voucher
+        const VOUCHER_MRP = 1200; // fallback only — logs now store their own amount
         const logSentEntries = voucherLogsSent.map((log) => ({
             type: "voucher",
             direction: "sent",
             voucherNumber: null,
             voucherNumbers: [],
             companyName: "Instantlly",
-            amount: VOUCHER_MRP,
-            totalAmount: VOUCHER_MRP * log.quantity,
+            amount: log.amount ?? VOUCHER_MRP,
+            totalAmount: (log.amount ?? VOUCHER_MRP) * log.quantity,
             count: log.quantity,
             recipient: {
                 id: log.recipientId?.toString(),
@@ -1027,8 +1270,8 @@ router.get("/transfer-history", auth_1.requireAuth, async (req, res) => {
             direction: "received",
             voucherNumber: null,
             companyName: "Instantlly",
-            amount: VOUCHER_MRP,
-            totalAmount: VOUCHER_MRP * log.quantity,
+            amount: log.amount ?? VOUCHER_MRP,
+            totalAmount: (log.amount ?? VOUCHER_MRP) * log.quantity,
             count: log.quantity,
             sender: {
                 id: log.senderId?.toString(),
@@ -1082,7 +1325,38 @@ router.get("/network/tree", auth_1.requireAuth, async (req, res) => {
     try {
         const depth = Math.min(Number(req.query.depth) || 2, 4);
         const perParentLimit = Math.min(Number(req.query.perParentLimit) || 5, 10);
-        const tree = await (0, treeService_1.buildNetworkTree)(req.userId, depth, perParentLimit);
+        const voucherId = req.query.voucherId;
+        const voucherScope = await resolveVoucherScope(voucherId);
+        const tree = await (0, treeService_1.buildNetworkTree)(req.userId, depth, perParentLimit, voucherScope.canonicalVoucherId?.toString());
+        if (voucherId) {
+            const [matchedSlots, matchedTransfers] = await Promise.all([
+                voucherScope.canonicalVoucherId
+                    ? SpecialCredit_1.default.countDocuments({
+                        ownerId: req.userId,
+                        voucherId: voucherScope.canonicalVoucherId,
+                        status: "sent",
+                    })
+                    : Promise.resolve(0),
+                voucherScope.canonicalVoucherId
+                    ? MlmTransfer_1.default.countDocuments({
+                        senderId: req.userId,
+                        voucherId: voucherScope.canonicalVoucherId,
+                    })
+                    : Promise.resolve(0),
+            ]);
+            console.log("[MLM_TREE_SCOPE_DEBUG]", {
+                userId: req.userId,
+                incomingVoucherId: voucherId,
+                detectedVoucherType: voucherScope.detectedType,
+                resolvedCanonicalVoucherId: voucherScope.canonicalVoucherId?.toString() || null,
+                matchedVoucherDocId: voucherScope.matchedVoucherId?.toString() || null,
+                matchedSlotCount: matchedSlots,
+                matchedTransferCount: matchedTransfers,
+                finalDirectChildrenCount: Array.isArray(tree?.directChildren)
+                    ? tree.directChildren.length
+                    : 0,
+            });
+        }
         res.json({ success: true, tree });
     }
     catch (error) {
@@ -1121,7 +1395,9 @@ router.get("/network/direct-buyers", auth_1.requireAuth, async (req, res) => {
     try {
         const limit = Math.min(Number(req.query.limit) || 10, 50);
         const skip = Number(req.query.skip) || 0;
-        const buyers = await (0, directBuyersService_1.getDirectBuyers)(req.userId, limit, skip);
+        const voucherId = req.query.voucherId;
+        const voucherScope = await resolveVoucherScope(voucherId);
+        const buyers = await (0, directBuyersService_1.getDirectBuyers)(req.userId, limit, skip, voucherScope.canonicalVoucherId?.toString());
         res.json({ success: true, buyers });
     }
     catch (error) {
@@ -1173,7 +1449,7 @@ router.get("/overview", auth_1.requireAuth, async (req, res) => {
                 .populate("recipientId", "name phone")
                 .sort({ slotNumber: 1 })
                 .lean();
-            const totalSlots = getSlotsForUser(true);
+            const totalSlots = specialCreditSlots.length;
             const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
             const availableSlots = specialCreditSlots.filter((s) => s.status === "available").length;
             const usedSlots = specialCreditSlots.filter((s) => s.status === "sent").length;
@@ -1212,10 +1488,7 @@ router.get("/overview", auth_1.requireAuth, async (req, res) => {
                 totalNetworkUsers,
                 virtualCommission: discountSummary.virtualCommission || 0, // Discount equivalent
                 currentDiscountPercent: discountSummary.discountPercent || 0,
-                // Include vouchersFigure for any user who has a voucherBalance > 0
-                ...(user.voucherBalance > 0
-                    ? { vouchersFigure: user.voucherBalance }
-                    : {}),
+                vouchersFigure: user.voucherBalance || 0,
             },
             structuralCreditPool,
             baseMrp: mlm_1.MLM_BASE_MRP,
@@ -1425,24 +1698,23 @@ router.post("/admin/mlm-transfer", async (req, res) => {
             adminUser.parentId = null;
             await adminUser.save();
         }
-        // Check if recipient already has a parent
-        if (recipient.parentId && recipient.parentId.toString() !== adminUserId) {
-            return res.status(400).json({
-                success: false,
-                message: `${recipient.name} is already linked to another parent in the network`,
-            });
-        }
-        // Link recipient to Admin (if not already linked)
+        // Link recipient to Admin (if not already linked) — V2: transactional via NetworkService
         let isNewLink = false;
-        if (!recipient.parentId) {
-            recipient.parentId = adminUserId;
-            recipient.level = 1; // One level below Admin
-            await recipient.save();
-            // Update Admin's direct count
-            await User_1.default.findByIdAndUpdate(adminUserId, { $inc: { directCount: 1 } });
-            // Update downline counts for all ancestors (Admin in this case)
-            await (0, downlineService_1.updateAncestorDownlineCounts)(recipient._id.toString());
+        try {
+            await (0, networkService_1.linkUser)(recipient._id.toString(), adminUserId, adminUserId, "admin-transfer");
             isNewLink = true;
+        }
+        catch (linkErr) {
+            if (linkErr.message?.includes("already linked to another parent")) {
+                return res.status(400).json({
+                    success: false,
+                    message: `${recipient.name} is already linked to another parent in the network`,
+                });
+            }
+            // Idempotent: user is already linked to this admin — that's fine
+            if (!linkErr.message?.includes("already linked to this exact parent")) {
+                throw linkErr;
+            }
         }
         // Add credits to recipient's MLM wallet
         await (0, walletService_1.addCredits)(recipient._id.toString(), amount);
@@ -1489,16 +1761,16 @@ router.post("/admin/mlm-transfer", async (req, res) => {
 // ============================================
 // Credit calculation per level (divides by 5 each level)
 const SPECIAL_CREDIT_CHAIN = [
-    14648436000, // Level 0 (Admin)
-    2929686000, // Level 1
-    585936000, // Level 2
-    117186000, // Level 3
-    23436000, // Level 4
-    4686000, // Level 5
-    936000, // Level 6
-    186000, // Level 7
-    36000, // Level 8
-    6000, // Level 9
+    29296872000, // Level 0 (Admin)
+    5859372000, // Level 1
+    1171872000, // Level 2
+    234372000, // Level 3
+    46872000, // Level 4
+    9372000, // Level 5
+    1872000, // Level 6
+    372000, // Level 7
+    72000, // Level 8
+    12000, // Level 9
 ];
 // Calculate credits for a given level
 function getSpecialCreditsForLevel(level) {
@@ -1506,9 +1778,15 @@ function getSpecialCreditsForLevel(level) {
         return 0;
     return SPECIAL_CREDIT_CHAIN[level];
 }
-// Get number of slots for user (30 for admin, 5 for others)
-function getSlotsForUser(isAdmin) {
-    return isAdmin ? 30 : 5;
+// Compute how many slots a recipient gets: senderSlotCreditAmount / recipientLevelCreditPerSlot
+// Falls back to 5 if the configured level amount does not yield a usable slot count.
+// This keeps test/admin custom credit amounts (for example 10,000) distributable.
+function computeRecipientSlots(grantedCredits, recipientLevel) {
+    const creditPerSlot = getSpecialCreditsForLevel(recipientLevel);
+    if (creditPerSlot <= 0)
+        return 5;
+    const computed = Math.round(grantedCredits / creditPerSlot);
+    return computed >= 1 ? computed : 5;
 }
 // ✅ Initialize Admin's Special Credit Slots
 router.post("/special-credits/admin/initialize", async (req, res) => {
@@ -1533,6 +1811,14 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
                 message: "Admin user not found",
             });
         }
+        // Parse slotCount from request (required — no default hardcode)
+        const slotCount = parseInt(String(req.body.slotCount));
+        if (!slotCount || slotCount < 1) {
+            return res.status(400).json({
+                success: false,
+                message: "slotCount is required and must be >= 1",
+            });
+        }
         // Mark as voucher admin
         admin.isVoucherAdmin = true;
         admin.level = 0; // Admin is level 0
@@ -1543,30 +1829,30 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
                 balance: 0,
                 totalReceived: 0,
                 totalSent: 0,
-                availableSlots: 30,
+                availableSlots: slotCount,
                 usedSlots: 0,
             };
         }
         else {
-            admin.specialCredits.availableSlots = 30;
+            admin.specialCredits.availableSlots = slotCount;
         }
         await admin.save();
         // Check if slots already exist
         const existingSlots = await SpecialCredit_1.default.countDocuments({
             ownerId: adminUserId,
         });
-        if (existingSlots >= 30) {
+        if (existingSlots >= slotCount) {
             return res.json({
                 success: true,
-                message: "Admin already has 30 special credit slots initialized",
+                message: `Admin already has ${existingSlots} special credit slots initialized`,
                 slots: existingSlots,
             });
         }
-        // Create/extend to 30 slots for admin
+        // Create slots from existingSlots+1 up to slotCount
         const slots = [];
-        const adminCreditAmount = getSpecialCreditsForLevel(0); // 29,296,872,000
+        const adminCreditAmount = getSpecialCreditsForLevel(0);
         const startFrom = existingSlots + 1;
-        for (let i = startFrom; i <= 30; i++) {
+        for (let i = startFrom; i <= slotCount; i++) {
             const slot = await SpecialCredit_1.default.create({
                 ownerId: adminUserId,
                 slotNumber: i,
@@ -1578,7 +1864,7 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
         }
         res.json({
             success: true,
-            message: "Admin special credit slots initialized",
+            message: `Admin special credit slots initialized (${slotCount} total)`,
             admin: {
                 id: admin._id,
                 name: admin.name,
@@ -1586,6 +1872,7 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
                 isVoucherAdmin: true,
             },
             slots: slots.length,
+            totalSlots: slotCount,
             creditPerSlot: adminCreditAmount,
         });
     }
@@ -1597,6 +1884,8 @@ router.post("/special-credits/admin/initialize", async (req, res) => {
 // ✅ Get Special Credit Slots for current user
 router.get("/special-credits/slots", auth_1.requireAuth, async (req, res) => {
     try {
+        const voucherId = req.query.voucherId;
+        const voucherScope = await resolveVoucherScope(voucherId);
         const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin specialCredits");
         if (!user) {
             return res.status(404).json({
@@ -1605,44 +1894,36 @@ router.get("/special-credits/slots", auth_1.requireAuth, async (req, res) => {
             });
         }
         // Get user's slots
-        const slots = await SpecialCredit_1.default.find({ ownerId: req.userId })
+        const slotQuery = { ownerId: req.userId };
+        if (voucherScope.canonicalVoucherId) {
+            slotQuery.voucherId = voucherScope.canonicalVoucherId;
+        }
+        const slots = await SpecialCredit_1.default.find(slotQuery)
             .populate("recipientId", "name phone")
             .sort({ slotNumber: 1 })
             .lean();
-        // Calculate expected slots
-        const isAdmin = user.isVoucherAdmin === true;
-        const expectedSlots = getSlotsForUser(isAdmin);
-        const creditAmount = getSpecialCreditsForLevel(user.level || 0);
-        // Format slots response
-        const formattedSlots = [];
-        for (let i = 1; i <= expectedSlots; i++) {
-            const slot = slots.find((s) => s.slotNumber === i);
-            if (slot) {
-                formattedSlots.push({
-                    slotNumber: i,
-                    status: slot.status,
-                    creditAmount: slot.creditAmount,
-                    recipientName: slot.recipientName || null,
-                    recipientPhone: slot.recipientPhone || null,
-                    recipientId: slot.recipientId?._id?.toString() || null,
-                    sentAt: slot.sentAt || null,
-                    isAvailable: slot.status === "available",
-                });
-            }
-            else {
-                // Placeholder for empty slot
-                formattedSlots.push({
-                    slotNumber: i,
-                    status: "available",
-                    creditAmount,
-                    recipientName: null,
-                    recipientPhone: null,
-                    recipientId: null,
-                    sentAt: null,
-                    isAvailable: true,
-                });
-            }
-        }
+        // Format slots: map directly from DB records (slots are created by initialize / auto-created on receive)
+        const formattedSlots = slots.map((slot) => {
+            const lockUntil = slot.lockExpiresAt
+                ? new Date(slot.lockExpiresAt).getTime()
+                : 0;
+            const lockLeftSeconds = Math.max(0, Math.floor((lockUntil - Date.now()) / 1000));
+            return {
+                slotNumber: slot.slotNumber,
+                status: slot.status,
+                creditAmount: slot.creditAmount,
+                recipientName: slot.recipientName || null,
+                recipientPhone: slot.recipientPhone || null,
+                recipientId: slot.recipientId?._id?.toString() || null,
+                sentAt: slot.sentAt || null,
+                isAvailable: slot.status === "available",
+                transferId: slot.transferId?.toString() || null,
+                isLocked: !!slot.isLocked && lockLeftSeconds > 0,
+                lockReason: slot.lockReason || null,
+                timeLeftSeconds: lockLeftSeconds,
+            };
+        });
+        const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
         res.json({
             success: true,
             user: {
@@ -1654,10 +1935,10 @@ router.get("/special-credits/slots", auth_1.requireAuth, async (req, res) => {
             },
             slots: formattedSlots,
             summary: {
-                totalSlots: expectedSlots,
+                totalSlots: formattedSlots.length,
                 availableSlots: formattedSlots.filter((s) => s.isAvailable).length,
                 usedSlots: formattedSlots.filter((s) => !s.isAvailable).length,
-                creditPerSlot: creditAmount,
+                creditPerSlot: formattedSlots[0]?.creditAmount ?? creditPerSlot,
             },
         });
     }
@@ -1669,7 +1950,15 @@ router.get("/special-credits/slots", auth_1.requireAuth, async (req, res) => {
 // ✅ Send Special Credits to a user by phone number
 router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
     try {
-        const { recipientPhone, slotNumber } = req.body;
+        const { recipientPhone, slotNumber, voucherId } = req.body;
+        const voucherScope = await resolveVoucherScope(voucherId);
+        if (voucherId && voucherScope.detectedType === "invalid") {
+            return res
+                .status(400)
+                .json({ success: false, message: "Invalid voucherId" });
+        }
+        const voucherObjectId = voucherScope.canonicalVoucherId;
+        const requiredVoucherCount = await getVoucherTemplateRequiredCount(voucherObjectId?.toString() || undefined);
         if (!recipientPhone) {
             return res.status(400).json({
                 success: false,
@@ -1690,9 +1979,7 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
                 message: "Sender not found",
             });
         }
-        // Check slot availability
         const isAdmin = sender.isVoucherAdmin === true;
-        const maxSlots = getSlotsForUser(isAdmin);
         // Non-admin users need at least 5 vouchers to send special credits
         if (!isAdmin) {
             const voucherDocCount = await Voucher_1.default.countDocuments({
@@ -1709,27 +1996,33 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
                 });
             }
         }
-        if (slotNumber > maxSlots) {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid slot number. Maximum slots: ${maxSlots}`,
-            });
-        }
-        // Find or create the slot
+        // Find the slot — must be pre-created (by initialize for admin, or auto-created when credits were received)
         let slot = await SpecialCredit_1.default.findOne({
             ownerId: req.userId,
             slotNumber,
+            ...(voucherObjectId ? { voucherId: voucherObjectId } : {}),
         });
-        // If slot doesn't exist, create it
         if (!slot) {
-            const creditAmount = getSpecialCreditsForLevel(sender.level || 0);
-            slot = await SpecialCredit_1.default.create({
+            const totalSlots = await SpecialCredit_1.default.countDocuments({
                 ownerId: req.userId,
-                slotNumber,
-                creditAmount,
-                status: "available",
-                level: sender.level || 0,
+                ...(voucherObjectId ? { voucherId: voucherObjectId } : {}),
             });
+            return res.status(400).json({
+                success: false,
+                message: `Slot ${slotNumber} not found. You have ${totalSlots} slot(s) initialized.`,
+            });
+        }
+        // Check if slot is currently locked by a timed transfer
+        if (slot.isLocked && slot.lockExpiresAt) {
+            const lockMs = new Date(slot.lockExpiresAt).getTime() - Date.now();
+            if (lockMs > 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Slot is locked until voucher unlock condition is met",
+                    timeLeftSeconds: Math.floor(lockMs / 1000),
+                    transferId: slot.transferId?.toString() || null,
+                });
+            }
         }
         // Check if slot is already used
         if (slot.status === "sent") {
@@ -1771,22 +2064,19 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
                 message: "Cannot send special credits to yourself",
             });
         }
-        // Update slot
-        slot.status = "sent";
-        slot.recipientId = recipient._id;
-        slot.recipientName = recipient.name;
-        slot.recipientPhone = recipient.phone;
-        slot.sentAt = new Date();
-        // Auto-refund if recipient doesn't collect required vouchers within 1 hour
-        slot.expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-        await slot.save();
+        const timerStartedAt = new Date();
+        const expiresAt = new Date(Date.now() + VOUCHER_PURCHASE_TIMEOUT_MINUTES * 60 * 1000);
+        // V2: send slot atomically + write SlotEvent via SlotService
+        await (0, slotService_1.sendSlot)(slot._id.toString(), recipient._id.toString(), recipient.name, recipient.phone, req.userId, slot.voucherId?.toString(), expiresAt);
+        // Re-fetch slot after update so downstream reads see the new state
+        slot = (await SpecialCredit_1.default.findById(slot._id));
         // Update sender's special credits stats
         if (!sender.specialCredits) {
             sender.specialCredits = {
                 balance: 0,
                 totalReceived: 0,
                 totalSent: 0,
-                availableSlots: maxSlots,
+                availableSlots: 0,
                 usedSlots: 0,
             };
         }
@@ -1803,41 +2093,89 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
                 usedSlots: 0,
             };
         }
+        // Compute how many slots recipient gets: grantedCredits / creditPerSlotAtRecipientLevel
+        const numRecipientSlots = computeRecipientSlots(slot.creditAmount, recipient.level || (sender.level || 0) + 1);
         // Add credits to recipient
         recipient.specialCredits.balance += slot.creditAmount;
         recipient.specialCredits.totalReceived += slot.creditAmount;
-        recipient.specialCredits.availableSlots = 5; // Recipients get 5 slots
+        recipient.specialCredits.availableSlots = numRecipientSlots;
         // Set recipient's level if not already set
         if (!recipient.level || recipient.level === 0) {
             recipient.level = (sender.level || 0) + 1;
         }
-        // Link recipient to sender if not already linked
-        if (!recipient.parentId) {
-            recipient.parentId = req.userId;
-            sender.directCount = (sender.directCount || 0) + 1;
-            await sender.save();
+        // V2: link recipient to sender via NetworkService (transactional)
+        try {
+            await (0, networkService_1.linkUser)(recipient._id.toString(), req.userId, req.userId, "special-credit-send");
         }
-        await recipient.save();
+        catch (linkErr) {
+            // Idempotent: user already linked to this sender — fine to continue
+            if (!linkErr.message?.includes("already linked to this exact parent")) {
+                // Already linked to another parent or cap exceeded — surface as error
+                throw linkErr;
+            }
+        }
+        // Persist recipient credit counters without overwriting NetworkService linkage fields.
+        await User_1.default.findByIdAndUpdate(recipient._id, {
+            "specialCredits.balance": recipient.specialCredits.balance,
+            "specialCredits.totalReceived": recipient.specialCredits.totalReceived,
+            "specialCredits.availableSlots": recipient.specialCredits.availableSlots,
+            ...(recipient.level ? { level: recipient.level } : {}),
+        });
         // Add credits to recipient's WALLET
         await (0, walletService_1.addCredits)(recipient._id.toString(), slot.creditAmount);
         // Create 5 slots for recipient with EQUAL amounts
         // Each slot gets: (received amount) / 5
         const recipientLevel = recipient.level;
         const recipientSlots = [];
-        const slotCreditAmount = slot.creditAmount / 5; // Divide equally among 5 slots
-        for (let i = 1; i <= 5; i++) {
+        const slotCreditAmount = Math.max(1, Math.round(slot.creditAmount / Math.max(1, numRecipientSlots)));
+        const currentVoucherCount = await getVoucherCountForTemplate(recipient._id.toString(), slot.voucherId || voucherObjectId);
+        const shouldUnlockImmediately = currentVoucherCount >= requiredVoucherCount;
+        const transfer = await MlmTransfer_1.default.create({
+            senderId: sender._id,
+            receiverId: recipient._id,
+            voucherId: slot.voucherId || voucherObjectId,
+            sourceSlotId: slot._id,
+            amount: slot.creditAmount,
+            slotCount: numRecipientSlots,
+            slotAmount: slotCreditAmount,
+            slots: Array.from({ length: numRecipientSlots }).map((_, idx) => ({
+                slotNumber: idx + 1,
+                amount: slotCreditAmount,
+                isLocked: !shouldUnlockImmediately,
+            })),
+            requiredVoucherCount,
+            baselineVoucherCount: currentVoucherCount,
+            currentVoucherCount,
+            unlockedSlots: shouldUnlockImmediately ? numRecipientSlots : 0,
+            timerStartedAt,
+            expiresAt,
+            unlockedAt: shouldUnlockImmediately ? new Date() : null,
+            status: shouldUnlockImmediately ? "unlocked" : "pending_unlock",
+        });
+        for (let i = 1; i <= numRecipientSlots; i++) {
             const existingSlot = await SpecialCredit_1.default.findOne({
                 ownerId: recipient._id,
                 slotNumber: i,
+                ...(slot.voucherId || voucherObjectId
+                    ? { voucherId: slot.voucherId || voucherObjectId }
+                    : {}),
             });
             if (!existingSlot) {
                 const newSlot = await SpecialCredit_1.default.create({
                     ownerId: recipient._id,
+                    voucherId: slot.voucherId || voucherObjectId || undefined,
                     slotNumber: i,
                     creditAmount: slotCreditAmount, // All slots get the same amount
                     status: "available",
                     level: recipientLevel,
                     sourceSlotId: slot._id,
+                    transferId: transfer._id,
+                    isLocked: !shouldUnlockImmediately,
+                    lockReason: !shouldUnlockImmediately
+                        ? `Need ${requiredVoucherCount} vouchers for this campaign`
+                        : null,
+                    lockExpiresAt: !shouldUnlockImmediately ? expiresAt : null,
+                    unlockedAt: shouldUnlockImmediately ? new Date() : null,
                 });
                 recipientSlots.push(newSlot);
             }
@@ -1862,11 +2200,20 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
                     creditAmount: slot.creditAmount,
                     sentAt: slot.sentAt,
                 },
+                transferId: transfer._id.toString(),
+                status: transfer.status,
+                requiredVoucherCount,
+                currentVoucherCount,
+                timerStartedAt: transfer.timerStartedAt,
+                expiresAt: transfer.expiresAt,
+                timeLeftSeconds: transferTimeLeftSeconds(transfer.expiresAt),
                 recipientSlotsCreated: recipientSlots.length,
+                numRecipientSlots,
                 recipientSlotAmount: slotCreditAmount,
                 recipientSlots: recipientSlots.map((s) => ({
                     slotNumber: s.slotNumber,
                     creditAmount: s.creditAmount,
+                    isLocked: s.isLocked || false,
                 })),
             },
         });
@@ -1880,6 +2227,7 @@ router.post("/special-credits/send", auth_1.requireAuth, async (req, res) => {
 router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) => {
     try {
         const { voucherId } = req.query;
+        const voucherScope = await resolveVoucherScope(voucherId);
         const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin specialCredits parentId voucherBalance voucherBalances");
         if (!user) {
             return res.status(404).json({
@@ -1887,13 +2235,12 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
                 message: "User not found",
             });
         }
+        const activeTransferVoucherId = voucherScope.canonicalVoucherId;
+        await reconcileTransferUnlocksForUser(req.userId, activeTransferVoucherId || undefined);
         // Filter slots by voucherId if provided (per-voucher isolation)
         const slotQuery = { ownerId: req.userId };
-        if (voucherId) {
-            try {
-                slotQuery.voucherId = new mongoose_1.Types.ObjectId(voucherId);
-            }
-            catch (_) { }
+        if (activeTransferVoucherId) {
+            slotQuery.voucherId = activeTransferVoucherId;
         }
         // Get slots (filtered by voucher if specified)
         const slots = await SpecialCredit_1.default.find(slotQuery)
@@ -1902,13 +2249,16 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
             .lean();
         // Calculate stats
         const isAdmin = user.isVoucherAdmin === true;
-        const totalSlots = getSlotsForUser(isAdmin);
-        const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
+        const totalSlots = slots.length;
+        const creditPerSlot = slots[0]?.creditAmount ?? getSpecialCreditsForLevel(user.level || 0);
         const availableSlots = slots.filter((s) => s.status === "available").length;
         const usedSlots = slots.filter((s) => s.status === "sent").length;
         // Calculate total available credits
         const totalAvailableCredits = availableSlots * creditPerSlot;
-        const totalSentCredits = user.specialCredits?.totalSent || 0;
+        // When filtering by voucherId, compute sent credits from filtered slots only (not global total)
+        const totalSentCredits = activeTransferVoucherId
+            ? usedSlots * creditPerSlot
+            : user.specialCredits?.totalSent || 0;
         // Get network users who received special credits from this user
         const recipientIds = slots
             .filter((s) => s.recipientId)
@@ -1922,13 +2272,14 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
         let vouchersFigure = 0;
         if (isAdmin) {
             // Per-voucher balance if voucherId provided, else global voucherBalance
-            if (voucherId) {
+            if (activeTransferVoucherId) {
+                const canonicalVoucherId = activeTransferVoucherId.toString();
                 const balMap = user.voucherBalances;
                 if (balMap instanceof Map) {
-                    vouchersFigure = balMap.get(String(voucherId)) || 0;
+                    vouchersFigure = balMap.get(canonicalVoucherId) || 0;
                 }
                 else if (balMap && typeof balMap === "object") {
-                    vouchersFigure = balMap[String(voucherId)] || 0;
+                    vouchersFigure = balMap[canonicalVoucherId] || 0;
                 }
             }
             else {
@@ -1943,6 +2294,16 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
             });
             vouchersFigure = physicalCount + (user.voucherBalance || 0);
         }
+        const activeTransfers = await MlmTransfer_1.default.find({
+            receiverId: req.userId,
+            status: { $in: ["pending_unlock", "unlocked"] },
+            ...(activeTransferVoucherId
+                ? { voucherId: activeTransferVoucherId }
+                : {}),
+        })
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .lean();
         res.json({
             success: true,
             user: {
@@ -1974,6 +2335,18 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
                 level: nu.level,
                 creditsReceived: nu.specialCredits?.totalReceived || 0,
             })),
+            activeTransfers: activeTransfers.map((t) => ({
+                transferId: t._id.toString(),
+                status: t.status,
+                requiredVoucherCount: t.requiredVoucherCount || 0,
+                currentVoucherCount: t.currentVoucherCount || 0,
+                timerStartedAt: t.timerStartedAt,
+                expiresAt: t.expiresAt,
+                timeLeftSeconds: transferTimeLeftSeconds(t.expiresAt),
+                slotCount: t.slotCount || 5,
+                slotAmount: t.slotAmount || 0,
+                unlockedSlots: t.unlockedSlots || 0,
+            })),
         });
     }
     catch (error) {
@@ -1985,6 +2358,7 @@ router.get("/special-credits/dashboard", auth_1.requireAuth, async (req, res) =>
 router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
     try {
         const { voucherId } = req.query;
+        const voucherScope = await resolveVoucherScope(voucherId);
         const user = await User_1.default.findById(req.userId).select("name phone level isVoucherAdmin");
         if (!user) {
             return res.status(404).json({
@@ -1995,13 +2369,9 @@ router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
         // Filter by voucherId if provided
         const sentQuery = { ownerId: req.userId, status: "sent" };
         const allQuery = { ownerId: req.userId };
-        if (voucherId) {
-            try {
-                const vid = new mongoose_1.Types.ObjectId(voucherId);
-                sentQuery.voucherId = vid;
-                allQuery.voucherId = vid;
-            }
-            catch (_) { }
+        if (voucherScope.canonicalVoucherId) {
+            sentQuery.voucherId = voucherScope.canonicalVoucherId;
+            allQuery.voucherId = voucherScope.canonicalVoucherId;
         }
         // Get slots with recipients
         const slots = await SpecialCredit_1.default.find(sentQuery)
@@ -2012,8 +2382,9 @@ router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
         const allSlots = await SpecialCredit_1.default.find(allQuery)
             .sort({ slotNumber: 1 })
             .lean();
-        // If user has no slots in database, return empty array
-        // This prevents generating placeholders for users who never received special credits
+        // If user has no slots in database, return empty — no placeholder injection.
+        // The admin must explicitly initialize slots via the admin panel before
+        // the voucher dashboard shows any network data.
         if (allSlots.length === 0) {
             return res.json({
                 success: true,
@@ -2027,8 +2398,10 @@ router.get("/special-credits/network", auth_1.requireAuth, async (req, res) => {
             });
         }
         const isAdmin = user.isVoucherAdmin === true;
-        const totalSlots = allSlots.length; // Use actual slots count, not getSlotsForUser
-        const creditPerSlot = getSpecialCreditsForLevel(user.level || 0);
+        const totalSlots = allSlots.length;
+        // Use the creditAmount stored on the actual slots (consistent for all slots in this voucher)
+        // Fall back to computed value only if no slots exist yet
+        const creditPerSlot = allSlots[0]?.creditAmount || getSpecialCreditsForLevel(user.level || 0);
         // Format network users
         const networkUsers = slots.map((slot, index) => ({
             slotNumber: slot.slotNumber,
@@ -2101,24 +2474,62 @@ function startAutoRefundScheduler() {
                         });
                         continue;
                     }
+                    const transfer = await MlmTransfer_1.default.findOne({
+                        sourceSlotId: slotDoc._id,
+                    }).lean();
                     // Count physical unredeemed vouchers + voucherBalance counter
-                    const physicalCount = await Voucher_1.default.countDocuments({
-                        userId: recipient._id,
-                        redeemedStatus: { $ne: "redeemed" },
-                    });
-                    const totalVouchers = physicalCount + (recipient.voucherBalance || 0);
+                    const totalVouchers = transfer?.voucherId
+                        ? await getVoucherCountForTemplate(recipient._id.toString(), transfer.voucherId)
+                        : (await Voucher_1.default.countDocuments({
+                            userId: recipient._id,
+                            redeemedStatus: { $ne: "redeemed" },
+                        })) + (recipient.voucherBalance || 0);
                     // Default minimum vouchers required: 5 (can be overridden per voucher)
-                    const minRequired = 5;
+                    const minRequired = transfer?.requiredVoucherCount ||
+                        (slotDoc.voucherId
+                            ? await getVoucherTemplateRequiredCount(slotDoc.voucherId.toString())
+                            : 5);
                     if (totalVouchers >= minRequired) {
                         // ✅ User has enough vouchers — extend expiry far out so we don't re-check
                         await SpecialCredit_1.default.findByIdAndUpdate(slotDoc._id, {
                             expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
                         });
+                        if (transfer && transfer.status === "pending_unlock") {
+                            await MlmTransfer_1.default.findByIdAndUpdate(transfer._id, {
+                                status: "unlocked",
+                                currentVoucherCount: totalVouchers,
+                                unlockedSlots: transfer.slotCount || 5,
+                                unlockedAt: new Date(),
+                            });
+                            await SpecialCredit_1.default.updateMany({
+                                ownerId: recipient._id,
+                                transferId: transfer._id,
+                                isLocked: true,
+                            }, {
+                                $set: {
+                                    isLocked: false,
+                                    lockReason: null,
+                                    unlockedAt: new Date(),
+                                },
+                            });
+                        }
                         console.log(`✅ Slot ${slotDoc.slotNumber} for ${recipient.name}: vouchers satisfied (${totalVouchers}/${minRequired})`);
                         continue;
                     }
                     // ❌ Not enough vouchers — revert the slot and refund credits
                     console.log(`⚠️ Auto-refunding slot ${slotDoc.slotNumber}: ${recipient.name} has ${totalVouchers}/${minRequired} vouchers`);
+                    if (transfer) {
+                        const timeoutUpdate = await MlmTransfer_1.default.findOneAndUpdate({ _id: transfer._id, status: "pending_unlock" }, {
+                            status: "returned_timeout",
+                            currentVoucherCount: totalVouchers,
+                            returnedAt: new Date(),
+                            returnReason: "required_vouchers_not_met_within_1h",
+                        }, { new: true });
+                        if (!timeoutUpdate) {
+                            // Already handled by another worker cycle
+                            continue;
+                        }
+                    }
                     // Reset the slot to available
                     await SpecialCredit_1.default.findByIdAndUpdate(slotDoc._id, {
                         status: "available",
@@ -2153,6 +2564,14 @@ function startAutoRefundScheduler() {
                         sourceSlotId: slotDoc._id,
                         status: "available",
                     });
+                    if (transfer) {
+                        await SpecialCredit_1.default.updateMany({ ownerId: recipient._id, transferId: transfer._id }, {
+                            $set: {
+                                isLocked: false,
+                                lockReason: "returned_timeout",
+                            },
+                        });
+                    }
                     // Restore sender's stats
                     const sender = await User_1.default.findById(slotDoc.ownerId?._id);
                     if (sender && sender.specialCredits) {

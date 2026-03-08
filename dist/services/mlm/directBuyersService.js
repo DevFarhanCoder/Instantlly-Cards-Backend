@@ -4,9 +4,30 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDirectBuyers = getDirectBuyers;
+const mongoose_1 = __importDefault(require("mongoose"));
 const User_1 = __importDefault(require("../../models/User"));
-async function getDirectBuyers(parentId, limit, skip) {
-    const directUsers = await User_1.default.find({ parentId })
+const SpecialCredit_1 = __importDefault(require("../../models/SpecialCredit"));
+async function getDirectBuyers(parentId, limit, skip, voucherId) {
+    let userFilter = { parentId };
+    if (voucherId) {
+        // Find users who received a SpecialCredit slot from this owner for this voucher
+        const sentSlots = await SpecialCredit_1.default.find({
+            ownerId: new mongoose_1.default.Types.ObjectId(parentId),
+            voucherId: new mongoose_1.default.Types.ObjectId(voucherId),
+            status: "sent",
+        })
+            .select("recipientId")
+            .lean();
+        const buyerIds = sentSlots
+            .map((s) => s.recipientId?.toString())
+            .filter(Boolean)
+            .map((id) => new mongoose_1.default.Types.ObjectId(id));
+        // If voucherId provided but no buyers yet, return empty immediately
+        if (buyerIds.length === 0)
+            return [];
+        userFilter = { parentId, _id: { $in: buyerIds } };
+    }
+    const directUsers = await User_1.default.find(userFilter)
         .select("name phone level createdAt")
         .sort({ createdAt: -1 })
         .skip(skip)

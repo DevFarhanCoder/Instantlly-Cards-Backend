@@ -17,6 +17,7 @@
     "check-slots": "ts-node src/scripts/check-slots.ts",
     "migrate:slots": "ts-node src/scripts/migrate-slots-to-new-voucher.ts",
     "dedup-slots": "ts-node src/scripts/dedup-slots.ts",
+    "repair:orphan-special-credit-transfers": "ts-node src/scripts/repair-orphan-special-credit-transfers.ts",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },

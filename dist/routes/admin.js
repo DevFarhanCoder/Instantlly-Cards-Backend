@@ -21,10 +21,78 @@ const Transaction_1 = __importDefault(require("../models/Transaction"));
 const Designer_1 = __importDefault(require("../models/Designer"));
 const DesignerUpload_1 = __importDefault(require("../models/DesignerUpload"));
 const DesignRequest_1 = __importDefault(require("../models/DesignRequest"));
+const Voucher_1 = __importDefault(require("../models/Voucher"));
+const MlmTransfer_1 = __importDefault(require("../models/MlmTransfer"));
 const adminAuth_1 = require("../middleware/adminAuth");
 const s3Service_1 = require("../services/s3Service");
 const SpecialCredit_1 = __importDefault(require("../models/SpecialCredit"));
 const router = express_1.default.Router();
+async function getVoucherCountForTemplate(userId, voucherId) {
+    if (!voucherId) {
+        const [physicalCount, user] = await Promise.all([
+            Voucher_1.default.countDocuments({
+                userId: new mongoose_1.default.Types.ObjectId(userId),
+                redeemedStatus: { $ne: "redeemed" },
+            }),
+            User_1.default.findById(userId).select("voucherBalance").lean(),
+        ]);
+        return Math.max(0, physicalCount + Number(user?.voucherBalance || 0));
+    }
+    const [physicalCount, user] = await Promise.all([
+        Voucher_1.default.countDocuments({
+            userId: new mongoose_1.default.Types.ObjectId(userId),
+            redeemedStatus: { $ne: "redeemed" },
+            $or: [{ templateId: voucherId }, { _id: voucherId }],
+        }),
+        User_1.default.findById(userId).select("voucherBalances").lean(),
+    ]);
+    let balanceCount = 0;
+    const balanceMap = user?.voucherBalances;
+    if (balanceMap instanceof Map) {
+        balanceCount = Number(balanceMap.get(String(voucherId)) || 0);
+    }
+    else if (balanceMap && typeof balanceMap === "object") {
+        balanceCount = Number(balanceMap[String(voucherId)] || 0);
+    }
+    return Math.max(0, physicalCount + balanceCount);
+}
+async function reconcileTransferUnlocksForUserFromAdmin(userId, voucherId) {
+    const now = new Date();
+    const query = {
+        receiverId: new mongoose_1.default.Types.ObjectId(userId),
+        status: "pending_unlock",
+        expiresAt: { $gt: now },
+    };
+    if (voucherId)
+        query.voucherId = voucherId;
+    const transfers = await MlmTransfer_1.default.find(query).lean();
+    for (const transfer of transfers) {
+        const currentVoucherCount = await getVoucherCountForTemplate(userId, transfer.voucherId);
+        if (currentVoucherCount < (transfer.requiredVoucherCount || 0)) {
+            await MlmTransfer_1.default.findByIdAndUpdate(transfer._id, {
+                currentVoucherCount,
+            });
+            continue;
+        }
+        await MlmTransfer_1.default.findByIdAndUpdate(transfer._id, {
+            status: "unlocked",
+            currentVoucherCount,
+            unlockedSlots: transfer.slotCount || 5,
+            unlockedAt: now,
+        });
+        await SpecialCredit_1.default.updateMany({
+            ownerId: transfer.receiverId,
+            transferId: transfer._id,
+            isLocked: true,
+        }, {
+            $set: {
+                isLocked: false,
+                lockReason: null,
+                unlockedAt: now,
+            },
+        });
+    }
+}
 // Simple admin authentication middleware (you should replace with proper auth)
 const adminAuth = (req, res, next) => {
     const adminKey = req.headers["x-admin-key"];
@@ -1012,7 +1080,7 @@ router.post("/credits/transfer", adminAuth, async (req, res) => {
 router.put("/users/:userId/update-vouchers", adminAuth, async (req, res) => {
     try {
         const { userId } = req.params;
-        const { voucherBalance, reason } = req.body;
+        const { voucherBalance, reason, voucherId } = req.body;
         if (voucherBalance === undefined ||
             voucherBalance === null ||
             Number(voucherBalance) < 0) {
@@ -1027,11 +1095,26 @@ router.put("/users/:userId/update-vouchers", adminAuth, async (req, res) => {
                 .status(404)
                 .json({ success: false, message: "User not found" });
         }
-        const oldBalance = user.voucherBalance || 0;
         const newBalance = parseInt(String(voucherBalance));
+        let oldBalance;
+        if (voucherId) {
+            // Per-voucher balance update using voucherBalances map (Mongoose Map)
+            const balMap = user.voucherBalances;
+            const vidStr = String(voucherId);
+            oldBalance = Number(balMap.get(vidStr) ?? 0);
+            balMap.set(vidStr, newBalance);
+            user.markModified("voucherBalances");
+        }
+        else {
+            oldBalance = user.voucherBalance || 0;
+            user.set({ voucherBalance: newBalance });
+        }
         const diff = newBalance - oldBalance;
-        user.set({ voucherBalance: newBalance });
         await user.save();
+        const voucherObjectId = voucherId && mongoose_1.default.isValidObjectId(voucherId)
+            ? new mongoose_1.default.Types.ObjectId(String(voucherId))
+            : undefined;
+        await reconcileTransferUnlocksForUserFromAdmin(String(user._id), voucherObjectId);
         try {
             const io = global.io;
             if (io) {
@@ -1102,7 +1185,7 @@ router.get("/users/:userId/voucher-stats", adminAuth, async (req, res) => {
         const { userId } = req.params;
         const { voucherId } = req.query;
         const user = await User_1.default.findById(userId)
-            .select("name phone credits voucherBalance isVoucherAdmin specialCredits level")
+            .select("name phone credits voucherBalance voucherBalances isVoucherAdmin specialCredits level")
             .lean();
         if (!user) {
             return res
@@ -1132,7 +1215,17 @@ router.get("/users/:userId/voucher-stats", adminAuth, async (req, res) => {
                 availableSlots: availableSlots.length,
                 usedSlots: sentSlots.length,
                 networkUsers: uniqueRecipients,
-                voucherBalance: user.voucherBalance || 0,
+                voucherBalance: (() => {
+                    if (voucherId) {
+                        const balMap = user.voucherBalances;
+                        if (balMap instanceof Map)
+                            return Number(balMap.get(String(voucherId)) || 0);
+                        if (balMap && typeof balMap === "object")
+                            return Number(balMap[String(voucherId)] || 0);
+                        return 0;
+                    }
+                    return user.voucherBalance || 0;
+                })(),
                 generalCredits: user.credits || 0,
                 isVoucherAdmin: user.isVoucherAdmin || false,
             },
@@ -1616,7 +1709,6 @@ router.post("/upload-image", adminAuth, voucherImageUpload.single("image"), asyn
 // ============================================
 // ADMIN VOUCHER MANAGEMENT
 // ============================================
-const Voucher_1 = __importDefault(require("../models/Voucher"));
 const uuid_1 = require("uuid");
 /**
  * POST /api/admin/vouchers
@@ -1641,7 +1733,9 @@ router.post("/vouchers", adminAuth, async (req, res) => {
             expiryDateFinal.setFullYear(expiryDateFinal.getFullYear() + 1);
         }
         // Create voucher template (without userId - will be assigned when published to users)
+        const templateObjectId = new mongoose_1.default.Types.ObjectId();
         const voucher = await Voucher_1.default.create({
+            _id: templateObjectId,
             voucherNumber,
             companyLogo,
             companyName,
@@ -1662,6 +1756,7 @@ router.post("/vouchers", adminAuth, async (req, res) => {
             createdByAdmin: null,
             source: "admin",
             redeemedStatus: "unredeemed",
+            templateId: templateObjectId,
             minVouchersRequired: minVouchersRequired !== undefined
                 ? parseInt(String(minVouchersRequired))
                 : 5,
@@ -1694,14 +1789,9 @@ router.post("/vouchers", adminAuth, async (req, res) => {
 router.get("/vouchers", adminAuth, async (req, res) => {
     try {
         const { isPublished, limit = 50, skip = 0 } = req.query;
-        // Admin templates = vouchers with no userId (not user-specific copies)
-        // Also include source:"admin" to catch both old and new templates
+        // Admin templates only (exclude user-specific published copies).
         const filter = {
-            $or: [
-                { userId: { $exists: false } },
-                { userId: null },
-                { source: "admin" },
-            ],
+            $or: [{ userId: { $exists: false } }, { userId: null }],
         };
         if (isPublished !== undefined) {
             filter.isPublished = isPublished === "true";
@@ -1802,16 +1892,34 @@ router.post("/vouchers/:id/publish", adminAuth, async (req, res) => {
         // If not, the template itself will be visible to all users
         let assignedCount = 0;
         if (userIds && Array.isArray(userIds) && userIds.length > 0) {
+            const templateId = voucherTemplate.templateId || voucherTemplate._id;
+            const validUserIds = userIds
+                .filter((uid) => mongoose_1.default.isValidObjectId(uid))
+                .map((uid) => new mongoose_1.default.Types.ObjectId(uid));
+            // Avoid duplicate voucher copies on repeated publish actions.
+            const existingAssigned = await Voucher_1.default.find({
+                templateId,
+                userId: { $in: validUserIds },
+            })
+                .select("userId")
+                .lean();
+            const existingSet = new Set(existingAssigned
+                .map((v) => v.userId?.toString())
+                .filter(Boolean));
+            const toAssign = validUserIds.filter((uid) => !existingSet.has(uid.toString()));
             // Create individual voucher copies for each user
-            const voucherCopies = userIds.map((userId) => ({
+            const voucherCopies = toAssign.map((userId) => ({
                 ...voucherTemplate.toObject(),
                 _id: new mongoose_1.default.Types.ObjectId(),
                 userId: userId,
                 originalOwner: userId,
                 voucherNumber: (0, uuid_1.v4)().replace(/-/g, "").slice(0, 12).toUpperCase(),
                 creditId: null,
+                templateId,
             }));
-            await Voucher_1.default.insertMany(voucherCopies);
+            if (voucherCopies.length > 0) {
+                await Voucher_1.default.insertMany(voucherCopies);
+            }
             assignedCount = voucherCopies.length;
         }
         res.json({
@@ -1847,6 +1955,11 @@ router.post("/vouchers/:id/unpublish", adminAuth, async (req, res) => {
             return res
                 .status(404)
                 .json({ success: false, message: "Voucher not found" });
+        const templateId = voucher.templateId || voucher._id;
+        await Voucher_1.default.updateMany({
+            templateId,
+            userId: { $exists: true, $ne: null },
+        }, { $set: { isPublished: false, publishedAt: null } });
         res.json({
             success: true,
             message: "Voucher unpublished",
@@ -1898,6 +2011,11 @@ const SPECIAL_CREDIT_CHAIN_ADMIN = [
 router.get("/mlm/slots", adminAuth, async (req, res) => {
     try {
         const { voucherId, userId } = req.query;
+        if (voucherId && !mongoose_1.default.isValidObjectId(voucherId)) {
+            return res
+                .status(400)
+                .json({ success: false, message: "Invalid voucherId" });
+        }
         let targetUser = userId
             ? await User_1.default.findById(userId)
                 .select("name phone level isVoucherAdmin specialCredits")
@@ -1959,15 +2077,27 @@ router.get("/mlm/slots", adminAuth, async (req, res) => {
         res.status(500).json({ success: false, message: "Server error" });
     }
 });
-// POST /api/admin/mlm/slots/initialize  Body: { adminUserId, voucherId }
+// POST /api/admin/mlm/slots/initialize  Body: { adminUserId, voucherId, slotCount, creditAmount? }
 router.post("/mlm/slots/initialize", adminAuth, async (req, res) => {
     try {
-        const { adminUserId, voucherId } = req.body;
+        const { adminUserId, voucherId, slotCount: rawSlotCount, creditAmount: customCreditAmount, } = req.body;
         if (!adminUserId || !voucherId)
             return res.status(400).json({
                 success: false,
                 message: "adminUserId and voucherId are required",
             });
+        if (!mongoose_1.default.isValidObjectId(voucherId)) {
+            return res
+                .status(400)
+                .json({ success: false, message: "Invalid voucherId" });
+        }
+        const slotCount = parseInt(String(rawSlotCount));
+        if (!slotCount || slotCount < 1) {
+            return res.status(400).json({
+                success: false,
+                message: "slotCount is required and must be >= 1",
+            });
+        }
         const admin = await User_1.default.findById(adminUserId);
         if (!admin)
             return res
@@ -1984,28 +2114,31 @@ router.post("/mlm/slots/initialize", adminAuth, async (req, res) => {
                 balance: 0,
                 totalReceived: 0,
                 totalSent: 0,
-                availableSlots: 30,
+                availableSlots: slotCount,
                 usedSlots: 0,
             };
         }
         else {
-            admin.specialCredits.availableSlots = 30;
+            admin.specialCredits.availableSlots = slotCount;
         }
         await admin.save();
         const existingCount = await SpecialCredit_1.default.countDocuments({
             ownerId: adminUserId,
             voucherId,
         });
-        if (existingCount >= 30) {
+        if (existingCount >= slotCount) {
             return res.json({
                 success: true,
-                message: `Admin already has 30 slots for ${voucher.companyName}`,
+                message: `Admin already has ${existingCount} slots for ${voucher.companyName}`,
                 slots: existingCount,
             });
         }
-        const creditAmount = SPECIAL_CREDIT_CHAIN_ADMIN[0];
+        // Use custom credit amount if provided, otherwise fall back to chain default
+        const creditAmount = customCreditAmount && Number(customCreditAmount) > 0
+            ? Number(customCreditAmount)
+            : SPECIAL_CREDIT_CHAIN_ADMIN[0];
         const toCreate = [];
-        for (let i = existingCount + 1; i <= 30; i++) {
+        for (let i = existingCount + 1; i <= slotCount; i++) {
             toCreate.push({
                 ownerId: adminUserId,
                 voucherId,
@@ -2020,7 +2153,7 @@ router.post("/mlm/slots/initialize", adminAuth, async (req, res) => {
             success: true,
             message: `${toCreate.length} slots initialized for ${voucher.companyName}`,
             slotsCreated: toCreate.length,
-            totalSlots: 30,
+            totalSlots: slotCount,
             creditPerSlot: creditAmount,
         });
     }
@@ -2029,15 +2162,20 @@ router.post("/mlm/slots/initialize", adminAuth, async (req, res) => {
         res.status(500).json({ success: false, message: "Server error" });
     }
 });
-// POST /api/admin/mlm/slots/increase  Body: { voucherId, count, adminUserId? }
+// POST /api/admin/mlm/slots/increase  Body: { voucherId, count, adminUserId?, creditAmount? }
 router.post("/mlm/slots/increase", adminAuth, async (req, res) => {
     try {
-        const { voucherId, count, adminUserId } = req.body;
+        const { voucherId, count, adminUserId, creditAmount: customCreditAmount, } = req.body;
         if (!voucherId || !count || count < 1)
             return res.status(400).json({
                 success: false,
                 message: "voucherId and count (>=1) are required",
             });
+        if (!mongoose_1.default.isValidObjectId(voucherId)) {
+            return res
+                .status(400)
+                .json({ success: false, message: "Invalid voucherId" });
+        }
         const voucher = await Voucher_1.default.findById(voucherId).lean();
         if (!voucher)
             return res
@@ -2058,8 +2196,11 @@ router.post("/mlm/slots/increase", adminAuth, async (req, res) => {
             .sort({ slotNumber: -1 })
             .lean();
         const startFrom = lastSlot ? lastSlot.slotNumber + 1 : 1;
-        const creditAmount = SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] ||
-            SPECIAL_CREDIT_CHAIN_ADMIN[0];
+        // Use custom credit amount if provided, otherwise fall back to chain default
+        const creditAmount = customCreditAmount && Number(customCreditAmount) > 0
+            ? Number(customCreditAmount)
+            : SPECIAL_CREDIT_CHAIN_ADMIN[admin.level || 0] ||
+                SPECIAL_CREDIT_CHAIN_ADMIN[0];
         const newSlots = [];
         for (let i = startFrom; i < startFrom + count; i++) {
             newSlots.push({
@@ -2085,6 +2226,69 @@ router.post("/mlm/slots/increase", adminAuth, async (req, res) => {
     }
     catch (error) {
         console.error("ADMIN MLM SLOTS INCREASE ERROR", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+// DELETE /api/admin/mlm/slots  Body: { voucherId, slotNumbers?: number[], deleteAll?: boolean }
+// Permanently deletes slots from the database.
+// - Pass slotNumbers[] to delete specific slots
+// - Pass deleteAll: true to wipe all slots for the voucher
+router.delete("/mlm/slots", adminAuth, async (req, res) => {
+    try {
+        const { voucherId, slotNumbers, deleteAll, userId } = req.body;
+        if (!voucherId)
+            return res
+                .status(400)
+                .json({ success: false, message: "voucherId is required" });
+        if (!mongoose_1.default.isValidObjectId(voucherId))
+            return res
+                .status(400)
+                .json({ success: false, message: "Invalid voucherId" });
+        if (!deleteAll && (!Array.isArray(slotNumbers) || slotNumbers.length === 0))
+            return res.status(400).json({
+                success: false,
+                message: "Provide slotNumbers[] or deleteAll:true",
+            });
+        // Resolve the owner
+        let ownerId;
+        if (userId) {
+            ownerId = new mongoose_1.default.Types.ObjectId(userId);
+        }
+        else {
+            const adminUser = await User_1.default.findOne({ isVoucherAdmin: true })
+                .select("_id")
+                .lean();
+            ownerId = adminUser?._id;
+        }
+        if (!ownerId)
+            return res
+                .status(404)
+                .json({ success: false, message: "No admin/user found" });
+        const query = {
+            ownerId,
+            voucherId: new mongoose_1.default.Types.ObjectId(voucherId),
+        };
+        if (!deleteAll)
+            query.slotNumber = { $in: slotNumbers };
+        const result = await SpecialCredit_1.default.deleteMany(query);
+        const deleted = result.deletedCount || 0;
+        // Sync availableSlots count on user
+        const remaining = await SpecialCredit_1.default.countDocuments({
+            ownerId,
+            voucherId: new mongoose_1.default.Types.ObjectId(voucherId),
+        });
+        await User_1.default.findByIdAndUpdate(ownerId, {
+            $set: { "specialCredits.availableSlots": remaining },
+        });
+        res.json({
+            success: true,
+            message: `${deleted} slot(s) permanently deleted`,
+            deletedCount: deleted,
+            remainingSlots: remaining,
+        });
+    }
+    catch (error) {
+        console.error("ADMIN MLM SLOTS DELETE ERROR", error);
         res.status(500).json({ success: false, message: "Server error" });
     }
 });

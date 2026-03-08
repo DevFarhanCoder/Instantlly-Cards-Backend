@@ -42,7 +42,10 @@ const VoucherTransferLogSchema = new mongoose_1.Schema({
     recipientName: { type: String },
     recipientPhone: { type: String },
     quantity: { type: Number, required: true, default: 1 },
+    // Per-voucher amount snapshot (e.g. 1200 for Instantlly, different for other vouchers)
+    amount: { type: Number },
     transferredAt: { type: Date, default: Date.now },
+    voucherId: { type: mongoose_1.Schema.Types.ObjectId, ref: "Voucher", index: true },
 }, { timestamps: true });
 // Index for fast lookup by sender and recipient
 VoucherTransferLogSchema.index({ senderId: 1, transferredAt: -1 });
