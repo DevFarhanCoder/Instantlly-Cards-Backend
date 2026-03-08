@@ -19,6 +19,7 @@ import Designer from "../models/Designer";
 import DesignerUpload from "../models/DesignerUpload";
 import DesignRequest from "../models/DesignRequest";
 import Voucher from "../models/Voucher";
+import VoucherTransferLog from "../models/VoucherTransferLog";
 import MlmTransfer from "../models/MlmTransfer";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { movePendingToApproved, uploadToS3 } from "../services/s3Service";
@@ -2484,7 +2485,7 @@ router.delete(
 
       console.log(`ðŸ—‘ï¸ Admin deleting voucher ${id}`);
 
-      const voucher = await Voucher.findByIdAndDelete(id);
+      const voucher = await Voucher.findById(id).select("_id templateId").lean();
 
       if (!voucher) {
         return res.status(404).json({
@@ -2493,9 +2494,29 @@ router.delete(
         });
       }
 
+      const templateId =
+        ((voucher as any).templateId as mongoose.Types.ObjectId) ||
+        ((voucher as any)._id as mongoose.Types.ObjectId);
+
+      const deleteQuery = {
+        $or: [
+          { _id: templateId },
+          { templateId },
+        ],
+      };
+
+      const [deleteResult, transferLogResult, specialCreditResult] = await Promise.all([
+        Voucher.deleteMany(deleteQuery),
+        VoucherTransferLog.deleteMany({ voucherId: templateId }),
+        SpecialCredit.deleteMany({ voucherId: templateId }),
+      ]);
+
       res.json({
         success: true,
-        message: "Voucher deleted successfully",
+        message: "Voucher campaign deleted successfully",
+        deletedVouchers: deleteResult.deletedCount || 0,
+        deletedTransferLogs: transferLogResult.deletedCount || 0,
+        deletedSpecialCredits: specialCreditResult.deletedCount || 0,
       });
     } catch (error) {
       console.error("âŒ Error deleting voucher:", error);

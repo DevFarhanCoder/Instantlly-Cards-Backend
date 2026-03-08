@@ -219,6 +219,21 @@ function transferTimeLeftSeconds(expiresAt?: Date | string | null): number {
   return Math.max(0, Math.floor(ms / 1000));
 }
 
+function getTemplateBalanceFromUser(user: any, voucherId?: Types.ObjectId | null): number {
+  if (!voucherId) {
+    return Number(user?.voucherBalance || 0);
+  }
+
+  const balanceMap = user?.voucherBalances;
+  if (balanceMap instanceof Map) {
+    return Number(balanceMap.get(String(voucherId)) || 0);
+  }
+  if (balanceMap && typeof balanceMap === "object") {
+    return Number(balanceMap[String(voucherId)] || 0);
+  }
+  return 0;
+}
+
 async function refundExpiredPendingTransfer(
   transfer: any,
   currentVoucherCount: number,
@@ -807,7 +822,7 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     // Check if user is voucher admin
     const user = await User.findById(req.userId).select(
-      "isVoucherAdmin level specialCredits voucherBalance",
+      "isVoucherAdmin level specialCredits voucherBalance voucherBalances",
     );
     const isVoucherAdmin = user?.isVoucherAdmin === true;
     const userVoucherBalance = (user as any)?.voucherBalance || 0;
@@ -834,8 +849,6 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
 
     // Regular user vouchers
     const query: any = { userId: req.userId };
-    // Hide unpublished admin-assigned copies from end-user list.
-    query.$or = [{ source: { $ne: "admin" } }, { isPublished: true }];
     if (status) query.redeemedStatus = status;
 
     const userVouchers = await Voucher.find(query)
@@ -844,8 +857,22 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
       .limit(Number(limit))
       .lean();
 
-    // Add special Instantlly voucher at the beginning for ALL users
-    const allVouchers = [...userVouchers];
+    // Hide admin-issued copies from the list UI; they are represented through
+    // the template entry quantity instead of one row per issued voucher.
+    const physicalVouchers = userVouchers.filter((voucher: any) => voucher.source !== "admin");
+    const adminIssuedCopies = userVouchers.filter((voucher: any) => voucher.source === "admin");
+
+    const adminIssuedCountByTemplate = new Map<string, number>();
+    adminIssuedCopies.forEach((voucher: any) => {
+      const key = String(voucher.templateId || voucher._id);
+      adminIssuedCountByTemplate.set(
+        key,
+        (adminIssuedCountByTemplate.get(key) || 0) + 1,
+      );
+    });
+
+    // Add physical vouchers first, then inject published template cards with quantity.
+    const allVouchers = [...physicalVouchers];
 
     // Load published admin templates from DB (managed via admin panel)
     const publishedTemplates = await Voucher.find({
@@ -885,6 +912,12 @@ router.get("/vouchers", requireAuth, async (req: AuthReq, res) => {
           isSpecialCreditsVoucher: true,
           minVouchersRequired: (template as any).minVouchersRequired,
         };
+        const templateKey = String((template as any).templateId || template._id);
+        const balanceQty = getTemplateBalanceFromUser(user, template._id as Types.ObjectId);
+        const issuedQty = adminIssuedCountByTemplate.get(templateKey) || 0;
+        const totalQty = Math.max(0, balanceQty + issuedQty);
+        sv.quantity = totalQty;
+        sv.isBalanceVoucher = totalQty > 0;
         if (isVoucherAdmin && user?.specialCredits?.availableSlots) {
           sv.vouchersFigure = 122070300;
           sv.specialCredits = {
@@ -1243,36 +1276,11 @@ router.post(
 
       // Validate quantity
       const qty = parseInt(quantity, 10);
-      if (isNaN(qty) || qty < 1 || qty > 100) {
+      if (isNaN(qty) || qty < 1 || qty > 10000) {
         return res.status(400).json({
           success: false,
-          message: "Quantity must be between 1 and 100",
+          message: "Quantity must be between 1 and 10000",
         });
-      }
-
-      // Find voucher
-      const voucher = await Voucher.findOne({
-        _id: voucherId,
-        userId: req.userId,
-      });
-
-      if (!voucher) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Voucher not found" });
-      }
-
-      if (voucher.redeemedStatus !== "unredeemed") {
-        return res.status(400).json({
-          success: false,
-          message: `Cannot transfer ${voucher.redeemedStatus} voucher`,
-        });
-      }
-
-      if (voucher.expiryDate < new Date()) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Cannot transfer expired voucher" });
       }
 
       // Find recipient by phone
@@ -1290,34 +1298,132 @@ router.post(
         });
       }
 
-      // Transfer voucher with quantity
-      const previousOwner = voucher.userId;
-      voucher.userId = recipient._id as any;
-      voucher.source = "transfer";
-      voucher.transferredFrom = previousOwner;
-      voucher.transferredAt = new Date();
-      voucher.maxUses = qty;
-      voucher.remainingUses = qty;
-      voucher.transferHistory.push({
+      const voucherScope = await resolveVoucherScope(voucherId);
+      const scopedVoucherId =
+        voucherScope.canonicalVoucherId || asObjectId(voucherId);
+      const sender = await User.findById(req.userId).select(
+        "name phone voucherBalance voucherBalances",
+      );
+      if (!sender) {
+        return res.status(404).json({
+          success: false,
+          message: "Sender not found",
+        });
+      }
+
+      const physicalVoucher = await Voucher.findOne({
+        _id: voucherId,
+        userId: req.userId,
+      });
+
+      // Preferred path for campaign vouchers: transfer count/balance, not a new voucher document.
+      const templateBalance = getTemplateBalanceFromUser(sender, scopedVoucherId);
+      const globalBalance = Number((sender as any).voucherBalance || 0);
+      const availableBalance = templateBalance > 0 ? templateBalance : globalBalance;
+
+      if (scopedVoucherId && availableBalance >= qty) {
+        const senderUpdate: Record<string, number> = {
+          voucherBalance: -qty,
+        };
+        const recipientUpdate: Record<string, number> = {
+          voucherBalance: qty,
+        };
+        const scopedKey = `voucherBalances.${scopedVoucherId.toString()}`;
+        if (templateBalance > 0) {
+          senderUpdate[scopedKey] = -qty;
+        }
+        recipientUpdate[scopedKey] = qty;
+
+        await Promise.all([
+          User.findByIdAndUpdate(req.userId, { $inc: senderUpdate }),
+          User.findByIdAndUpdate(recipient._id, { $inc: recipientUpdate }),
+        ]);
+
+        let perVoucherAmount = 1200;
+        const voucherTemplate = await Voucher.findById(scopedVoucherId)
+          .select("amount MRP")
+          .lean();
+        if (voucherTemplate) {
+          perVoucherAmount =
+            (voucherTemplate as any).amount ||
+            (voucherTemplate as any).MRP ||
+            1200;
+        }
+
+        await reconcileTransferUnlocksForUser(
+          recipient._id.toString(),
+          scopedVoucherId,
+        );
+
+        await VoucherTransferLog.create({
+          senderId: req.userId,
+          senderName: (sender as any).name,
+          senderPhone: (sender as any).phone,
+          recipientId: recipient._id,
+          recipientName: recipient.name,
+          recipientPhone: recipient.phone,
+          quantity: qty,
+          amount: perVoucherAmount,
+          transferredAt: new Date(),
+          voucherId: scopedVoucherId,
+        });
+
+        return res.json({
+          success: true,
+          message: `Voucher balance transferred to ${recipient.name} with quantity ${qty}`,
+          transferMode: "balance",
+          voucherId: scopedVoucherId.toString(),
+          quantity: qty,
+        });
+      }
+
+      // Legacy physical-voucher path for already-issued voucher documents.
+      if (!physicalVoucher) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Voucher not found" });
+      }
+
+      if (physicalVoucher.redeemedStatus !== "unredeemed") {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot transfer ${physicalVoucher.redeemedStatus} voucher`,
+        });
+      }
+
+      if (physicalVoucher.expiryDate < new Date()) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Cannot transfer expired voucher" });
+      }
+
+      const previousOwner = physicalVoucher.userId;
+      physicalVoucher.userId = recipient._id as any;
+      physicalVoucher.source = "transfer";
+      physicalVoucher.transferredFrom = previousOwner;
+      physicalVoucher.transferredAt = new Date();
+      physicalVoucher.maxUses = qty;
+      physicalVoucher.remainingUses = qty;
+      physicalVoucher.transferHistory.push({
         from: previousOwner,
         to: recipient._id as any,
         transferredAt: new Date(),
       });
 
-      await voucher.save();
+      await physicalVoucher.save();
       await reconcileTransferUnlocksForUser(
         recipient._id.toString(),
-        ((voucher as any).templateId as Types.ObjectId) ||
-          (voucher._id as Types.ObjectId),
+        ((physicalVoucher as any).templateId as Types.ObjectId) ||
+          (physicalVoucher._id as Types.ObjectId),
       );
 
-      // Populate recipient info for response
-      await voucher.populate("userId", "name phone");
+      await physicalVoucher.populate("userId", "name phone");
 
       res.json({
         success: true,
         message: `Voucher transferred to ${recipient.name} with ${qty} use${qty > 1 ? "s" : ""}`,
-        voucher,
+        voucher: physicalVoucher,
+        transferMode: "physical",
       });
     } catch (error) {
       console.error("MLM VOUCHER TRANSFER ERROR", error);
@@ -1326,7 +1432,7 @@ router.post(
   },
 );
 
-// Admin voucher transfer - create new vouchers for recipient
+// Admin voucher transfer - transfer count/balance for a voucher campaign
 router.post(
   "/vouchers/admin-transfer",
   requireAuth,
@@ -1355,10 +1461,10 @@ router.post(
 
       // Validate quantity
       const qty = parseInt(quantity, 10);
-      if (isNaN(qty) || qty < 1 || qty > 100) {
+      if (isNaN(qty) || qty < 1 || qty > 10000) {
         return res.status(400).json({
           success: false,
-          message: "Quantity must be between 1 and 100",
+          message: "Quantity must be between 1 and 10000",
         });
       }
 
@@ -1378,36 +1484,37 @@ router.post(
         voucherBalance: -qty,
       };
 
-      // Keep template-level balances in sync for unlock logic.
+      // Keep template-level balances in sync for the transferred campaign.
       if (voucherObjectId) {
         const key = `voucherBalances.${voucherObjectId.toString()}`;
         voucherBalanceInc[key] = qty;
         voucherBalanceDec[key] = -qty;
       }
 
-      // Increment recipient voucher balances (global + template scoped when available)
-      await User.findByIdAndUpdate(recipient._id, { $inc: voucherBalanceInc });
+      let perVoucherAmount = 1200;
+      const voucherTemplate = voucherObjectId
+        ? await Voucher.findById(voucherObjectId).lean()
+        : null;
+      if (voucherTemplate) {
+        perVoucherAmount =
+          (voucherTemplate as any).amount ||
+          (voucherTemplate as any).MRP ||
+          1200;
+      }
+      const templateId =
+        ((voucherTemplate as any)?.templateId as Types.ObjectId) ||
+        voucherObjectId ||
+        null;
+
+      await Promise.all([
+        User.findByIdAndUpdate(recipient._id, { $inc: voucherBalanceInc }),
+        User.findByIdAndUpdate(req.userId, { $inc: voucherBalanceDec }),
+      ]);
+
       await reconcileTransferUnlocksForUser(
         recipient._id.toString(),
-        voucherObjectId || undefined,
+        templateId || voucherObjectId || undefined,
       );
-
-      // Deduct from admin balances
-      await User.findByIdAndUpdate(req.userId, { $inc: voucherBalanceDec });
-
-      // Resolve per-voucher amount from the voucher template (if voucherId provided)
-      let perVoucherAmount = 1200; // default MRP
-      if (voucherId) {
-        const voucherTemplate = await Voucher.findById(voucherId)
-          .select("amount MRP")
-          .lean();
-        if (voucherTemplate) {
-          perVoucherAmount =
-            (voucherTemplate as any).amount ||
-            (voucherTemplate as any).MRP ||
-            1200;
-        }
-      }
 
       // Save transfer log for history tracking
       await VoucherTransferLog.create({
@@ -1427,6 +1534,7 @@ router.post(
         success: true,
         message: `Transferred ${qty} voucher${qty > 1 ? "s" : ""} to ${recipient.name}`,
         count: qty,
+        transferMode: "balance",
       });
     } catch (error) {
       console.error("MLM ADMIN VOUCHER TRANSFER ERROR", error);
