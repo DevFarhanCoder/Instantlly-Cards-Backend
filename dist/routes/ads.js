@@ -66,13 +66,13 @@ router.get("/active", async (req, res) => {
     try {
         const now = new Date();
         // 🔍 LOG: Request received
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        console.log("📱 [STEP 1] GET /api/ads/active - Request Received");
-        console.log("🕐 Timestamp:", now.toISOString());
-        console.log("🌐 User-Agent:", req.headers["user-agent"]);
-        console.log("🔗 Origin:", req.headers.origin || "No origin");
-        console.log("🔗 Referer:", req.headers.referer || "No referer");
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // console.log("📱 [STEP 1] GET /api/ads/active - Request Received");
+        // console.log("🕐 Timestamp:", now.toISOString());
+        // console.log("🌐 User-Agent:", req.headers["user-agent"]);
+        // console.log("🔗 Origin:", req.headers.origin || "No origin");
+        // console.log("🔗 Referer:", req.headers.referer || "No referer");
+        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         // Set cache headers for 5 minutes
         res.setHeader("Cache-Control", "public, max-age=300");
         // 🔍 LOG: Database query start
@@ -199,17 +199,19 @@ router.get("/image/:id/:type", async (req, res) => {
     try {
         const { id, type } = req.params;
         // 🔍 LOG: Image request received
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        console.log("🖼️  [IMG STEP 1] GET /api/ads/image/:id/:type - Request Received");
-        console.log("🆔 Ad ID:", id);
-        console.log("📷 Image Type:", type);
-        console.log("🕐 Timestamp:", new Date().toISOString());
-        console.log("🌐 User-Agent:", req.headers["user-agent"]);
-        console.log("🔗 Referer:", req.headers.referer || "No referer");
+        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // console.log(
+        //   "🖼️  [IMG STEP 1] GET /api/ads/image/:id/:type - Request Received",
+        // );
+        // console.log("🆔 Ad ID:", id);
+        // console.log("📷 Image Type:", type);
+        // console.log("🕐 Timestamp:", new Date().toISOString());
+        // console.log("🌐 User-Agent:", req.headers["user-agent"]);
+        // console.log("🔗 Referer:", req.headers.referer || "No referer");
         // Validate ObjectId format first
         if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
             console.error("❌ [IMG ERROR] Invalid ObjectId format:", id);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(400).json({
                 success: false,
                 message: "Invalid ad ID format",
@@ -217,7 +219,7 @@ router.get("/image/:id/:type", async (req, res) => {
         }
         if (type !== "bottom" && type !== "fullscreen") {
             console.error("❌ [IMG ERROR] Invalid image type:", type);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(400).json({
                 success: false,
                 message: "Invalid image type. Must be 'bottom' or 'fullscreen'",
@@ -231,12 +233,12 @@ router.get("/image/:id/:type", async (req, res) => {
             res.setHeader("Cache-Control", "public, max-age=86400");
             res.setHeader("Content-Type", "image/jpeg");
             res.setHeader("X-Cache", "HIT");
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.send(cachedImage);
         }
-        console.log("💨 [CACHE MISS] Image not in cache, fetching from GridFS");
+        // console.log("💨 [CACHE MISS] Image not in cache, fetching from GridFS");
         // 🔍 LOG: Fetching ad from database
-        console.log("📊 [IMG STEP 2] Fetching Ad from Database");
+        // console.log("📊 [IMG STEP 2] Fetching Ad from Database");
         // Retry logic for database query (up to 3 attempts)
         let ad = null;
         let retries = 0;
@@ -271,14 +273,16 @@ router.get("/image/:id/:type", async (req, res) => {
                 message: "Ad not found",
             });
         }
-        console.log("✅ [IMG STEP 3] Ad Found in Database");
-        console.log("🔍 [IMG STEP 3] Ad Found:", {
-            _id: ad._id,
-            bottomImageGridFS: ad.bottomImageGridFS?.toString() || "NULL",
-            fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || "NULL",
-            hasLegacyBottomImage: !!(ad.bottomImage && ad.bottomImage.length > 0),
-            hasLegacyFullscreenImage: !!(ad.fullscreenImage && ad.fullscreenImage.length > 0),
-        });
+        // console.log("✅ [IMG STEP 3] Ad Found in Database");
+        // console.log("🔍 [IMG STEP 3] Ad Found:", {
+        //   _id: ad._id,
+        //   bottomImageGridFS: ad.bottomImageGridFS?.toString() || "NULL",
+        //   fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || "NULL",
+        //   hasLegacyBottomImage: !!(ad.bottomImage && ad.bottomImage.length > 0),
+        //   hasLegacyFullscreenImage: !!(
+        //     ad.fullscreenImage && ad.fullscreenImage.length > 0
+        //   ),
+        // });
         // Get GridFS file ID based on type
         const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
         if (!gridfsId) {
@@ -287,16 +291,18 @@ router.get("/image/:id/:type", async (req, res) => {
             const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
             if (!base64Data || base64Data.length === 0) {
                 console.error("❌ [IMG ERROR] No image found (neither GridFS nor base64)");
-                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
                 return res.status(404).json({
                     success: false,
                     message: `${type} image not found`,
                 });
             }
             // Return base64 as fallback (legacy support during migration)
-            console.warn(`⚠️  [IMG STEP 5] Serving base64 fallback for ad ${id} ${type} image`);
-            console.log("📏 Base64 length:", base64Data.length, "characters");
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            // console.warn(
+            //   `⚠️  [IMG STEP 5] Serving base64 fallback for ad ${id} ${type} image`,
+            // );
+            // console.log("📏 Base64 length:", base64Data.length, "characters");
+            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.json({
                 success: true,
                 data: base64Data,
@@ -304,7 +310,7 @@ router.get("/image/:id/:type", async (req, res) => {
             });
         }
         // 🔍 LOG: Preparing to stream from GridFS
-        console.log("✅ [IMG STEP 4] GridFS ID Found:", gridfsId.toString());
+        // console.log("✅ [IMG STEP 4] GridFS ID Found:", gridfsId.toString());
         // Check if file exists in GridFS before trying to download
         try {
             const fileExists = await gridfsService_1.gridfsService.fileExists(gridfsId);
@@ -357,7 +363,7 @@ router.get("/image/:id/:type", async (req, res) => {
         }, 60000);
         downloadStream.on("data", (chunk) => {
             if (!streamStarted) {
-                console.log("📦 [IMG STEP 6] GridFS Stream Started - Buffering");
+                // console.log("📦 [IMG STEP 6] GridFS Stream Started - Buffering");
                 streamStarted = true;
             }
             chunks.push(chunk);
@@ -367,8 +373,10 @@ router.get("/image/:id/:type", async (req, res) => {
                 clearTimeout(streamTimeout);
             // Combine all chunks into single buffer
             const imageBuffer = Buffer.concat(chunks);
-            console.log("✅ [IMG STEP 7] Image buffered successfully");
-            console.log(`📏 Total size: ${(imageBuffer.length / 1024).toFixed(2)} KB`);
+            // console.log("✅ [IMG STEP 7] Image buffered successfully");
+            // console.log(
+            //   `📏 Total size: ${(imageBuffer.length / 1024).toFixed(2)} KB`,
+            // );
             // Store in cache for future requests
             imageCache_1.imageCache.set(cacheKey, imageBuffer);
             // Send to client
