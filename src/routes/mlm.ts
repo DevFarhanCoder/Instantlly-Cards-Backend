@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
 import { isValidObjectId, Types } from "mongoose";
 import { requireAuth, AuthReq } from "../middleware/auth";
 import User from "../models/User";
@@ -47,6 +47,89 @@ const MIN_VOUCHERS_TO_UNLOCK = 5; // Must share 5 vouchers to unlock credit tran
 const DEFAULT_REQUIRED_VOUCHERS_PER_TEMPLATE = 5;
 const DISTRIBUTION_CREDIT_AMOUNT = 146484360000; // Credits per distribution entry
 
+const MLM_LOG_REDACT_KEYS = new Set([
+  "password",
+  "token",
+  "authorization",
+  "otp",
+  "accessToken",
+  "refreshToken",
+]);
+
+function sanitizeMlmLogValue(value: unknown, depth = 0): unknown {
+  if (depth > 3) {
+    return "[max-depth]";
+  }
+
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > 20) {
+      return {
+        length: value.length,
+        preview: value.slice(0, 20).map((item) =>
+          sanitizeMlmLogValue(item, depth + 1),
+        ),
+      };
+    }
+    return value.map((item) => sanitizeMlmLogValue(item, depth + 1));
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).slice(
+      0,
+      50,
+    );
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, nestedValue] of entries) {
+      if (MLM_LOG_REDACT_KEYS.has(key)) {
+        sanitized[key] = "[redacted]";
+        continue;
+      }
+      sanitized[key] = sanitizeMlmLogValue(nestedValue, depth + 1);
+    }
+    return sanitized;
+  }
+
+  if (typeof value === "string" && value.length > 300) {
+    return `${value.slice(0, 300)}...[truncated ${value.length - 300} chars]`;
+  }
+
+  return value;
+}
+
+router.use((req: Request, res: Response, next: NextFunction) => {
+  const startedAt = Date.now();
+  const requestMeta = {
+    method: req.method,
+    path: req.originalUrl,
+    userId: (req as AuthReq).userId || null,
+    query: sanitizeMlmLogValue(req.query),
+    body: sanitizeMlmLogValue(req.body),
+    params: sanitizeMlmLogValue(req.params),
+  };
+
+  console.log("[MLM API REQUEST]", requestMeta);
+
+  res.on("finish", () => {
+    console.log("[MLM API RESPONSE]", {
+      method: req.method,
+      path: req.originalUrl,
+      userId: (req as AuthReq).userId || null,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  next();
+});
+
 function getVoucherTimeoutReason(): string {
   if (VOUCHER_PURCHASE_TIMEOUT_MINUTES % 60 === 0) {
     return `required_vouchers_not_met_within_${VOUCHER_PURCHASE_TIMEOUT_MINUTES / 60}h`;
@@ -83,12 +166,14 @@ async function resolveVoucherScope(
 ): Promise<VoucherScope> {
   const requestedVoucherId = voucherId || null;
   if (!voucherId) {
-    return {
+    const scope: VoucherScope = {
       requestedVoucherId,
       detectedType: "none",
       canonicalVoucherId: null,
       matchedVoucherId: null,
     };
+    console.log("[MLM VOUCHER SCOPE]", scope);
+    return scope;
   }
 
   if (voucherId === "instantlly-special-credits") {
@@ -101,32 +186,42 @@ async function resolveVoucherScope(
       .lean();
 
     if (!publishedTemplate) {
-      return {
+      const scope: VoucherScope = {
         requestedVoucherId,
         detectedType: "legacy",
         canonicalVoucherId: null,
         matchedVoucherId: null,
       };
+      console.log("[MLM VOUCHER SCOPE]", scope);
+      return scope;
     }
     const canonical =
       ((publishedTemplate as any).templateId as Types.ObjectId) ||
       ((publishedTemplate as any)._id as Types.ObjectId);
-    return {
+    const scope: VoucherScope = {
       requestedVoucherId,
       detectedType: "legacy",
       canonicalVoucherId: canonical,
       matchedVoucherId: (publishedTemplate as any)._id as Types.ObjectId,
     };
+    console.log("[MLM VOUCHER SCOPE]", {
+      ...scope,
+      canonicalVoucherId: scope.canonicalVoucherId?.toString() || null,
+      matchedVoucherId: scope.matchedVoucherId?.toString() || null,
+    });
+    return scope;
   }
 
   const objectId = asObjectId(voucherId);
   if (!objectId) {
-    return {
+    const scope: VoucherScope = {
       requestedVoucherId,
       detectedType: "invalid",
       canonicalVoucherId: null,
       matchedVoucherId: null,
     };
+    console.log("[MLM VOUCHER SCOPE]", scope);
+    return scope;
   }
 
   const voucherDoc = await Voucher.findById(objectId)
@@ -135,12 +230,17 @@ async function resolveVoucherScope(
 
   if (!voucherDoc) {
     // Accept campaign/template id directly even if this collection row is absent.
-    return {
+    const scope: VoucherScope = {
       requestedVoucherId,
       detectedType: "campaign_or_template_id",
       canonicalVoucherId: objectId,
       matchedVoucherId: null,
     };
+    console.log("[MLM VOUCHER SCOPE]", {
+      ...scope,
+      canonicalVoucherId: scope.canonicalVoucherId?.toString() || null,
+    });
+    return scope;
   }
 
   const templateId = (voucherDoc as any).templateId as
@@ -151,13 +251,20 @@ async function resolveVoucherScope(
       ? "instance"
       : "template";
 
-  return {
+  const scope: VoucherScope = {
     requestedVoucherId,
     detectedType,
     canonicalVoucherId:
       templateId || ((voucherDoc as any)._id as Types.ObjectId),
     matchedVoucherId: (voucherDoc as any)._id as Types.ObjectId,
   };
+  console.log("[MLM VOUCHER SCOPE]", {
+    ...scope,
+    canonicalVoucherId: scope.canonicalVoucherId?.toString() || null,
+    matchedVoucherId: scope.matchedVoucherId?.toString() || null,
+    templateId: templateId?.toString() || null,
+  });
+  return scope;
 }
 
 async function getVoucherTemplateRequiredCount(
@@ -187,10 +294,19 @@ async function getVoucherCountForTemplate(
       }),
       User.findById(userId).select("voucherBalance").lean(),
     ]);
-    return Math.max(
+    const total = Math.max(
       0,
       physicalCount + Number((user as any)?.voucherBalance || 0),
     );
+    console.log("[MLM VOUCHER COUNT]", {
+      userId,
+      voucherId: null,
+      mode: "global",
+      physicalCount,
+      voucherBalance: Number((user as any)?.voucherBalance || 0),
+      total,
+    });
+    return total;
   }
 
   const [physicalCount, user] = await Promise.all([
@@ -210,7 +326,16 @@ async function getVoucherCountForTemplate(
     balanceCount = Number(balanceMap[String(voucherId)] || 0);
   }
 
-  return Math.max(0, physicalCount + balanceCount);
+  const total = Math.max(0, physicalCount + balanceCount);
+  console.log("[MLM VOUCHER COUNT]", {
+    userId,
+    voucherId: voucherId.toString(),
+    mode: "scoped",
+    physicalCount,
+    balanceCount,
+    total,
+  });
+  return total;
 }
 
 function transferTimeLeftSeconds(expiresAt?: Date | string | null): number {
@@ -1318,10 +1443,8 @@ router.post(
 
       // Preferred path for campaign vouchers: transfer count/balance, not a new voucher document.
       const templateBalance = getTemplateBalanceFromUser(sender, scopedVoucherId);
-      const globalBalance = Number((sender as any).voucherBalance || 0);
-      const availableBalance = templateBalance > 0 ? templateBalance : globalBalance;
 
-      if (scopedVoucherId && availableBalance >= qty) {
+      if (scopedVoucherId && templateBalance >= qty) {
         const senderUpdate: Record<string, number> = {
           voucherBalance: -qty,
         };
@@ -1379,6 +1502,13 @@ router.post(
 
       // Legacy physical-voucher path for already-issued voucher documents.
       if (!physicalVoucher) {
+        if (scopedVoucherId) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Insufficient voucher quantity for this campaign transfer",
+          });
+        }
         return res
           .status(404)
           .json({ success: false, message: "Voucher not found" });
@@ -3164,6 +3294,17 @@ router.get(
           activeTransferVoucherId || undefined,
         );
       }
+
+      console.log("[MLM SPECIAL DASHBOARD FIGURE]", {
+        userId: req.userId,
+        requestedVoucherId: voucherId || null,
+        resolvedVoucherId: activeTransferVoucherId?.toString() || null,
+        isAdmin,
+        availableSlots: user.specialCredits?.availableSlots || 0,
+        totalSlots,
+        usedSlots,
+        vouchersFigure,
+      });
 
       const activeTransfers = await MlmTransfer.find({
         receiverId: req.userId,
