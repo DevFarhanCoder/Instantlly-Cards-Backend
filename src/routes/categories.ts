@@ -9,6 +9,115 @@ import User from "../models/User";
 
 const router = express.Router();
 
+const parsedMobileCategoryCacheTtl = Number(
+  process.env.MOBILE_CATEGORY_CACHE_TTL_MS ?? "0",
+);
+const MOBILE_CATEGORY_CACHE_TTL_MS =
+  Number.isFinite(parsedMobileCategoryCacheTtl) &&
+  parsedMobileCategoryCacheTtl > 0
+    ? Math.floor(parsedMobileCategoryCacheTtl)
+    : 0;
+
+type CategoryLeanDoc = {
+  _id: mongoose.Types.ObjectId;
+  name?: string;
+  icon?: string;
+  order?: number;
+  subcategories?: unknown;
+  updatedAt?: Date;
+};
+
+type CachedCategorySummary = {
+  expiresAt: number;
+  data: Array<{
+    _id: string;
+    name: string;
+    icon: string;
+    order: number;
+    subcategoryCount: number;
+    updatedAt?: Date;
+  }>;
+};
+
+let cachedMobileCategorySummary: CachedCategorySummary | null = null;
+
+const invalidateMobileCategoryCache = () => {
+  cachedMobileCategorySummary = null;
+};
+
+const normalizeSubcategories = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const parsePositiveInt = (value: unknown, defaultValue: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return Math.floor(parsed);
+};
+
+const setNoStoreHeaders = (res: Response) => {
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+    "Surrogate-Control": "no-store",
+  });
+};
+
+const getMobileCategorySummary = async (options?: { bypassCache?: boolean }) => {
+  const now = Date.now();
+  const bypassCache = Boolean(options?.bypassCache) || MOBILE_CATEGORY_CACHE_TTL_MS <= 0;
+
+  if (
+    !bypassCache &&
+    cachedMobileCategorySummary &&
+    cachedMobileCategorySummary.expiresAt > now
+  ) {
+    console.log("[CATEGORIES] Mobile summary cache hit");
+    return cachedMobileCategorySummary.data;
+  }
+
+  const categories = (await Category.find({ isActive: true })
+    .select("_id name icon order subcategories updatedAt")
+    .sort({ order: 1, name: 1 })
+    .lean()) as CategoryLeanDoc[];
+
+  const summary = categories.map((category) => ({
+    _id: String(category._id),
+    name: category.name?.trim() || "",
+    icon: category.icon || "📁",
+    order: category.order ?? 0,
+    subcategoryCount: normalizeSubcategories(category.subcategories).length,
+    updatedAt: category.updatedAt,
+  }));
+
+  if (MOBILE_CATEGORY_CACHE_TTL_MS > 0 && !bypassCache) {
+    cachedMobileCategorySummary = {
+      data: summary,
+      expiresAt: now + MOBILE_CATEGORY_CACHE_TTL_MS,
+    };
+
+    console.log("[CATEGORIES] Mobile summary cache refreshed", {
+      count: summary.length,
+      ttlMs: MOBILE_CATEGORY_CACHE_TTL_MS,
+    });
+  } else {
+    cachedMobileCategorySummary = null;
+    console.log("[CATEGORIES] Mobile summary fetched from DB", {
+      count: summary.length,
+      bypassCache,
+      ttlMs: MOBILE_CATEGORY_CACHE_TTL_MS,
+    });
+  }
+
+  return summary;
+};
+
 // Simple admin authentication middleware
 const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   const adminKey = req.headers["x-admin-key"];
@@ -29,16 +138,137 @@ const adminAuth = (req: Request, res: Response, next: NextFunction) => {
 // PUBLIC ENDPOINTS (for mobile app)
 // ============================================================
 
-// GET /api/categories - Get all active categories with subcategories
-router.get("/", async (req: Request, res: Response) => {
+// GET /api/categories/mobile - Lightweight mobile list (optimized for home grid)
+router.get("/mobile", async (req: Request, res: Response) => {
   try {
-    const categories = await Category.find({ isActive: true })
-      .sort({ order: 1, name: 1 })
-      .lean();
+    const freshQuery = String(req.query.fresh ?? "").trim().toLowerCase();
+    const bypassCache =
+      freshQuery === "1" || freshQuery === "true" || freshQuery === "yes";
 
+    console.log("[CATEGORIES] GET /api/categories/mobile", {
+      fresh: bypassCache,
+      ttlMs: MOBILE_CATEGORY_CACHE_TTL_MS,
+    });
+
+    const categories = await getMobileCategorySummary({ bypassCache });
+    setNoStoreHeaders(res);
     res.json({
       success: true,
       data: categories,
+    });
+  } catch (error: any) {
+    console.error("Error fetching mobile category summary:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch category summary",
+    });
+  }
+});
+
+// GET /api/categories/mobile/:categoryId/subcategories - Lazy subcategory fetch for a single category
+router.get("/mobile/:categoryId/subcategories", async (req: Request, res: Response) => {
+  try {
+    const { categoryId } = req.params;
+    console.log("[CATEGORIES] GET /api/categories/mobile/:categoryId/subcategories", {
+      categoryId,
+      page: req.query.page,
+      limit: req.query.limit,
+      search: req.query.search,
+    });
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid categoryId",
+      });
+    }
+
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+    const category = (await Category.findOne({
+      _id: categoryId,
+      isActive: true,
+    })
+      .select("_id name subcategories")
+      .lean()) as CategoryLeanDoc | null;
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        error: "Category not found",
+      });
+    }
+
+    let subcategories = normalizeSubcategories(category.subcategories);
+    if (search) {
+      const normalizedSearch = search.toLowerCase();
+      subcategories = subcategories.filter((subcategory) =>
+        subcategory.toLowerCase().includes(normalizedSearch),
+      );
+    }
+
+    const total = subcategories.length;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    const start = (page - 1) * limit;
+    const data = subcategories.slice(start, start + limit);
+
+    console.log("[CATEGORIES] Subcategories fetched", {
+      categoryId,
+      returned: data.length,
+      total,
+      page,
+      limit,
+      hasMore: start + limit < total,
+    });
+
+    setNoStoreHeaders(res);
+    res.json({
+      success: true,
+      data: {
+        categoryId: String(category._id),
+        categoryName: category.name?.trim() || "",
+        subcategories: data,
+      },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasMore: start + limit < total,
+        search: search || null,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error fetching category subcategories:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch subcategories",
+    });
+  }
+});
+
+// GET /api/categories - Get all active categories with subcategories
+router.get("/", async (req: Request, res: Response) => {
+  try {
+    const categories = (await Category.find({ isActive: true })
+      .select("_id name icon subcategories isActive order")
+      .sort({ order: 1, name: 1 })
+      .lean()) as CategoryLeanDoc[];
+
+    const normalized = categories.map((category) => ({
+      ...category,
+      name: category.name?.trim() || "",
+      icon: category.icon || "📁",
+      subcategories: normalizeSubcategories(category.subcategories),
+      order: category.order ?? 0,
+    }));
+
+    setNoStoreHeaders(res);
+    res.json({
+      success: true,
+      data: normalized,
     });
   } catch (error: any) {
     console.error("Error fetching categories:", error);
@@ -289,6 +519,10 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
       }
     }
 
+    if (created > 0 || updated > 0) {
+      invalidateMobileCategoryCache();
+    }
+
     res.json({
       success: true,
       message: `Seeded categories: ${created} created, ${updated} updated`,
@@ -329,6 +563,7 @@ router.post("/admin/add-category", adminAuth, async (req: Request, res: Response
       subcategories: subcategories || [],
       order: (maxOrder?.order || 0) + 1,
     });
+    invalidateMobileCategoryCache();
 
     res.status(201).json({
       success: true,
@@ -372,6 +607,7 @@ router.post("/admin/add-subcategory", adminAuth, async (req: Request, res: Respo
 
     category.subcategories.push(subcategoryName.trim());
     await category.save();
+    invalidateMobileCategoryCache();
 
     res.json({
       success: true,
@@ -472,6 +708,7 @@ router.put("/admin/approve-custom/:id", adminAuth, async (req: Request, res: Res
     customService.status = "approved";
     customService.approvedAt = new Date();
     await customService.save();
+    invalidateMobileCategoryCache();
 
     res.json({
       success: true,
@@ -622,6 +859,7 @@ router.put("/admin/category/:id", adminAuth, async (req: Request, res: Response)
     if (isActive !== undefined) category.isActive = Boolean(isActive);
 
     await category.save();
+    invalidateMobileCategoryCache();
 
     res.json({
       success: true,
@@ -642,6 +880,7 @@ router.delete("/admin/category/:id", adminAuth, async (req: Request, res: Respon
     if (!category) {
       return res.status(404).json({ success: false, error: "Category not found" });
     }
+    invalidateMobileCategoryCache();
     res.json({ success: true, message: `Category "${category.name}" deleted` });
   } catch (error: any) {
     console.error("Error deleting category:", error);
@@ -669,6 +908,7 @@ router.delete("/admin/category/:id/subcategory/:subName", adminAuth, async (req:
 
     category.subcategories.splice(idx, 1);
     await category.save();
+    invalidateMobileCategoryCache();
 
     res.json({
       success: true,

@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 import { GridFSBucket, ObjectId } from "mongodb";
 import { Readable } from "stream";
 
@@ -25,7 +25,6 @@ class GridFSService {
     });
 
     this.isInitialized = true;
-    console.log("✅ GridFS bucket initialized for ad images");
   }
 
   /**
@@ -44,9 +43,6 @@ class GridFSService {
       throw new Error("GridFS bucket not initialized");
     }
 
-    // Detect if it's a video or image from data URL
-    const isVideo = base64Data.startsWith('data:video/');
-    
     // Remove data:image/video prefix if present
     const base64Clean = base64Data.replace(/^data:(image|video)\/\w+;base64,/, "");
 
@@ -70,7 +66,6 @@ class GridFSService {
         .pipe(uploadStream)
         .on("error", reject)
         .on("finish", () => {
-          console.log(`✅ Uploaded ${filename} to GridFS (${uploadStream.id})`);
           resolve(uploadStream.id as ObjectId);
         });
     });
@@ -183,7 +178,6 @@ class GridFSService {
 
     const id = typeof fileId === "string" ? new ObjectId(fileId) : fileId;
     await this.bucket.delete(id);
-    console.log(`🗑️ Deleted file from GridFS: ${id}`);
   }
 
   /**
