@@ -18,6 +18,25 @@ const MOBILE_CATEGORY_CACHE_TTL_MS =
     ? Math.floor(parsedMobileCategoryCacheTtl)
     : 0;
 
+const parsedCategoryTreeCacheTtl = Number(
+  process.env.CATEGORY_TREE_CACHE_TTL_MS ?? "60000",
+);
+const CATEGORY_TREE_CACHE_TTL_MS =
+  Number.isFinite(parsedCategoryTreeCacheTtl) &&
+  parsedCategoryTreeCacheTtl > 0
+    ? Math.floor(parsedCategoryTreeCacheTtl)
+    : 0;
+
+const parsedCategoryChildrenCacheTtl = Number(
+  process.env.CATEGORY_CHILDREN_CACHE_TTL_MS ??
+    String(CATEGORY_TREE_CACHE_TTL_MS),
+);
+const CATEGORY_CHILDREN_CACHE_TTL_MS =
+  Number.isFinite(parsedCategoryChildrenCacheTtl) &&
+  parsedCategoryChildrenCacheTtl > 0
+    ? Math.floor(parsedCategoryChildrenCacheTtl)
+    : 0;
+
 type CategoryLeanDoc = {
   _id: mongoose.Types.ObjectId;
   name?: string;
@@ -39,10 +58,45 @@ type CachedCategorySummary = {
   }>;
 };
 
+type TreeNode = {
+  _id: string;
+  name: string;
+  icon: string;
+  level: number;
+  order: number;
+  isActive: boolean;
+  subcategories?: string[];
+  children: TreeNode[];
+};
+
+type CachedTreePayload = {
+  expiresAt: number;
+  data: TreeNode[];
+};
+
+type CachedChildrenPayload = {
+  expiresAt: number;
+  data: any[];
+};
+
 let cachedMobileCategorySummary: CachedCategorySummary | null = null;
+let cachedCategoryTree: CachedTreePayload | null = null;
+let cachedAdminCategoryTree: CachedTreePayload | null = null;
+const cachedCategoryChildren = new Map<string, CachedChildrenPayload>();
 
 const invalidateMobileCategoryCache = () => {
   cachedMobileCategorySummary = null;
+};
+
+const invalidateCategoryHierarchyCache = () => {
+  cachedCategoryTree = null;
+  cachedAdminCategoryTree = null;
+  cachedCategoryChildren.clear();
+};
+
+const invalidateCategoryCaches = () => {
+  invalidateMobileCategoryCache();
+  invalidateCategoryHierarchyCache();
 };
 
 const normalizeSubcategories = (value: unknown): string[] => {
@@ -58,6 +112,11 @@ const parsePositiveInt = (value: unknown, defaultValue: number): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
   return Math.floor(parsed);
+};
+
+const parseFreshQuery = (value: unknown): boolean => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
 const setNoStoreHeaders = (res: Response) => {
@@ -116,6 +175,152 @@ const getMobileCategorySummary = async (options?: { bypassCache?: boolean }) => 
   }
 
   return summary;
+};
+
+const buildCategoryTree = (
+  categories: Array<{
+    _id: mongoose.Types.ObjectId;
+    name?: string;
+    icon?: string;
+    parent_id?: mongoose.Types.ObjectId | null;
+    level?: number;
+    order?: number;
+    isActive?: boolean;
+    subcategories?: unknown;
+  }>,
+): TreeNode[] => {
+  const map = new Map<string, TreeNode>();
+
+  for (const category of categories) {
+    map.set(String(category._id), {
+      _id: String(category._id),
+      name: category.name?.trim() || "",
+      icon: category.icon || "ðŸ“",
+      level: category.level ?? 0,
+      order: category.order ?? 0,
+      isActive: category.isActive ?? true,
+      subcategories: normalizeSubcategories(category.subcategories),
+      children: [],
+    });
+  }
+
+  const roots: TreeNode[] = [];
+  for (const category of categories) {
+    const node = map.get(String(category._id));
+    if (!node) continue;
+
+    const parentId = category.parent_id ? String(category.parent_id) : null;
+    if (parentId && map.has(parentId)) {
+      map.get(parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return roots;
+};
+
+const getCategoryTreeCached = async (options?: {
+  includeInactive?: boolean;
+  bypassCache?: boolean;
+}) => {
+  const includeInactive = Boolean(options?.includeInactive);
+  const cacheRef = includeInactive ? cachedAdminCategoryTree : cachedCategoryTree;
+  const now = Date.now();
+  const bypassCache = Boolean(options?.bypassCache) || CATEGORY_TREE_CACHE_TTL_MS <= 0;
+
+  if (!bypassCache && cacheRef && cacheRef.expiresAt > now) {
+    console.log("[CATEGORIES] Tree cache hit", {
+      includeInactive,
+      ttlMs: CATEGORY_TREE_CACHE_TTL_MS,
+    });
+    return cacheRef.data;
+  }
+
+  const query = includeInactive ? {} : { isActive: true };
+  const categories = await Category.find(query)
+    .select("_id name icon parent_id level order isActive subcategories")
+    .sort({ order: 1, name: 1 })
+    .lean();
+
+  const tree = buildCategoryTree(categories);
+
+  if (CATEGORY_TREE_CACHE_TTL_MS > 0 && !bypassCache) {
+    const payload: CachedTreePayload = {
+      data: tree,
+      expiresAt: now + CATEGORY_TREE_CACHE_TTL_MS,
+    };
+    if (includeInactive) {
+      cachedAdminCategoryTree = payload;
+    } else {
+      cachedCategoryTree = payload;
+    }
+
+    console.log("[CATEGORIES] Tree cache refreshed", {
+      includeInactive,
+      count: tree.length,
+      ttlMs: CATEGORY_TREE_CACHE_TTL_MS,
+    });
+  } else {
+    if (includeInactive) {
+      cachedAdminCategoryTree = null;
+    } else {
+      cachedCategoryTree = null;
+    }
+    console.log("[CATEGORIES] Tree fetched from DB", {
+      includeInactive,
+      count: tree.length,
+      bypassCache,
+      ttlMs: CATEGORY_TREE_CACHE_TTL_MS,
+    });
+  }
+
+  return tree;
+};
+
+const getCategoryChildrenCached = async (options: {
+  parentId: string;
+  bypassCache?: boolean;
+}) => {
+  const now = Date.now();
+  const bypassCache =
+    Boolean(options.bypassCache) || CATEGORY_CHILDREN_CACHE_TTL_MS <= 0;
+  const cacheKey = options.parentId;
+  const cached = cachedCategoryChildren.get(cacheKey);
+
+  if (!bypassCache && cached && cached.expiresAt > now) {
+    console.log("[CATEGORIES] Children cache hit", {
+      parentId: options.parentId,
+      ttlMs: CATEGORY_CHILDREN_CACHE_TTL_MS,
+    });
+    return cached.data;
+  }
+
+  const children = await Category.find({ parent_id: options.parentId, isActive: true })
+    .sort({ order: 1, name: 1 })
+    .lean();
+
+  if (CATEGORY_CHILDREN_CACHE_TTL_MS > 0 && !bypassCache) {
+    cachedCategoryChildren.set(cacheKey, {
+      data: children,
+      expiresAt: now + CATEGORY_CHILDREN_CACHE_TTL_MS,
+    });
+    console.log("[CATEGORIES] Children cache refreshed", {
+      parentId: options.parentId,
+      count: children.length,
+      ttlMs: CATEGORY_CHILDREN_CACHE_TTL_MS,
+    });
+  } else {
+    cachedCategoryChildren.delete(cacheKey);
+    console.log("[CATEGORIES] Children fetched from DB", {
+      parentId: options.parentId,
+      count: children.length,
+      bypassCache,
+      ttlMs: CATEGORY_CHILDREN_CACHE_TTL_MS,
+    });
+  }
+
+  return children;
 };
 
 // Simple admin authentication middleware
@@ -520,7 +725,7 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
     }
 
     if (created > 0 || updated > 0) {
-      invalidateMobileCategoryCache();
+      invalidateCategoryCaches();
     }
 
     res.json({
@@ -563,7 +768,7 @@ router.post("/admin/add-category", adminAuth, async (req: Request, res: Response
       subcategories: subcategories || [],
       order: (maxOrder?.order || 0) + 1,
     });
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.status(201).json({
       success: true,
@@ -607,7 +812,7 @@ router.post("/admin/add-subcategory", adminAuth, async (req: Request, res: Respo
 
     category.subcategories.push(subcategoryName.trim());
     await category.save();
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({
       success: true,
@@ -708,7 +913,7 @@ router.put("/admin/approve-custom/:id", adminAuth, async (req: Request, res: Res
     customService.status = "approved";
     customService.approvedAt = new Date();
     await customService.save();
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({
       success: true,
@@ -859,7 +1064,7 @@ router.put("/admin/category/:id", adminAuth, async (req: Request, res: Response)
     if (isActive !== undefined) category.isActive = Boolean(isActive);
 
     await category.save();
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({
       success: true,
@@ -880,7 +1085,7 @@ router.delete("/admin/category/:id", adminAuth, async (req: Request, res: Respon
     if (!category) {
       return res.status(404).json({ success: false, error: "Category not found" });
     }
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
     res.json({ success: true, message: `Category "${category.name}" deleted` });
   } catch (error: any) {
     console.error("Error deleting category:", error);
@@ -908,7 +1113,7 @@ router.delete("/admin/category/:id/subcategory/:subName", adminAuth, async (req:
 
     category.subcategories.splice(idx, 1);
     await category.save();
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({
       success: true,
@@ -930,48 +1135,12 @@ router.delete("/admin/category/:id/subcategory/:subName", adminAuth, async (req:
 //   [{ _id, name, icon, level, isActive, order, children: [...] }]
 router.get("/tree", async (req: Request, res: Response) => {
   try {
-    const all = await Category.find({ isActive: true })
-      .select("_id name icon parent_id level order isActive subcategories")
-      .sort({ order: 1, name: 1 })
-      .lean();
-
-    // Build id → node map
-    type TreeNode = {
-      _id: string;
-      name: string;
-      icon: string;
-      level: number;
-      order: number;
-      isActive: boolean;
-      subcategories?: string[];
-      children: TreeNode[];
-    };
-
-    const map = new Map<string, TreeNode>();
-    for (const node of all) {
-      map.set(String(node._id), {
-        _id: String(node._id),
-        name: node.name?.trim() || "",
-        icon: node.icon || "📁",
-        level: node.level ?? 0,
-        order: node.order ?? 0,
-        isActive: node.isActive ?? true,
-        subcategories: Array.isArray(node.subcategories) ? node.subcategories : [],
-        children: [],
-      });
-    }
-
-    const roots: TreeNode[] = [];
-    for (const node of all) {
-      const treeNode = map.get(String(node._id))!;
-      const parentId = (node as any).parent_id ? String((node as any).parent_id) : null;
-      if (parentId && map.has(parentId)) {
-        map.get(parentId)!.children.push(treeNode);
-      } else {
-        roots.push(treeNode);
-      }
-    }
-
+    const bypassCache = parseFreshQuery(req.query.fresh);
+    const roots = await getCategoryTreeCached({
+      includeInactive: false,
+      bypassCache,
+    });
+    setNoStoreHeaders(res);
     res.json({ success: true, data: roots });
   } catch (err: any) {
     console.error("Error fetching category tree:", err);
@@ -982,47 +1151,12 @@ router.get("/tree", async (req: Request, res: Response) => {
 // ── GET /api/categories/tree/admin  (includes inactive)
 router.get("/tree/admin", adminAuth, async (req: Request, res: Response) => {
   try {
-    const all = await Category.find()
-      .select("_id name icon parent_id level order isActive subcategories")
-      .sort({ order: 1, name: 1 })
-      .lean();
-
-    type TreeNode = {
-      _id: string;
-      name: string;
-      icon: string;
-      level: number;
-      order: number;
-      isActive: boolean;
-      subcategories?: string[];
-      children: TreeNode[];
-    };
-
-    const map = new Map<string, TreeNode>();
-    for (const node of all) {
-      map.set(String(node._id), {
-        _id: String(node._id),
-        name: node.name?.trim() || "",
-        icon: node.icon || "📁",
-        level: node.level ?? 0,
-        order: node.order ?? 0,
-        isActive: node.isActive ?? true,
-        subcategories: Array.isArray(node.subcategories) ? node.subcategories : [],
-        children: [],
-      });
-    }
-
-    const roots: TreeNode[] = [];
-    for (const node of all) {
-      const treeNode = map.get(String(node._id))!;
-      const parentId = (node as any).parent_id ? String((node as any).parent_id) : null;
-      if (parentId && map.has(parentId)) {
-        map.get(parentId)!.children.push(treeNode);
-      } else {
-        roots.push(treeNode);
-      }
-    }
-
+    const bypassCache = parseFreshQuery(req.query.fresh);
+    const roots = await getCategoryTreeCached({
+      includeInactive: true,
+      bypassCache,
+    });
+    setNoStoreHeaders(res);
     res.json({ success: true, data: roots });
   } catch (err: any) {
     console.error("Error fetching admin category tree:", err);
@@ -1037,9 +1171,12 @@ router.get("/:id/children", async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, error: "Invalid category id" });
     }
-    const children = await Category.find({ parent_id: id, isActive: true })
-      .sort({ order: 1, name: 1 })
-      .lean();
+    const bypassCache = parseFreshQuery(req.query.fresh);
+    const children = await getCategoryChildrenCached({
+      parentId: id,
+      bypassCache,
+    });
+    setNoStoreHeaders(res);
     res.json({ success: true, data: children });
   } catch (err: any) {
     res.status(500).json({ success: false, error: "Failed to fetch children" });
@@ -1092,7 +1229,7 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
       order: newOrder,
       isActive: true,
     });
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.status(201).json({ success: true, message: `Created "${node.name}"`, data: node });
   } catch (err: any) {
@@ -1117,7 +1254,7 @@ router.put("/admin/node/:id", adminAuth, async (req: Request, res: Response) => 
     if (icon !== undefined) node.icon = icon;
     if (isActive !== undefined) node.isActive = Boolean(isActive);
     await node.save();
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({ success: true, message: `"${node.name}" updated`, data: node });
   } catch (err: any) {
@@ -1147,7 +1284,7 @@ router.delete("/admin/node/:id", adminAuth, async (req: Request, res: Response) 
     }
 
     await Category.deleteMany({ _id: { $in: idsToDelete } });
-    invalidateMobileCategoryCache();
+    invalidateCategoryCaches();
 
     res.json({ success: true, message: `Deleted ${idsToDelete.length} category node(s)`, deleted: idsToDelete.length });
   } catch (err: any) {
@@ -1238,3 +1375,4 @@ router.post("/admin/node/:id/upload-csv", adminAuth, async (req: Request, res: R
 });
 
 export default router;
+
