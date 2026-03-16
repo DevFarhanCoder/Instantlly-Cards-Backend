@@ -1,4 +1,4 @@
-/**
+﻿/**
  * In-Memory Image Cache Service
  * 
  * Provides LRU (Least Recently Used) caching for GridFS images
@@ -9,7 +9,6 @@
  * - 24 hour TTL per image (configurable)
  * - Automatic LRU eviction when full
  * - Periodic cleanup of expired entries
- * - Cache hit/miss logging for monitoring
  */
 
 interface CachedImage {
@@ -36,10 +35,6 @@ class ImageCache {
     // Start periodic cleanup (every 30 minutes)
     this.startCleanup();
 
-    console.log(`🗄️  Image Cache initialized:`);
-    console.log(`   Max size: ${maxSizeMB} MB`);
-    console.log(`   Max age: ${maxAgeHours} hours`);
-    console.log(`   Cleanup interval: 30 minutes`);
   }
 
   /**
@@ -50,24 +45,18 @@ class ImageCache {
     const cached = this.cache.get(key);
     
     if (!cached) {
-      console.log(`💨 [CACHE MISS] Image not in cache: ${key}`);
       return null;
     }
 
     // Check if expired
     const age = Date.now() - cached.timestamp;
     if (age > this.maxAgeMs) {
-      console.log(`⏰ [CACHE EXPIRED] Image too old (${Math.round(age / 1000 / 60)} min): ${key}`);
       this.delete(key);
       return null;
     }
 
     // Update access count
     cached.accessCount++;
-    
-    const ageSeconds = Math.round(age / 1000);
-    const sizeKB = (cached.size / 1024).toFixed(2);
-    // console.log(`✅ [CACHE HIT] Serving image from cache (${sizeKB} KB, age: ${ageSeconds}s): ${key}`);
     
     return cached.buffer;
   }
@@ -81,7 +70,6 @@ class ImageCache {
 
     // If image is larger than max cache size, don't cache it
     if (size > this.maxSizeBytes) {
-      console.log(`⚠️  [CACHE SKIP] Image too large (${(size / 1024 / 1024).toFixed(2)} MB): ${key}`);
       return;
     }
 
@@ -104,9 +92,6 @@ class ImageCache {
     });
     this.currentSizeBytes += size;
 
-    const sizeKB = (size / 1024).toFixed(2);
-    const cacheSizeMB = (this.currentSizeBytes / 1024 / 1024).toFixed(2);
-    // console.log(`💾 [CACHE SET] Stored image ${key} (${sizeKB} KB) - Cache: ${this.cache.size} images, ${cacheSizeMB} MB`);
   }
 
   /**
@@ -135,9 +120,6 @@ class ImageCache {
     }
 
     if (oldestKey) {
-      const cached = this.cache.get(oldestKey)!;
-      const sizeKB = (cached.size / 1024).toFixed(2);
-      console.log(`🗑️  [CACHE EVICT] Removing oldest image (${sizeKB} KB): ${oldestKey}`);
       this.delete(oldestKey);
     }
   }
@@ -159,10 +141,8 @@ class ImageCache {
       }
     }
 
-    if (removedCount > 0) {
-      const freedMB = (freedBytes / 1024 / 1024).toFixed(2);
-      console.log(`🧹 [CACHE CLEANUP] Removed ${removedCount} expired images (freed ${freedMB} MB)`);
-    }
+    void removedCount;
+    void freedBytes;
   }
 
   /**
@@ -182,8 +162,8 @@ class ImageCache {
       removedCount++;
     }
     
-    const freedMB = (freedBytes / 1024 / 1024).toFixed(2);
-    console.log(`🗑️  [MEMORY RELIEF] Cleared ${removedCount} oldest images (freed ${freedMB} MB)`);
+    void removedCount;
+    void freedBytes;
   }
 
   /**
@@ -197,11 +177,9 @@ class ImageCache {
       // Check memory usage and clear cache if approaching limit
       const memUsage = process.memoryUsage();
       const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
-      const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
       
       // If using >400MB (80% of 512MB limit), aggressively clear cache
       if (heapUsedMB > 400) {
-        console.log(`⚠️  [MEMORY PRESSURE] Heap at ${heapUsedMB.toFixed(0)}MB / ${heapTotalMB.toFixed(0)}MB - Clearing 50% of cache`);
         this.clearOldest(Math.floor(this.cache.size / 2));
       }
     }, 30 * 60 * 1000);
@@ -236,7 +214,6 @@ class ImageCache {
   clear(): void {
     this.cache.clear();
     this.currentSizeBytes = 0;
-    console.log('🗑️  [CACHE CLEAR] All cached images removed');
   }
 }
 
@@ -245,6 +222,5 @@ export const imageCache = new ImageCache(50, 24);
 
 // Graceful shutdown handler
 process.on('SIGTERM', () => {
-  console.log('📊 [CACHE SHUTDOWN] Final stats:', imageCache.getStats());
   imageCache.stopCleanup();
 });
