@@ -6,6 +6,11 @@ import CustomService from "../models/CustomService";
 import BusinessPromotion from "../models/BusinessPromotion";
 import Card from "../models/Card";
 import User from "../models/User";
+import {
+  normalizeCategory,
+  normalizedPreview,
+  findDuplicates,
+} from "../utils/categoryNormalization";
 
 const router = express.Router();
 
@@ -782,21 +787,38 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
 // POST /api/categories/admin/add-category - Add a new category
 router.post("/admin/add-category", adminAuth, async (req: Request, res: Response) => {
   try {
-    const { name, icon, subcategories } = req.body;
+    const { name, icon, subcategories, force } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, error: "Category name is required" });
     }
 
-    const existing = await Category.findOne({
-      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-    });
+    // Check for duplicates using smart normalization
+    const siblings = await Category.find({ parent_id: null })
+      .select("_id name icon level parent_id")
+      .lean();
 
-    if (existing) {
+    const dupResult = findDuplicates(name.trim(), siblings);
+
+    if (dupResult.isDuplicate && dupResult.exactMatch) {
       return res.status(409).json({
         success: false,
         error: "Category already exists",
-        data: existing,
+        data: dupResult.exactMatch,
+        isDuplicate: true,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
+      });
+    }
+
+    if (!force && dupResult.hasSimilar) {
+      return res.status(409).json({
+        success: false,
+        error: "Similar categories already exist.",
+        hasSimilar: true,
+        similarMatches: dupResult.similarMatches,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
       });
     }
 
@@ -813,6 +835,8 @@ router.post("/admin/add-category", adminAuth, async (req: Request, res: Response
       success: true,
       message: `Category "${name}" created`,
       data: newCategory,
+      normalizedName: dupResult.normalizedInput,
+      previewName: dupResult.previewName,
     });
   } catch (error: any) {
     console.error("Error adding category:", error);
@@ -1222,13 +1246,48 @@ router.get("/:id/children", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /api/categories/admin/check-duplicate
+// Check for duplicate / similar category names BEFORE creating.
+// Body: { name, parent_id? }
+// Returns: { normalizedInput, previewName, isDuplicate, hasSimilar, hasWarning, exactMatch, similarMatches }
+router.post("/admin/check-duplicate", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, parent_id } = req.body;
+    if (!name?.trim()) {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+
+    let resolvedParentId: mongoose.Types.ObjectId | null = null;
+    if (parent_id) {
+      if (!mongoose.Types.ObjectId.isValid(parent_id)) {
+        return res.status(400).json({ success: false, error: "Invalid parent_id" });
+      }
+      resolvedParentId = new mongoose.Types.ObjectId(parent_id);
+    }
+
+    // Fetch siblings at the same level
+    const siblings = await Category.find({ parent_id: resolvedParentId })
+      .select("_id name icon level parent_id")
+      .lean();
+
+    const result = findDuplicates(name.trim(), siblings);
+
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error("Error checking duplicate:", err);
+    res.status(500).json({ success: false, error: "Failed to check duplicate" });
+  }
+});
+
 // ── POST /api/categories/admin/node — create a node at any level
-// Body: { name, icon?, parent_id? }
+// Body: { name, icon?, parent_id?, force? }
 //   parent_id absent or null  → root category
 //   parent_id present         → child of that node
+//   force = true              → create even when similar categories found
+//                               (exact duplicates are always blocked)
 router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
   try {
-    const { name, icon, parent_id } = req.body;
+    const { name, icon, parent_id, force } = req.body;
     if (!name?.trim()) {
       return res.status(400).json({ success: false, error: "name is required" });
     }
@@ -1248,24 +1307,58 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
       resolvedParentId = new mongoose.Types.ObjectId(parent_id);
     }
 
-    // ── 1. Exact name duplicate check ──────────────────────────────────────
-    const exactDup = await Category.findOne({
-      parent_id: resolvedParentId,
-      name: { $regex: new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
-    }).lean();
-    if (exactDup) {
-      // Return the existing node so callers can use its ID without a second round-trip
-      return res.status(200).json({ success: true, wasExisting: true, data: exactDup });
+    // ── Fetch siblings for duplicate check ──────────────────────────────────
+    const siblings = await Category.find({ parent_id: resolvedParentId })
+      .select("_id name icon level parent_id")
+      .lean();
+
+    const dupResult = findDuplicates(name.trim(), siblings);
+
+    // Block exact / case-insensitive duplicates always
+    // Also return wasExisting:true for bulk-import callers that expect it
+    if (dupResult.isDuplicate && dupResult.exactMatch) {
+      return res.status(409).json({
+        success: false,
+        wasExisting: true,
+        error: `"${name.trim()}" already exists at this level`,
+        isDuplicate: true,
+        existingCategory: dupResult.exactMatch,
+        data: dupResult.exactMatch,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
+      });
     }
 
-    // ── 2. Fuzzy sibling check (prefix / suffix / word-overlap) ────────────
-    const siblings = await Category.find({ parent_id: resolvedParentId })
-      .select("name _id icon level order isActive parent_id")
-      .lean();
-    const fuzzyDup = siblings.find((s) => fuzzyMatchCatNames(s.name ?? "", name.trim()));
-    if (fuzzyDup) {
-      console.log(`[CATEGORIES] Fuzzy-matched "${name.trim()}" → existing "${fuzzyDup.name}" (id: ${fuzzyDup._id})`);
-      return res.status(200).json({ success: true, wasExisting: true, data: fuzzyDup });
+    // Warn about similar categories unless force=true
+    // For bulk-import (wasExisting flag used), treat normalised match as existing
+    if (dupResult.hasSimilar && dupResult.similarMatches.length > 0) {
+      const topMatch = dupResult.similarMatches[0];
+      if (!force && topMatch.matchType === "normalized-exact") {
+        // Normalised exact: silently return existing for bulk imports
+        return res.status(409).json({
+          success: false,
+          wasExisting: true,
+          error: `"${name.trim()}" maps to existing category "${topMatch.name}"`,
+          isDuplicate: false,
+          hasSimilar: true,
+          existingCategory: topMatch,
+          data: topMatch,
+          similarMatches: dupResult.similarMatches,
+          normalizedName: dupResult.normalizedInput,
+          previewName: dupResult.previewName,
+        });
+      }
+      if (!force) {
+        return res.status(409).json({
+          success: false,
+          error: `Similar categories already exist. Use force=true to create anyway.`,
+          isDuplicate: false,
+          hasSimilar: true,
+          similarMatches: dupResult.similarMatches,
+          normalizedName: dupResult.normalizedInput,
+          previewName: dupResult.previewName,
+        });
+      }
     }
 
     const maxOrderDoc = await Category.findOne({ parent_id: resolvedParentId }).sort({ order: -1 }).lean();
@@ -1281,7 +1374,14 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
     });
     invalidateCategoryCaches();
 
-    res.status(201).json({ success: true, message: `Created "${node.name}"`, data: node });
+    res.status(201).json({
+      success: true,
+      message: `Created "${node.name}"`,
+      data: node,
+      normalizedName: dupResult.normalizedInput,
+      previewName: dupResult.previewName,
+      hadSimilarWarning: dupResult.hasSimilar,
+    });
   } catch (err: any) {
     console.error("Error creating category node:", err);
     res.status(500).json({ success: false, error: "Failed to create category" });
