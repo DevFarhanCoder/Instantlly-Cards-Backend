@@ -1396,13 +1396,24 @@ router.put("/admin/node/:id", adminAuth, async (req: Request, res: Response) => 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, error: "Invalid id" });
     }
-    const { name, icon, isActive } = req.body;
+    const { name, icon, isActive, parent_id } = req.body;
     const node = await Category.findById(id);
     if (!node) return res.status(404).json({ success: false, error: "Category not found" });
 
     if (name !== undefined && name.trim()) node.name = name.trim();
     if (icon !== undefined) node.icon = icon;
     if (isActive !== undefined) node.isActive = Boolean(isActive);
+    if (parent_id !== undefined) {
+      if (parent_id === null || parent_id === "") {
+        (node as any).parent_id = undefined;
+        node.level = 0;
+      } else if (mongoose.Types.ObjectId.isValid(parent_id)) {
+        const newParent = await Category.findById(parent_id).lean();
+        if (!newParent) return res.status(404).json({ success: false, error: "New parent not found" });
+        (node as any).parent_id = parent_id;
+        node.level = (newParent.level ?? 0) + 1;
+      }
+    }
     await node.save();
     invalidateCategoryCaches();
 
