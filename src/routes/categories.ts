@@ -339,6 +339,45 @@ const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   }
 };
 
+// ── Fuzzy category-name matching helpers ─────────────────────────────────────
+/** Lowercase, strip punctuation (& / - _ , . ; : etc.) → spaces, collapse whitespace */
+const normalizeCatName = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[&/\\|\-_.,;:!?()'"+@#%*[\]{}]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Return significant words, removing stop-words and single-char tokens */
+const catNameWords = (name: string): Set<string> => {
+  const stops = new Set(["and", "or", "the", "a", "an", "of", "in", "at", "for", "to", "with", "by", "de", "la"]);
+  return new Set(
+    normalizeCatName(name)
+      .split(" ")
+      .filter((w) => w.length > 1 && !stops.has(w))
+  );
+};
+
+/**
+ * Returns true if two category names have the same meaning:
+ *  1. Identical after normalization
+ *  2. One is a substring of the other  (e.g. "Hotels" ⊂ "Hotels & Restaurants")
+ *  3. Jaccard word-set similarity ≥ 0.55  (e.g. "Auto Repair" vs "Auto Repairs")
+ */
+const fuzzyMatchCatNames = (a: string, b: string): boolean => {
+  const na = normalizeCatName(a);
+  const nb = normalizeCatName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = catNameWords(a);
+  const wb = catNameWords(b);
+  if (wa.size === 0 || wb.size === 0) return false;
+  const intersection = [...wa].filter((w) => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return intersection / union >= 0.55;
+};
+
 // ============================================================
 // PUBLIC ENDPOINTS (for mobile app)
 // ============================================================
@@ -1209,13 +1248,24 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
       resolvedParentId = new mongoose.Types.ObjectId(parent_id);
     }
 
-    // Prevent duplicate sibling names
-    const dup = await Category.findOne({
+    // ── 1. Exact name duplicate check ──────────────────────────────────────
+    const exactDup = await Category.findOne({
       parent_id: resolvedParentId,
       name: { $regex: new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
-    });
-    if (dup) {
-      return res.status(409).json({ success: false, error: `"${name.trim()}" already exists at this level` });
+    }).lean();
+    if (exactDup) {
+      // Return the existing node so callers can use its ID without a second round-trip
+      return res.status(200).json({ success: true, wasExisting: true, data: exactDup });
+    }
+
+    // ── 2. Fuzzy sibling check (prefix / suffix / word-overlap) ────────────
+    const siblings = await Category.find({ parent_id: resolvedParentId })
+      .select("name _id icon level order isActive parent_id")
+      .lean();
+    const fuzzyDup = siblings.find((s) => fuzzyMatchCatNames(s.name ?? "", name.trim()));
+    if (fuzzyDup) {
+      console.log(`[CATEGORIES] Fuzzy-matched "${name.trim()}" → existing "${fuzzyDup.name}" (id: ${fuzzyDup._id})`);
+      return res.status(200).json({ success: true, wasExisting: true, data: fuzzyDup });
     }
 
     const maxOrderDoc = await Category.findOne({ parent_id: resolvedParentId }).sort({ order: -1 }).lean();
@@ -1328,6 +1378,17 @@ router.post("/admin/node/:id/upload-csv", adminAuth, async (req: Request, res: R
         if (!row.businessName?.trim() || !row.phone?.trim()) {
           results.skipped++;
           results.errors.push(`Skipped: missing businessName or phone (${row.businessName || "—"})`);
+          continue;
+        }
+
+        // Deduplicate: skip if same businessName + phone already exists under this node
+        const exists = await BusinessPromotion.exists({
+          categoryId: String(node._id),
+          businessName: { $regex: new RegExp(`^${row.businessName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+          phone: row.phone.trim(),
+        });
+        if (exists) {
+          results.skipped++;
           continue;
         }
 
