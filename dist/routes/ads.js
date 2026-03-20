@@ -61,23 +61,23 @@ function checkRateLimit(key, maxPerMinute = 60) {
 }
 // (Removed an incomplete/duplicated public/admin block here so routes below are canonical)
 // GET /api/ads/active - Get all active ads (NO AUTH - for mobile app)
-// ⚡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
+// âš¡ OPTIMIZED: Returns metadata only, images fetched separately via GridFS
 router.get("/active", async (req, res) => {
     try {
         const now = new Date();
-        // 🔍 LOG: Request received
-        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        // console.log("📱 [STEP 1] GET /api/ads/active - Request Received");
-        // console.log("🕐 Timestamp:", now.toISOString());
-        // console.log("🌐 User-Agent:", req.headers["user-agent"]);
-        // console.log("🔗 Origin:", req.headers.origin || "No origin");
-        // console.log("🔗 Referer:", req.headers.referer || "No referer");
-        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // ðŸ” LOG: Request received
+        // console.log("â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”");
+        // console.log("ðŸ“± [STEP 1] GET /api/ads/active - Request Received");
+        // console.log("ðŸ• Timestamp:", now.toISOString());
+        // console.log("ðŸŒ User-Agent:", req.headers["user-agent"]);
+        // console.log("ðŸ”— Origin:", req.headers.origin || "No origin");
+        // console.log("ðŸ”— Referer:", req.headers.referer || "No referer");
+        // console.log("â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”");
         // Set cache headers for 5 minutes
         res.setHeader("Cache-Control", "public, max-age=300");
-        // 🔍 LOG: Database query start
-        console.log("📊 [STEP 2] Querying Database for Active Ads");
-        console.log("🔎 Query criteria:", {
+        // ðŸ” LOG: Database query start
+        console.log("ðŸ“Š [STEP 2] Querying Database for Active Ads");
+        console.log("ðŸ”Ž Query criteria:", {
             startDate: { $lte: now },
             endDate: { $gte: now },
         });
@@ -94,22 +94,14 @@ router.get("/active", async (req, res) => {
             .limit(50) // Can handle more ads now (no heavy base64 payload)
             .lean();
         // .exec();
-        // 🔍 LOG: Database query result
-        console.log("✅ [STEP 3] Database Query Complete");
-        console.log("📈 Total approved ads found:", ads.length);
+        // ðŸ” LOG: Database query result
+        console.log("âœ… [STEP 3] Database Query Complete");
+        console.log("ðŸ“ˆ Total approved ads found:", ads.length);
         if (ads.length > 0) {
-            console.log("📋 First ad sample:", {
-                _id: ads[0]._id,
-                title: ads[0].title,
-                hasBottomImageGridFS: !!ads[0].bottomImageGridFS,
-                hasFullscreenImageGridFS: !!ads[0].fullscreenImageGridFS,
-                bottomImageGridFS: ads[0].bottomImageGridFS?.toString() || "NULL",
-                fullscreenImageGridFS: ads[0].fullscreenImageGridFS?.toString() || "NULL",
-            });
         }
         // Transform ads to include image URLs instead of base64
         const adsWithUrls = ads.map((ad) => {
-            // 🧠 BACKWARD COMPATIBILITY
+            // ðŸ§  BACKWARD COMPATIBILITY
             const bottomType = ad.bottomMediaType || "image";
             const fullscreenType = ad.fullscreenMediaType || "image";
             const bottomMediaUrl = bottomType === "video"
@@ -147,21 +139,9 @@ router.get("/active", async (req, res) => {
         });
         // AWS Cloud (Primary) - Render backup handled by client
         const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
-        // 🔍 LOG: Response preparation
-        console.log("🔧 [STEP 4] Preparing Response");
-        console.log("🌐 Image Base URL:", imageBaseUrl);
+        // ðŸ” LOG: Response preparation
+        console.log("ðŸ”§ [STEP 4] Preparing Response");
         if (adsWithUrls.length > 0) {
-            console.log("📸 First ad URLs:", {
-                bottomImageUrl: adsWithUrls[0].bottomImageUrl,
-                fullscreenImageUrl: adsWithUrls[0].fullscreenImageUrl,
-                hasBottomImage: adsWithUrls[0].hasBottomImage,
-                fullBottomUrl: adsWithUrls[0].bottomImageUrl
-                    ? `${imageBaseUrl}${adsWithUrls[0].bottomImageUrl}`
-                    : "NULL",
-                fullFullscreenUrl: adsWithUrls[0].fullscreenImageUrl
-                    ? `${imageBaseUrl}${adsWithUrls[0].fullscreenImageUrl}`
-                    : "NULL",
-            });
         }
         const responseData = {
             success: true,
@@ -170,20 +150,20 @@ router.get("/active", async (req, res) => {
             timestamp: now.toISOString(),
             imageBaseUrl: imageBaseUrl,
         };
-        // 🔍 LOG: Sending response
-        // console.log('📤 [STEP 5] Sending Response to Client');
-        // console.log('📊 Response summary:', {
+        // ðŸ” LOG: Sending response
+        // console.log('ðŸ“¤ [STEP 5] Sending Response to Client');
+        // console.log('ðŸ“Š Response summary:', {
         //   success: true,
         //   count: adsWithUrls.length,
         //   imageBaseUrl: imageBaseUrl,
         //   adsWithImages: adsWithUrls.filter(ad => ad.hasBottomImage).length,
         //   adsWithFullscreen: adsWithUrls.filter(ad => ad.hasFullscreenImage).length
         // });
-        // console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+        // console.log('â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n');
         res.json(responseData);
     }
     catch (error) {
-        console.error("❌ GET ACTIVE ADS ERROR:", error);
+        console.error("âŒ GET ACTIVE ADS ERROR:", error);
         res.status(500).json({
             success: false,
             message: "Failed to fetch ads",
@@ -198,28 +178,14 @@ router.get("/image/:id/:type", async (req, res) => {
     req.setTimeout(40000);
     try {
         const { id, type } = req.params;
-        // 🔍 LOG: Image request received
-        // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        // console.log(
-        //   "🖼️  [IMG STEP 1] GET /api/ads/image/:id/:type - Request Received",
-        // );
-        // console.log("🆔 Ad ID:", id);
-        // console.log("📷 Image Type:", type);
-        // console.log("🕐 Timestamp:", new Date().toISOString());
-        // console.log("🌐 User-Agent:", req.headers["user-agent"]);
-        // console.log("🔗 Referer:", req.headers.referer || "No referer");
         // Validate ObjectId format first
         if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) {
-            console.error("❌ [IMG ERROR] Invalid ObjectId format:", id);
-            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(400).json({
                 success: false,
                 message: "Invalid ad ID format",
             });
         }
         if (type !== "bottom" && type !== "fullscreen") {
-            console.error("❌ [IMG ERROR] Invalid image type:", type);
-            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(400).json({
                 success: false,
                 message: "Invalid image type. Must be 'bottom' or 'fullscreen'",
@@ -233,12 +199,8 @@ router.get("/image/:id/:type", async (req, res) => {
             res.setHeader("Cache-Control", "public, max-age=86400");
             res.setHeader("Content-Type", "image/jpeg");
             res.setHeader("X-Cache", "HIT");
-            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.send(cachedImage);
         }
-        // console.log("💨 [CACHE MISS] Image not in cache, fetching from GridFS");
-        // 🔍 LOG: Fetching ad from database
-        // console.log("📊 [IMG STEP 2] Fetching Ad from Database");
         // Retry logic for database query (up to 3 attempts)
         let ad = null;
         let retries = 0;
@@ -251,13 +213,11 @@ router.get("/image/:id/:type", async (req, res) => {
                     .lean();
                 if (!ad && retries < maxRetries - 1) {
                     retries++;
-                    console.warn(`⚠️  [IMG RETRY] Database query failed, retry ${retries}/${maxRetries}`);
                     await new Promise((resolve) => setTimeout(resolve, 500 * retries)); // Exponential backoff
                 }
             }
             catch (dbError) {
                 retries++;
-                console.error(`❌ [IMG DB ERROR] Attempt ${retries}/${maxRetries}:`, dbError.message);
                 if (retries >= maxRetries) {
                     throw dbError; // Throw after all retries exhausted
                 }
@@ -266,57 +226,33 @@ router.get("/image/:id/:type", async (req, res) => {
             }
         }
         if (!ad) {
-            console.error("❌ [IMG ERROR] Ad not found in database:", id);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(404).json({
                 success: false,
                 message: "Ad not found",
             });
         }
-        // console.log("✅ [IMG STEP 3] Ad Found in Database");
-        // console.log("🔍 [IMG STEP 3] Ad Found:", {
-        //   _id: ad._id,
-        //   bottomImageGridFS: ad.bottomImageGridFS?.toString() || "NULL",
-        //   fullscreenImageGridFS: ad.fullscreenImageGridFS?.toString() || "NULL",
-        //   hasLegacyBottomImage: !!(ad.bottomImage && ad.bottomImage.length > 0),
-        //   hasLegacyFullscreenImage: !!(
-        //     ad.fullscreenImage && ad.fullscreenImage.length > 0
-        //   ),
-        // });
         // Get GridFS file ID based on type
         const gridfsId = type === "bottom" ? ad.bottomImageGridFS : ad.fullscreenImageGridFS;
         if (!gridfsId) {
-            console.warn("⚠️  [IMG STEP 4] No GridFS ID found - Checking for legacy base64");
             // Fallback to base64 if GridFS migration not complete
             const base64Data = type === "bottom" ? ad.bottomImage : ad.fullscreenImage;
             if (!base64Data || base64Data.length === 0) {
-                console.error("❌ [IMG ERROR] No image found (neither GridFS nor base64)");
-                // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
                 return res.status(404).json({
                     success: false,
                     message: `${type} image not found`,
                 });
             }
             // Return base64 as fallback (legacy support during migration)
-            // console.warn(
-            //   `⚠️  [IMG STEP 5] Serving base64 fallback for ad ${id} ${type} image`,
-            // );
-            // console.log("📏 Base64 length:", base64Data.length, "characters");
-            // console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.json({
                 success: true,
                 data: base64Data,
                 source: "base64-legacy",
             });
         }
-        // 🔍 LOG: Preparing to stream from GridFS
-        // console.log("✅ [IMG STEP 4] GridFS ID Found:", gridfsId.toString());
         // Check if file exists in GridFS before trying to download
         try {
             const fileExists = await gridfsService_1.gridfsService.fileExists(gridfsId);
             if (!fileExists) {
-                console.error("❌ [IMG ERROR] GridFS file not found:", gridfsId.toString());
-                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
                 return res.status(404).json({
                     success: false,
                     message: `${type} image file not found in storage`,
@@ -324,17 +260,13 @@ router.get("/image/:id/:type", async (req, res) => {
             }
         }
         catch (checkError) {
-            console.error("❌ [IMG ERROR] Failed to check GridFS file existence:", checkError.message);
             // Continue anyway, let download stream handle it
         }
-        console.log("🔄 [IMG STEP 5] Buffering image from GridFS for caching");
         // Verify file exists in GridFS before streaming
         try {
             await gridfsService_1.gridfsService.getFileInfo(gridfsId);
         }
         catch (fileError) {
-            console.error("❌ [IMG ERROR] File not found in GridFS:", gridfsId.toString());
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(404).json({
                 success: false,
                 message: `${type} image file not found in storage`,
@@ -347,8 +279,6 @@ router.get("/image/:id/:type", async (req, res) => {
             downloadStream = gridfsService_1.gridfsService.getDownloadStream(gridfsId);
         }
         catch (streamError) {
-            console.error("❌ [IMG ERROR] Failed to create download stream:", streamError.message);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             return res.status(500).json({
                 success: false,
                 message: "Failed to access image storage",
@@ -358,12 +288,10 @@ router.get("/image/:id/:type", async (req, res) => {
         let streamStarted = false;
         // Set 60 second timeout for GridFS retrieval (increased for buffering)
         streamTimeout = setTimeout(() => {
-            console.error("❌ [IMG TIMEOUT] GridFS buffering timed out after 60s");
             downloadStream.destroy();
         }, 60000);
         downloadStream.on("data", (chunk) => {
             if (!streamStarted) {
-                // console.log("📦 [IMG STEP 6] GridFS Stream Started - Buffering");
                 streamStarted = true;
             }
             chunks.push(chunk);
@@ -373,26 +301,17 @@ router.get("/image/:id/:type", async (req, res) => {
                 clearTimeout(streamTimeout);
             // Combine all chunks into single buffer
             const imageBuffer = Buffer.concat(chunks);
-            // console.log("✅ [IMG STEP 7] Image buffered successfully");
-            // console.log(
-            //   `📏 Total size: ${(imageBuffer.length / 1024).toFixed(2)} KB`,
-            // );
             // Store in cache for future requests
             imageCache_1.imageCache.set(cacheKey, imageBuffer);
             // Send to client
             res.setHeader("Cache-Control", "public, max-age=86400");
             res.setHeader("Content-Type", "image/jpeg");
             res.setHeader("X-Cache", "MISS");
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             res.send(imageBuffer);
         });
         downloadStream.on("error", (error) => {
             if (streamTimeout)
                 clearTimeout(streamTimeout);
-            console.error("❌ [IMG ERROR] GridFS download error:", error);
-            console.error("🆔 Failed GridFS ID:", gridfsId.toString());
-            console.error("📷 Failed Type:", type);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
             if (!res.headersSent) {
                 res.status(500).json({
                     success: false,
@@ -402,10 +321,6 @@ router.get("/image/:id/:type", async (req, res) => {
         });
     }
     catch (error) {
-        console.error("❌ GET AD IMAGE ERROR:", error);
-        console.error("❌ Error type:", error.name);
-        console.error("❌ Error message:", error.message);
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
         if (!res.headersSent) {
             // Return appropriate error code based on error type
             if (error.name === "CastError" || error.message?.includes("Invalid")) {
@@ -477,35 +392,35 @@ router.post("/track-click/:id", async (req, res) => {
 //         }
 //       } catch (err) {
 //         // Not an admin token, treat as mobile user
-//         console.log('📱 Non-admin token detected - will create ad with pending status');
+//         console.log('ðŸ“± Non-admin token detected - will create ad with pending status');
 //       }
 //     }
 //     // Rate limiting: Max 60 ads per minute for admins, 10 per minute for mobile users
 //     const rateLimitId = adminId || req.ip || 'anonymous';
 //     const maxRate = isAdmin ? 60 : 10;
 //     if (!checkRateLimit(rateLimitId, maxRate)) {
-//       console.warn(`⚠️  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
+//       console.warn(`âš ï¸  Rate limit exceeded for ${isAdmin ? 'admin' : 'mobile user'} ${rateLimitId}`);
 //       return res.status(429).json({
 //         success: false,
 //         message: `Too many uploads. Maximum ${maxRate} ads per minute. Please wait a moment.`
 //       });
 //     }
-//     console.log('📝 POST /api/ads - Creating new ad');
-//     console.log('👤 User type:', isAdmin ? 'Admin' : 'Mobile User');
-//     console.log('👤 User ID:', rateLimitId);
-//     console.log('📊 Request body keys:', Object.keys(req.body));
+//     console.log('ðŸ“ POST /api/ads - Creating new ad');
+//     console.log('ðŸ‘¤ User type:', isAdmin ? 'Admin' : 'Mobile User');
+//     console.log('ðŸ‘¤ User ID:', rateLimitId);
+//     console.log('ðŸ“Š Request body keys:', Object.keys(req.body));
 //     const { title, bottomImage, fullscreenImage, phoneNumber, startDate, endDate, priority, uploaderName } = req.body;
 //     // Detect media type from base64 data
 //     const isBottomVideo = bottomImage?.startsWith('data:video/');
 //     const isFullscreenVideo = fullscreenImage?.startsWith('data:video/');
 //     const adType = (isBottomVideo || isFullscreenVideo) ? 'video' : 'image';
-//     console.log('🎬 Media type detection:', {
+//     console.log('ðŸŽ¬ Media type detection:', {
 //       adType,
 //       isBottomVideo,
 //       isFullscreenVideo
 //     });
 //     // Validation
-//     console.log('🔍 Validating fields:', {
+//     console.log('ðŸ” Validating fields:', {
 //       hasTitle: !!title,
 //       hasBottomImage: !!bottomImage,
 //       hasPhoneNumber: !!phoneNumber,
@@ -515,17 +430,14 @@ router.post("/track-click/:id", async (req, res) => {
 //       fullscreenImageLength: fullscreenImage?.length
 //     });
 //     if (!title || !bottomImage || !phoneNumber || !startDate || !endDate) {
-//       console.error('❌ Validation failed - missing required fields');
+//       console.error('âŒ Validation failed - missing required fields');
 //       return res.status(400).json({
 //         success: false,
 //         message: "Missing required fields (title, bottomImage, phoneNumber, startDate, endDate)"
 //       });
 //     }
 //     // Upload images/videos to GridFS
-//     console.log(`📤 Uploading media to GridFS for new ad: ${title}`);
-//     console.log(`📏 Bottom ${adType} size: ${(bottomImage.length / 1024).toFixed(2)} KB`);
 //     if (fullscreenImage) {
-//       console.log(`📏 Fullscreen ${adType} size: ${(fullscreenImage.length / 1024).toFixed(2)} KB`);
 //     }
 //     let bottomImageId;
 //     let fullscreenImageId = null;
@@ -539,17 +451,14 @@ router.post("/track-click/:id", async (req, res) => {
 //           `${Date.now()}_bottom.mp4`,
 //           { title, type: "bottom" }
 //         );
-//         console.log(`✅ Bottom video uploaded to GridFS: ${bottomVideoId}`);
 //       } else {
 //         bottomImageId = await gridfsService.uploadBase64(
 //           bottomImage,
 //           `${Date.now()}_bottom.jpg`,
 //           { title, type: "bottom" }
 //         );
-//         console.log(`✅ Bottom image uploaded to GridFS: ${bottomImageId}`);
 //       }
 //     } catch (uploadError) {
-//       console.error(`❌ Failed to upload bottom media to GridFS:`, uploadError);
 //       throw new Error(`Media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
 //     }
 //     if (fullscreenImage && fullscreenImage.length > 0) {
@@ -561,17 +470,14 @@ router.post("/track-click/:id", async (req, res) => {
 //             `${Date.now()}_fullscreen.mp4`,
 //             { title, type: "fullscreen" }
 //           );
-//           console.log(`✅ Fullscreen video uploaded to GridFS: ${fullscreenVideoId}`);
 //         } else {
 //           fullscreenImageId = await gridfsService.uploadBase64(
 //             fullscreenImage,
 //             `${Date.now()}_fullscreen.jpg`,
 //             { title, type: "fullscreen" }
 //           );
-//           console.log(`✅ Fullscreen image uploaded to GridFS: ${fullscreenImageId}`);
 //         }
 //       } catch (uploadError) {
-//         console.error(`❌ Failed to upload fullscreen media to GridFS:`, uploadError);
 //         throw new Error(`Fullscreen media upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`);
 //       }
 //     }
@@ -608,17 +514,16 @@ router.post("/track-click/:id", async (req, res) => {
 //       adData.uploaderName = 'Admin';
 //       adData.approvedBy = adminId;
 //       adData.approvalDate = new Date();
-//       console.log('✅ Admin upload - auto-approved');
+//       console.log('âœ… Admin upload - auto-approved');
 //     } else {
 //       // Mobile user uploads require approval
 //       adData.status = 'pending';
 //       adData.uploadedBy = phoneNumber; // Use phone as identifier
 //       adData.uploaderName = uploaderName || 'Mobile User';
 //       adData.priority = 1; // Lower priority for pending ads
-//       console.log('📱 Mobile upload - pending approval');
+//       console.log('ðŸ“± Mobile upload - pending approval');
 //     }
 //     const ad = await Ad.create(adData);
-//     console.log(`✅ Ad created with GridFS images: ${ad._id}, status: ${ad.status}`);
 //     // Different response messages for admin vs mobile user
 //     const responseMessage = isAdmin
 //       ? 'Advertisement created and published successfully'
@@ -630,9 +535,9 @@ router.post("/track-click/:id", async (req, res) => {
 //       requiresApproval: !isAdmin
 //     });
 //   } catch (error) {
-//     console.error("❌ CREATE AD ERROR:", error);
-//     console.error("❌ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
-//     console.error("❌ Error details:", {
+//     console.error("âŒ CREATE AD ERROR:", error);
+//     console.error("âŒ Error stack:", error instanceof Error ? error.stack : 'No stack trace');
+//     console.error("âŒ Error details:", {
 //       name: error instanceof Error ? error.name : 'Unknown',
 //       message: error instanceof Error ? error.message : String(error)
 //     });
@@ -647,9 +552,9 @@ router.post("/track-click/:id", async (req, res) => {
 router.post("/", upload.any(), // videos ke liye
 async (req, res) => {
     try {
-        console.log("📥 POST /api/ads called");
-        console.log("📦 Request body keys:", Object.keys(req.body));
-        console.log("📁 Files count:", req.files?.length || 0);
+        console.log("ðŸ“¥ POST /api/ads called");
+        console.log("ðŸ“¦ Request body keys:", Object.keys(req.body));
+        console.log("ðŸ“ Files count:", req.files?.length || 0);
         /* ================= AUTH ================= */
         const token = req.headers.authorization?.replace("Bearer ", "");
         let isAdmin = false;
@@ -661,29 +566,29 @@ async (req, res) => {
                 if (decoded.role === "admin" || decoded.role === "super_admin") {
                     isAdmin = true;
                     adminId = decoded.id || decoded.username || null;
-                    console.log("✅ Admin token verified:", adminId);
+                    console.log("âœ… Admin token verified:", adminId);
                 }
                 else {
-                    console.log("📱 Token valid but not admin");
+                    console.log("ðŸ“± Token valid but not admin");
                 }
             }
             catch (err) {
-                console.log("📱 Invalid / non-admin token");
+                console.log("ðŸ“± Invalid / non-admin token");
             }
         }
         else {
-            console.log("📱 No auth token provided");
+            console.log("ðŸ“± No auth token provided");
         }
         /* ================= RATE LIMIT ================= */
         const rateLimitId = adminId || req.ip || "anonymous";
         const maxRate = isAdmin ? 60 : 10;
-        console.log("⏱️ Rate limit check:", {
+        console.log("â±ï¸ Rate limit check:", {
             rateLimitId,
             maxRate,
             userType: isAdmin ? "ADMIN" : "USER",
         });
         if (!checkRateLimit(rateLimitId, maxRate)) {
-            console.warn("⚠️ Rate limit exceeded:", rateLimitId);
+            console.warn("âš ï¸ Rate limit exceeded:", rateLimitId);
             return res.status(429).json({
                 success: false,
                 message: `Too many uploads. Max ${maxRate}/minute`,
@@ -691,7 +596,7 @@ async (req, res) => {
         }
         /* ================= BODY ================= */
         const { title, phoneNumber, startDate, endDate, priority = 5, uploaderName, bottomMediaType = "image", fullscreenMediaType = "image", bottomImage, fullscreenImage, } = req.body;
-        console.log("🧾 Parsed body:", {
+        console.log("ðŸ§¾ Parsed body:", {
             title,
             phoneNumber,
             startDate,
@@ -700,7 +605,7 @@ async (req, res) => {
             fullscreenMediaType,
         });
         if (!title || !phoneNumber || !startDate || !endDate) {
-            console.error("❌ Missing required fields");
+            console.error("âŒ Missing required fields");
             return res.status(400).json({
                 success: false,
                 message: "Missing required fields",
@@ -712,31 +617,22 @@ async (req, res) => {
         const fullscreenVideo = files?.find((f) => f.fieldname === "fullscreenVideo");
         const bottomImageFile = files?.find((f) => f.fieldname === "bottomImage");
         const fullscreenImageFile = files?.find((f) => f.fieldname === "fullscreenImage");
-        console.log("🎞️ Media received:", {
-            hasBottomImageBase64: !!bottomImage,
-            hasFullscreenImageBase64: !!fullscreenImage,
-            hasBottomImageFile: !!bottomImageFile,
-            hasFullscreenImageFile: !!fullscreenImageFile,
-            hasBottomVideo: !!bottomVideo,
-            hasFullscreenVideo: !!fullscreenVideo,
-        });
         /* ================= VALIDATION ================= */
         if (bottomMediaType === "image" && !bottomImage && !bottomImageFile) {
-            console.error("❌ Bottom image missing (no base64, no file)");
             return res.status(400).json({ message: "Bottom image required" });
         }
         if (bottomMediaType === "video" && !bottomVideo) {
-            console.error("❌ Bottom video missing");
+            console.error("âŒ Bottom video missing");
             return res.status(400).json({ message: "Bottom video required" });
         }
         if (bottomVideo && !bottomVideo.mimetype.startsWith("video/")) {
-            console.error("❌ Invalid bottom video format:", bottomVideo.mimetype);
+            console.error("âŒ Invalid bottom video format:", bottomVideo.mimetype);
             return res.status(400).json({ message: "Invalid bottom video format" });
         }
         if (fullscreenMediaType === "video" &&
             fullscreenVideo &&
             !fullscreenVideo.mimetype.startsWith("video/")) {
-            console.error("❌ Invalid fullscreen video format:", fullscreenVideo.mimetype);
+            console.error("âŒ Invalid fullscreen video format:", fullscreenVideo.mimetype);
             return res
                 .status(400)
                 .json({ message: "Invalid fullscreen video format" });
@@ -745,10 +641,10 @@ async (req, res) => {
         const start = new Date(startDate);
         const end = new Date(endDate);
         if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
-            console.error("❌ Invalid date range", { startDate, endDate });
+            console.error("âŒ Invalid date range", { startDate, endDate });
             return res.status(400).json({ message: "Invalid date range" });
         }
-        console.log("📅 Date validated:", { start, end });
+        console.log("ðŸ“… Date validated:", { start, end });
         /* ================= GRIDFS (IMAGES) ================= */
         gridfsService_1.gridfsService.initialize();
         let bottomImageGridFS = null;
@@ -756,12 +652,10 @@ async (req, res) => {
         // ===== Bottom Image =====
         if (bottomMediaType === "image") {
             if (bottomImageFile) {
-                console.log("🖼️ Uploading bottom image from FILE");
                 const base64 = `data:${bottomImageFile.mimetype};base64,${bottomImageFile.buffer.toString("base64")}`;
                 bottomImageGridFS = await gridfsService_1.gridfsService.uploadBase64(base64, `${Date.now()}_bottom.${bottomImageFile.originalname.split(".").pop()}`, { title, type: "bottom" });
             }
             else if (typeof bottomImage === "string") {
-                console.log("🖼️ Uploading bottom image from BASE64");
                 bottomImageGridFS = await gridfsService_1.gridfsService.uploadBase64(bottomImage, `${Date.now()}_bottom.jpg`, { title, type: "bottom" });
             }
         }
@@ -769,12 +663,10 @@ async (req, res) => {
         // ===== Bottom Image =====
         if (fullscreenMediaType === "image") {
             if (fullscreenImageFile) {
-                console.log("🖼️ Uploading fullscreen image from FILE");
                 const base64 = `data:${fullscreenImageFile.mimetype};base64,${fullscreenImageFile.buffer.toString("base64")}`;
                 fullscreenImageGridFS = await gridfsService_1.gridfsService.uploadBase64(base64, `${Date.now()}_fullscreen.${fullscreenImageFile.originalname.split(".").pop()}`, { title, type: "fullscreen" });
             }
             else if (typeof fullscreenImage === "string") {
-                console.log("🖼️ Uploading fullscreen image from BASE64");
                 fullscreenImageGridFS = await gridfsService_1.gridfsService.uploadBase64(fullscreenImage, `${Date.now()}_fullscreen.jpg`, { title, type: "fullscreen" });
             }
         }
@@ -783,7 +675,7 @@ async (req, res) => {
         let fullscreenVideoUrl = null;
         if (bottomMediaType === "video" && bottomVideo) {
             const key = `ads/bottom/${Date.now()}-${bottomVideo.originalname}`;
-            console.log("🎥 Uploading bottom video to S3:", key);
+            console.log("ðŸŽ¥ Uploading bottom video to S3:", key);
             await s3
                 .putObject({
                 Bucket: process.env.S3_BUCKET,
@@ -793,11 +685,11 @@ async (req, res) => {
             })
                 .promise();
             bottomVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
-            console.log("✅ Bottom video uploaded:", bottomVideoUrl);
+            console.log("âœ… Bottom video uploaded:", bottomVideoUrl);
         }
         if (fullscreenMediaType === "video" && fullscreenVideo) {
             const key = `ads/fullscreen/${Date.now()}-${fullscreenVideo.originalname}`;
-            console.log("🎥 Uploading fullscreen video to S3:", key);
+            console.log("ðŸŽ¥ Uploading fullscreen video to S3:", key);
             await s3
                 .putObject({
                 Bucket: process.env.S3_BUCKET,
@@ -807,10 +699,10 @@ async (req, res) => {
             })
                 .promise();
             fullscreenVideoUrl = `${process.env.CLOUDFRONT_HOST}/${key}`;
-            console.log("✅ Fullscreen video uploaded:", fullscreenVideoUrl);
+            console.log("âœ… Fullscreen video uploaded:", fullscreenVideoUrl);
         }
         /* ================= SAVE AD ================= */
-        console.log("💾 Saving ad to database");
+        console.log("ðŸ’¾ Saving ad to database");
         const ad = await Ad_1.default.create({
             title,
             phoneNumber,
@@ -832,7 +724,7 @@ async (req, res) => {
             impressions: 0,
             clicks: 0,
         });
-        console.log("✅ Ad created successfully:", {
+        console.log("âœ… Ad created successfully:", {
             adId: ad._id,
             status: ad.status,
             uploadedBy: ad.uploadedBy,
@@ -848,7 +740,7 @@ async (req, res) => {
         });
     }
     catch (error) {
-        console.error("❌ CREATE AD ERROR:", error);
+        console.error("âŒ CREATE AD ERROR:", error);
         res.status(500).json({
             success: false,
             message: "Failed to create ad",
@@ -863,11 +755,11 @@ router.get("/my-ads", async (req, res) => {
         if (!phoneNumber) {
             const authHeader = req.headers.authorization;
             const auth = authHeader?.replace(/^Bearer\s+/i, "") || null;
-            console.log("🔎 [my-ads-public] Authorization header present:", !!authHeader);
+            console.log("ðŸ”Ž [my-ads-public] Authorization header present:", !!authHeader);
             if (auth) {
                 try {
                     const payload = jwt.verify(auth, process.env.JWT_SECRET || "");
-                    console.log("🔐 [my-ads-public] jwt.verify payload preview:", {
+                    console.log("ðŸ” [my-ads-public] jwt.verify payload preview:", {
                         sub: payload?.sub,
                         phone: payload?.phone,
                     });
@@ -878,7 +770,7 @@ router.get("/my-ads", async (req, res) => {
                             const user = (await User_1.default.findById(payload.sub)
                                 .select("phone")
                                 .lean());
-                            console.log("🔍 [my-ads-public] Loaded user for phone extraction:", { found: !!user, phone: user?.phone });
+                            console.log("ðŸ” [my-ads-public] Loaded user for phone extraction:", { found: !!user, phone: user?.phone });
                             if (user?.phone)
                                 phoneNumber = user.phone;
                         }
@@ -888,10 +780,10 @@ router.get("/my-ads", async (req, res) => {
                     }
                 }
                 catch (tErr) {
-                    console.warn("⚠️ [my-ads-public] jwt.verify failed:", tErr?.message || tErr);
+                    console.warn("âš ï¸ [my-ads-public] jwt.verify failed:", tErr?.message || tErr);
                     try {
                         const decoded = jwt.decode(auth);
-                        console.log("🔎 [my-ads-public] jwt.decode fallback payload preview:", { sub: decoded?.sub, phone: decoded?.phone });
+                        console.log("ðŸ”Ž [my-ads-public] jwt.decode fallback payload preview:", { sub: decoded?.sub, phone: decoded?.phone });
                         if (decoded?.phone)
                             phoneNumber = decoded.phone;
                         else if (decoded?.sub) {
@@ -899,7 +791,7 @@ router.get("/my-ads", async (req, res) => {
                                 const user = (await User_1.default.findById(decoded.sub)
                                     .select("phone")
                                     .lean());
-                                console.log("🔍 [my-ads-public] Loaded user (decode fallback):", { found: !!user, phone: user?.phone });
+                                console.log("ðŸ” [my-ads-public] Loaded user (decode fallback):", { found: !!user, phone: user?.phone });
                                 if (user?.phone)
                                     phoneNumber = user.phone;
                             }
@@ -920,14 +812,14 @@ router.get("/my-ads", async (req, res) => {
                 message: "Phone number is required",
             });
         }
-        console.log(`📱 Fetching ads for phone number: ${phoneNumber}`);
+        console.log(`ðŸ“± Fetching ads for phone number: ${phoneNumber}`);
         // Find all ads for this user (including pending, approved, rejected)
         const ads = await Ad_1.default.find({ phoneNumber })
             .select("-bottomImage -fullscreenImage") // Exclude large base64 fields
             .sort({ createdAt: -1 })
             .lean()
             .exec();
-        console.log(`✅ Found ${ads.length} ads for user ${phoneNumber}`);
+        console.log(`âœ… Found ${ads.length} ads for user ${phoneNumber}`);
         // Transform ads to include proper image URLs (AWS Cloud primary)
         const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
         const adsWithImageUrls = ads.map((ad) => {
@@ -952,7 +844,7 @@ router.get("/my-ads", async (req, res) => {
         });
     }
     catch (error) {
-        console.error("❌ GET MY ADS ERROR:", error);
+        console.error("âŒ GET MY ADS ERROR:", error);
         res.status(500).json({
             success: false,
             message: "Failed to fetch your ads",
@@ -962,7 +854,7 @@ router.get("/my-ads", async (req, res) => {
 // GET /api/ads - Get all ads with pagination and filtering (NO AUTH REQUIRED for Channel Partner Admin)
 router.get("/", async (req, res) => {
     try {
-        console.log("📊 GET /api/ads - Request received (No auth required)");
+        console.log("ðŸ“Š GET /api/ads - Request received (No auth required)");
         // SCALABILITY: Pagination parameters
         const page = parseInt(req.query.page) || 1;
         const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100 per page
@@ -1016,7 +908,7 @@ router.get("/", async (req, res) => {
             .limit(limit)
             .lean()
             .exec();
-        console.log(`✅ Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
+        console.log(`âœ… Found ${ads.length} ads (page ${page} of ${Math.ceil(totalAds / limit)})`);
         // Transform ads to include proper image URLs for admin dashboard (AWS Cloud primary)
         const imageBaseUrl = process.env.API_BASE_URL || "https://api.instantllycards.com";
         const adsWithImageUrls = ads.map((ad) => {
@@ -1055,12 +947,11 @@ router.get("/", async (req, res) => {
                 };
             }
             catch (mapError) {
-                console.error("❌ Error transforming ad:", ad._id, mapError);
+                console.error("âŒ Error transforming ad:", ad._id, mapError);
                 // Return ad as-is if transformation fails
                 return ad;
             }
         });
-        console.log(`📤 Sending ${adsWithImageUrls.length} ads to admin dashboard`);
         res.json({
             success: true,
             data: adsWithImageUrls,
@@ -1075,7 +966,7 @@ router.get("/", async (req, res) => {
         });
     }
     catch (error) {
-        console.error("❌ GET ALL ADS ERROR:", error);
+        console.error("âŒ GET ALL ADS ERROR:", error);
         res.status(500).json({
             success: false,
             message: "Failed to fetch ads",
@@ -1207,19 +1098,15 @@ router.delete("/:id", async (req, res) => {
         if (ad.bottomImageGridFS) {
             try {
                 await gridfsService_1.gridfsService.deleteFile(ad.bottomImageGridFS);
-                console.log(`🗑️ Deleted bottom image from GridFS: ${ad.bottomImageGridFS}`);
             }
             catch (error) {
-                console.error("Failed to delete bottom image from GridFS:", error);
             }
         }
         if (ad.fullscreenImageGridFS) {
             try {
                 await gridfsService_1.gridfsService.deleteFile(ad.fullscreenImageGridFS);
-                console.log(`🗑️ Deleted fullscreen image from GridFS: ${ad.fullscreenImageGridFS}`);
             }
             catch (error) {
-                console.error("Failed to delete fullscreen image from GridFS:", error);
             }
         }
         // Delete ad document
@@ -1241,7 +1128,7 @@ router.delete("/:id", async (req, res) => {
 router.post("/:id/approve", adminAuth_1.requireAdminAuth, async (req, res) => {
     try {
         const { priority } = req.body;
-        console.log(`🔐 [ADMIN] Approve ad request - ID: ${req.params.id}, Priority: ${priority}`);
+        console.log(`ðŸ” [ADMIN] Approve ad request - ID: ${req.params.id}, Priority: ${priority}`);
         const ad = await Ad_1.default.findById(req.params.id);
         if (!ad) {
             return res.status(404).json({
@@ -1258,7 +1145,7 @@ router.post("/:id/approve", adminAuth_1.requireAdminAuth, async (req, res) => {
             ad.priority = Math.min(Math.max(parseInt(priority), 1), 10); // Clamp between 1-10
         }
         await ad.save();
-        console.log(`✅ Ad ${ad._id} approved by admin ${req.adminId} with priority ${ad.priority}`);
+        console.log(`âœ… Ad ${ad._id} approved by admin ${req.adminId} with priority ${ad.priority}`);
         res.json({
             success: true,
             message: "Ad approved successfully",
@@ -1284,7 +1171,7 @@ router.post("/:id/approve", adminAuth_1.requireAdminAuth, async (req, res) => {
 router.post("/:id/reject", adminAuth_1.requireAdminAuth, async (req, res) => {
     try {
         const { reason } = req.body;
-        console.log(`🔐 [ADMIN] Reject ad request - ID: ${req.params.id}, Reason: ${reason}`);
+        console.log(`ðŸ” [ADMIN] Reject ad request - ID: ${req.params.id}, Reason: ${reason}`);
         const ad = await Ad_1.default.findById(req.params.id);
         if (!ad) {
             return res.status(404).json({
@@ -1298,7 +1185,7 @@ router.post("/:id/reject", adminAuth_1.requireAdminAuth, async (req, res) => {
         ad.approvalDate = new Date();
         ad.rejectionReason = reason || "No reason provided";
         await ad.save();
-        console.log(`❌ Ad ${ad._id} rejected by admin ${req.adminId}`);
+        console.log(`âŒ Ad ${ad._id} rejected by admin ${req.adminId}`);
         res.json({
             success: true,
             message: "Ad rejected successfully",

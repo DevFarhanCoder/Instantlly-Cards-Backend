@@ -9,40 +9,61 @@ import PromotionPricingPlan from "../models/PromotionPricingPlan";
 
 const router = Router();
 
-type AreaType = "pincode" | "tehsil" | "district";
+type AreaType = "pincode" | "tehsil" | "district" | "division" | "state" | "zone" | "india";
 
 type PricingRow = {
   rank: number;
   pincode: number;
   tehsil: number;
   district: number;
+  division: number;
+  state: number;
+  zone: number;
+  india: number;
 };
 
-const DEFAULT_PRICING_ROWS: PricingRow[] = [
-  { rank: 21, pincode: 100, tehsil: 600, district: 3600 }, // No Rank
-  { rank: 20, pincode: 200, tehsil: 1200, district: 7200 },
-  { rank: 19, pincode: 300, tehsil: 1800, district: 10800 },
-  { rank: 18, pincode: 400, tehsil: 2400, district: 14400 },
-  { rank: 17, pincode: 500, tehsil: 3000, district: 18000 },
-  { rank: 16, pincode: 600, tehsil: 3600, district: 21600 },
-  { rank: 15, pincode: 700, tehsil: 4200, district: 25200 },
-  { rank: 14, pincode: 800, tehsil: 4800, district: 28800 },
-  { rank: 13, pincode: 900, tehsil: 5400, district: 32400 },
-  { rank: 12, pincode: 1000, tehsil: 6000, district: 36000 },
-  { rank: 11, pincode: 1100, tehsil: 6600, district: 39600 },
-  { rank: 10, pincode: 1200, tehsil: 7200, district: 43200 },
-  { rank: 9, pincode: 1300, tehsil: 7800, district: 46800 },
-  { rank: 8, pincode: 1400, tehsil: 8400, district: 50400 },
-  { rank: 7, pincode: 1500, tehsil: 9000, district: 54000 },
-  { rank: 6, pincode: 1600, tehsil: 9600, district: 57600 },
-  { rank: 5, pincode: 1700, tehsil: 10200, district: 61200 },
-  { rank: 4, pincode: 1800, tehsil: 10800, district: 64800 },
-  { rank: 3, pincode: 1900, tehsil: 11400, district: 68400 },
-  { rank: 2, pincode: 2000, tehsil: 12000, district: 72000 },
-  { rank: 1, pincode: 2100, tehsil: 12600, district: 75600 },
-];
+const buildPricingRow = (rank: number, pincode: number): PricingRow => {
+  const tehsil = pincode * 6;
+  const district = tehsil * 6;
+  const division = district * 6;
+  const state = division * 6;
+  const zone = state * 6;
+  const india = zone * 6;
+  return {
+    rank,
+    pincode,
+    tehsil,
+    district,
+    division,
+    state,
+    zone,
+    india,
+  };
+};
 
-const AREA_TYPES: AreaType[] = ["pincode", "tehsil", "district"];
+const getPincodeForRank = (rank: number): number => {
+  if (rank === 21) return 600;
+  return 2600 - (rank - 1) * 100;
+};
+
+const DEFAULT_PRICING_ROWS: PricingRow[] = (() => {
+  const rows: PricingRow[] = [];
+  rows.push(buildPricingRow(21, getPincodeForRank(21)));
+  for (let rank = 20; rank >= 1; rank -= 1) {
+    rows.push(buildPricingRow(rank, getPincodeForRank(rank)));
+  }
+  return rows;
+})();
+
+const AREA_TYPES: AreaType[] = [
+  "pincode",
+  "tehsil",
+  "district",
+  "division",
+  "state",
+  "zone",
+  "india",
+];
 
 function priorityFromRank(rank: number): number {
   if (rank === 21) {
@@ -263,7 +284,8 @@ router.get("/quote", async (req, res) => {
     if (!AREA_TYPES.includes(area as AreaType)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid areaType. Use pincode, tehsil, or district",
+        message:
+          "Invalid areaType. Use pincode, tehsil, district, division, state, zone, or india",
       });
     }
 
@@ -333,7 +355,8 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
     if (!areaType || !AREA_TYPES.includes(areaType)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid areaType. Use pincode, tehsil, or district",
+        message:
+          "Invalid areaType. Use pincode, tehsil, district, division, state, zone, or india",
       });
     }
 
