@@ -21,13 +21,14 @@
     "migrate:slots": "ts-node src/scripts/migrate-slots-to-new-voucher.ts",
     "dedup-slots": "ts-node src/scripts/dedup-slots.ts",
     "repair:orphan-special-credit-transfers": "ts-node src/scripts/repair-orphan-special-credit-transfers.ts",
+    "upload:categories": "ts-node src/scripts/upload-categories-from-csv.ts",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.990.0",
-    "@aws-sdk/lib-storage": "^3.990.0",
-    "@aws-sdk/s3-request-presigner": "^3.990.0",
+    "@aws-sdk/client-s3": "^3.1009.0",
+    "@aws-sdk/lib-storage": "^3.1009.0",
+    "@aws-sdk/s3-request-presigner": "^3.1009.0",
     "@types/multer": "^2.0.0",
     "@types/node-cache": "^4.1.3",
     "@types/socket.io": "^3.0.1",

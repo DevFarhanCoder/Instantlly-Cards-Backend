@@ -10,7 +10,7 @@ const PromotionPricingPlanSchema = new Schema(
     },
     areaType: {
       type: String,
-      enum: ["pincode", "tehsil", "district"],
+      enum: ["pincode", "tehsil", "district", "division", "state", "zone", "india"],
       required: true,
       index: true,
     },

@@ -6,7 +6,14 @@ import PromotionPricingPlan from "../models/PromotionPricingPlan";
 
 dotenv.config({ path: path.join(__dirname, "../../.env") });
 
-type AreaType = "pincode" | "tehsil" | "district" | "division" | "state" | "zone" | "india";
+type AreaType =
+  | "pincode"
+  | "tehsil"
+  | "district"
+  | "division"
+  | "state"
+  | "zone"
+  | "india";
 
 const AREA_TYPES: AreaType[] = [
   "pincode",
@@ -17,6 +24,7 @@ const AREA_TYPES: AreaType[] = [
   "zone",
   "india",
 ];
+
 const RANKS = [21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 
 function getRankLabel(rank: number): string {
@@ -47,7 +55,7 @@ function getAmountForArea(rank: number, areaType: AreaType): number {
   return pincode * multipliers[areaType];
 }
 
-async function seedTestPricing(): Promise<void> {
+async function seedPricing(): Promise<void> {
   await connectDB();
 
   const operations = RANKS.flatMap((rank) =>
@@ -77,18 +85,18 @@ async function seedTestPricing(): Promise<void> {
 
   const result = await PromotionPricingPlan.bulkWrite(operations);
 
-  console.log("✅ Test promotion pricing seeded successfully");
+  console.log("✅ Promotion pricing updated");
   console.log(`Plans targeted: ${operations.length}`);
   console.log(`Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`);
 }
 
-seedTestPricing()
+seedPricing()
   .then(async () => {
     await mongoose.disconnect();
     process.exit(0);
   })
   .catch(async (error) => {
-    console.error("❌ Failed to seed test promotion pricing:", error);
+    console.error("❌ Failed to seed promotion pricing:", error);
     await mongoose.disconnect();
     process.exit(1);
   });

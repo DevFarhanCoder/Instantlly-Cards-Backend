@@ -6,6 +6,11 @@ import CustomService from "../models/CustomService";
 import BusinessPromotion from "../models/BusinessPromotion";
 import Card from "../models/Card";
 import User from "../models/User";
+import {
+  normalizeCategory,
+  normalizedPreview,
+  findDuplicates,
+} from "../utils/categoryNormalization";
 
 const router = express.Router();
 
@@ -337,6 +342,45 @@ const adminAuth = (req: Request, res: Response, next: NextFunction) => {
   } else {
     res.status(401).json({ error: "Unauthorized", message: "Invalid admin key" });
   }
+};
+
+// ── Fuzzy category-name matching helpers ─────────────────────────────────────
+/** Lowercase, strip punctuation (& / - _ , . ; : etc.) → spaces, collapse whitespace */
+const normalizeCatName = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[&/\\|\-_.,;:!?()'"+@#%*[\]{}]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Return significant words, removing stop-words and single-char tokens */
+const catNameWords = (name: string): Set<string> => {
+  const stops = new Set(["and", "or", "the", "a", "an", "of", "in", "at", "for", "to", "with", "by", "de", "la"]);
+  return new Set(
+    normalizeCatName(name)
+      .split(" ")
+      .filter((w) => w.length > 1 && !stops.has(w))
+  );
+};
+
+/**
+ * Returns true if two category names have the same meaning:
+ *  1. Identical after normalization
+ *  2. One is a substring of the other  (e.g. "Hotels" ⊂ "Hotels & Restaurants")
+ *  3. Jaccard word-set similarity ≥ 0.55  (e.g. "Auto Repair" vs "Auto Repairs")
+ */
+const fuzzyMatchCatNames = (a: string, b: string): boolean => {
+  const na = normalizeCatName(a);
+  const nb = normalizeCatName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = catNameWords(a);
+  const wb = catNameWords(b);
+  if (wa.size === 0 || wb.size === 0) return false;
+  const intersection = [...wa].filter((w) => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return intersection / union >= 0.55;
 };
 
 // ============================================================
@@ -743,21 +787,38 @@ router.post("/admin/seed", adminAuth, async (req: Request, res: Response) => {
 // POST /api/categories/admin/add-category - Add a new category
 router.post("/admin/add-category", adminAuth, async (req: Request, res: Response) => {
   try {
-    const { name, icon, subcategories } = req.body;
+    const { name, icon, subcategories, force } = req.body;
 
     if (!name) {
       return res.status(400).json({ success: false, error: "Category name is required" });
     }
 
-    const existing = await Category.findOne({
-      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-    });
+    // Check for duplicates using smart normalization
+    const siblings = await Category.find({ parent_id: null })
+      .select("_id name icon level parent_id")
+      .lean();
 
-    if (existing) {
+    const dupResult = findDuplicates(name.trim(), siblings);
+
+    if (dupResult.isDuplicate && dupResult.exactMatch) {
       return res.status(409).json({
         success: false,
         error: "Category already exists",
-        data: existing,
+        data: dupResult.exactMatch,
+        isDuplicate: true,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
+      });
+    }
+
+    if (!force && dupResult.hasSimilar) {
+      return res.status(409).json({
+        success: false,
+        error: "Similar categories already exist.",
+        hasSimilar: true,
+        similarMatches: dupResult.similarMatches,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
       });
     }
 
@@ -774,6 +835,8 @@ router.post("/admin/add-category", adminAuth, async (req: Request, res: Response
       success: true,
       message: `Category "${name}" created`,
       data: newCategory,
+      normalizedName: dupResult.normalizedInput,
+      previewName: dupResult.previewName,
     });
   } catch (error: any) {
     console.error("Error adding category:", error);
@@ -1183,13 +1246,48 @@ router.get("/:id/children", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /api/categories/admin/check-duplicate
+// Check for duplicate / similar category names BEFORE creating.
+// Body: { name, parent_id? }
+// Returns: { normalizedInput, previewName, isDuplicate, hasSimilar, hasWarning, exactMatch, similarMatches }
+router.post("/admin/check-duplicate", adminAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, parent_id } = req.body;
+    if (!name?.trim()) {
+      return res.status(400).json({ success: false, error: "name is required" });
+    }
+
+    let resolvedParentId: mongoose.Types.ObjectId | null = null;
+    if (parent_id) {
+      if (!mongoose.Types.ObjectId.isValid(parent_id)) {
+        return res.status(400).json({ success: false, error: "Invalid parent_id" });
+      }
+      resolvedParentId = new mongoose.Types.ObjectId(parent_id);
+    }
+
+    // Fetch siblings at the same level
+    const siblings = await Category.find({ parent_id: resolvedParentId })
+      .select("_id name icon level parent_id")
+      .lean();
+
+    const result = findDuplicates(name.trim(), siblings);
+
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error("Error checking duplicate:", err);
+    res.status(500).json({ success: false, error: "Failed to check duplicate" });
+  }
+});
+
 // ── POST /api/categories/admin/node — create a node at any level
-// Body: { name, icon?, parent_id? }
+// Body: { name, icon?, parent_id?, force? }
 //   parent_id absent or null  → root category
 //   parent_id present         → child of that node
+//   force = true              → create even when similar categories found
+//                               (exact duplicates are always blocked)
 router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
   try {
-    const { name, icon, parent_id } = req.body;
+    const { name, icon, parent_id, force } = req.body;
     if (!name?.trim()) {
       return res.status(400).json({ success: false, error: "name is required" });
     }
@@ -1209,13 +1307,58 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
       resolvedParentId = new mongoose.Types.ObjectId(parent_id);
     }
 
-    // Prevent duplicate sibling names
-    const dup = await Category.findOne({
-      parent_id: resolvedParentId,
-      name: { $regex: new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
-    });
-    if (dup) {
-      return res.status(409).json({ success: false, error: `"${name.trim()}" already exists at this level` });
+    // ── Fetch siblings for duplicate check ──────────────────────────────────
+    const siblings = await Category.find({ parent_id: resolvedParentId })
+      .select("_id name icon level parent_id")
+      .lean();
+
+    const dupResult = findDuplicates(name.trim(), siblings);
+
+    // Block exact / case-insensitive duplicates always
+    // Also return wasExisting:true for bulk-import callers that expect it
+    if (dupResult.isDuplicate && dupResult.exactMatch) {
+      return res.status(409).json({
+        success: false,
+        wasExisting: true,
+        error: `"${name.trim()}" already exists at this level`,
+        isDuplicate: true,
+        existingCategory: dupResult.exactMatch,
+        data: dupResult.exactMatch,
+        normalizedName: dupResult.normalizedInput,
+        previewName: dupResult.previewName,
+      });
+    }
+
+    // Warn about similar categories unless force=true
+    // For bulk-import (wasExisting flag used), treat normalised match as existing
+    if (dupResult.hasSimilar && dupResult.similarMatches.length > 0) {
+      const topMatch = dupResult.similarMatches[0];
+      if (!force && topMatch.matchType === "normalized-exact") {
+        // Normalised exact: silently return existing for bulk imports
+        return res.status(409).json({
+          success: false,
+          wasExisting: true,
+          error: `"${name.trim()}" maps to existing category "${topMatch.name}"`,
+          isDuplicate: false,
+          hasSimilar: true,
+          existingCategory: topMatch,
+          data: topMatch,
+          similarMatches: dupResult.similarMatches,
+          normalizedName: dupResult.normalizedInput,
+          previewName: dupResult.previewName,
+        });
+      }
+      if (!force) {
+        return res.status(409).json({
+          success: false,
+          error: `Similar categories already exist. Use force=true to create anyway.`,
+          isDuplicate: false,
+          hasSimilar: true,
+          similarMatches: dupResult.similarMatches,
+          normalizedName: dupResult.normalizedInput,
+          previewName: dupResult.previewName,
+        });
+      }
     }
 
     const maxOrderDoc = await Category.findOne({ parent_id: resolvedParentId }).sort({ order: -1 }).lean();
@@ -1231,7 +1374,14 @@ router.post("/admin/node", adminAuth, async (req: Request, res: Response) => {
     });
     invalidateCategoryCaches();
 
-    res.status(201).json({ success: true, message: `Created "${node.name}"`, data: node });
+    res.status(201).json({
+      success: true,
+      message: `Created "${node.name}"`,
+      data: node,
+      normalizedName: dupResult.normalizedInput,
+      previewName: dupResult.previewName,
+      hadSimilarWarning: dupResult.hasSimilar,
+    });
   } catch (err: any) {
     console.error("Error creating category node:", err);
     res.status(500).json({ success: false, error: "Failed to create category" });
@@ -1246,13 +1396,24 @@ router.put("/admin/node/:id", adminAuth, async (req: Request, res: Response) => 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, error: "Invalid id" });
     }
-    const { name, icon, isActive } = req.body;
+    const { name, icon, isActive, parent_id } = req.body;
     const node = await Category.findById(id);
     if (!node) return res.status(404).json({ success: false, error: "Category not found" });
 
     if (name !== undefined && name.trim()) node.name = name.trim();
     if (icon !== undefined) node.icon = icon;
     if (isActive !== undefined) node.isActive = Boolean(isActive);
+    if (parent_id !== undefined) {
+      if (parent_id === null || parent_id === "") {
+        (node as any).parent_id = undefined;
+        node.level = 0;
+      } else if (mongoose.Types.ObjectId.isValid(parent_id)) {
+        const newParent = await Category.findById(parent_id).lean();
+        if (!newParent) return res.status(404).json({ success: false, error: "New parent not found" });
+        (node as any).parent_id = parent_id;
+        node.level = (newParent.level ?? 0) + 1;
+      }
+    }
     await node.save();
     invalidateCategoryCaches();
 
@@ -1328,6 +1489,17 @@ router.post("/admin/node/:id/upload-csv", adminAuth, async (req: Request, res: R
         if (!row.businessName?.trim() || !row.phone?.trim()) {
           results.skipped++;
           results.errors.push(`Skipped: missing businessName or phone (${row.businessName || "—"})`);
+          continue;
+        }
+
+        // Deduplicate: skip if same businessName + phone already exists under this node
+        const exists = await BusinessPromotion.exists({
+          categoryId: String(node._id),
+          businessName: { $regex: new RegExp(`^${row.businessName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+          phone: row.phone.trim(),
+        });
+        if (exists) {
+          results.skipped++;
           continue;
         }
 
