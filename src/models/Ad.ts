@@ -180,6 +180,17 @@ const AdSchema = new mongoose.Schema(
     rejectionReason: {
       type: String,
       default: null
+    },
+    // Approval fee payment tracking (voucher/cash)
+    paymentStatus: {
+      type: String,
+      enum: ['not_required', 'pending', 'paid', 'failed', 'expired'],
+      default: 'pending',
+    },
+    paymentOrderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AdPaymentOrder',
+      default: null,
     }
   },
   {
