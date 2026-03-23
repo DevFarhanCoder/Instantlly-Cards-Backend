@@ -1787,8 +1787,8 @@ router.get("/version-check", async (req, res) => {
     // ⚠️ FORCE UPDATE POLICY: Everyone must have the LATEST version
     // Simply update these versions when you publish to app stores
     const LATEST_VERSIONS = {
-      android: "1.0.74", // ← Update this when publishing new version to Play Store
-      ios: "1.0.74", // ← Update this when publishing new version to App Store
+      android: "1.0.75", // ← Update this when publishing new version to Play Store
+      ios: "1.0.75", // ← Update this when publishing new version to App Store
     };
 
     const PLAY_STORE_URL =
