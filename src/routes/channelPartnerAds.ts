@@ -5,15 +5,28 @@ import mongoose from 'mongoose';
 import Ad from '../models/Ad';
 import AWS from "aws-sdk";
 import User from '../models/User';
-import Transaction from '../models/Transaction';
 import DesignRequest from '../models/DesignRequest';
 import DesignerUpload from '../models/DesignerUpload';
+import AdPaymentOrder from '../models/AdPaymentOrder';
+import Voucher from '../models/Voucher';
+import VoucherRedemption from '../models/VoucherRedemption';
+import { requireAuth, AuthReq } from "../middleware/auth";
+import axios from "axios";
+import crypto from "crypto";
 
 import { uploadPendingAdMedia, uploadDesignRequestMedia } from '../services/s3Service';
 
 import { Readable } from 'stream';
 
 const router = express.Router();
+
+const INSTANTLLY_COMPANY_NAME = "Instantlly";
+const DESIGN_FEE_AMOUNT = Math.max(0, Number(process.env.DESIGN_FEE_AMOUNT || 400));
+const AD_APPROVAL_FEE_AMOUNT = Math.max(0, Number(process.env.AD_APPROVAL_FEE_AMOUNT || 1200));
+const ADS_PAYMENT_TIMEOUT_MINUTES = Math.max(
+  5,
+  Number(process.env.ADS_PAYMENT_TIMEOUT_MINUTES || 30),
+);
 
 // Configure multer for memory storage - images only
 export  const upload = multer({
@@ -39,6 +52,661 @@ export  const s3 = new AWS.S3({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
 });
+
+// ============================================
+// ADS/DESIGN FEE VOUCHER + PAYMENT
+// ============================================
+
+router.get('/voucher-balance', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const [user, voucher] = await Promise.all([
+      User.findById(userId).select("voucherBalances").lean(),
+      getInstantllyVoucherTemplate(),
+    ]);
+
+    if (!voucher) {
+      return res.json({ success: true, voucher: null, balance: 0, totalValue: 0 });
+    }
+
+    if (voucher.companyName !== INSTANTLLY_COMPANY_NAME) {
+      return res.status(400).json({ success: false, message: "Instantlly voucher misconfigured" });
+    }
+
+    if (voucher.expiryDate && new Date(voucher.expiryDate) < new Date()) {
+      return res.json({
+        success: true,
+        voucher: {
+          id: voucher._id,
+          companyName: voucher.companyName,
+          mrp: voucher.MRP || 0,
+          expiresAt: voucher.expiryDate,
+        },
+        balance: 0,
+        totalValue: 0,
+        expired: true,
+      });
+    }
+
+    const balance = getVoucherBalanceFromUser(user, voucher._id.toString());
+    const mrp = Number(voucher.MRP || 0);
+    const totalValue = Math.max(0, balance * mrp);
+
+    return res.json({
+      success: true,
+      voucher: {
+        id: voucher._id,
+        companyName: voucher.companyName,
+        mrp,
+        expiresAt: voucher.expiryDate,
+      },
+      balance,
+      totalValue,
+    });
+  } catch (error) {
+    console.error("❌ ADS voucher balance error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch voucher balance" });
+  }
+});
+
+router.post('/design-fee/orders', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { designRequestId } = req.body as { designRequestId?: string };
+
+    await expireStaleAdOrdersForUser(userId, "design_fee");
+
+    let designRequest: any = null;
+    if (designRequestId && mongoose.Types.ObjectId.isValid(designRequestId)) {
+      designRequest = await DesignRequest.findById(designRequestId);
+      if (!designRequest) {
+        return res.status(404).json({ success: false, message: "Design request not found" });
+      }
+    }
+
+    const order = await AdPaymentOrder.create({
+      userId,
+      designRequestId: designRequest?._id || null,
+      orderType: "design_fee",
+      amount: DESIGN_FEE_AMOUNT,
+      payableAmount: DESIGN_FEE_AMOUNT,
+      currency: "INR",
+      status: "payment_pending",
+      paymentProvider: "razorpay",
+    });
+
+    if (designRequest) {
+      designRequest.paymentStatus = "pending";
+      designRequest.paymentOrderId = order._id;
+      await designRequest.save();
+    }
+
+    return res.status(201).json({ success: true, order });
+  } catch (error) {
+    console.error("❌ ADS design-fee order error:", error);
+    return res.status(500).json({ success: false, message: "Failed to create design fee order" });
+  }
+});
+
+router.post('/design-fee/orders/:orderId/create-payment-order', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    await expireStaleAdOrdersForUser(userId, "design_fee");
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await AdPaymentOrder.findOne({ _id: orderId, userId, orderType: "design_fee" });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (!["payment_pending", "created"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: `Order is in ${order.status} state` });
+    }
+
+    const payableAmount = Math.max(
+      0,
+      Number(
+        order.payableAmount !== undefined && order.payableAmount !== null
+          ? order.payableAmount
+          : order.amount || 0,
+      ),
+    );
+    if (payableAmount <= 0) {
+      return res.status(400).json({ success: false, message: "No payable amount remaining" });
+    }
+
+    const rzOrder = await createRazorpayOrder({
+      amountRupees: payableAmount,
+      currency: order.currency || "INR",
+      receipt: `adfee_${String(order._id).slice(-12)}`,
+      notes: {
+        orderId: String(order._id),
+        userId: String(userId),
+        orderType: "design_fee",
+      },
+    });
+
+    order.paymentProvider = "razorpay";
+    order.paymentOrderId = rzOrder.id;
+    await order.save();
+
+    const { keyId } = getRazorpayCredentials();
+    return res.json({
+      success: true,
+      checkout: {
+        keyId,
+        amount: rzOrder.amount,
+        currency: rzOrder.currency,
+        razorpayOrderId: rzOrder.id,
+      },
+      order,
+    });
+  } catch (error) {
+    console.error("❌ ADS create payment order error:", error);
+    return res.status(500).json({ success: false, message: "Failed to create payment order" });
+  }
+});
+
+router.post('/design-fee/orders/:orderId/verify-payment', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body as {
+      razorpay_order_id?: string;
+      razorpay_payment_id?: string;
+      razorpay_signature?: string;
+    };
+
+    await expireStaleAdOrdersForUser(userId, "design_fee");
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: "Missing Razorpay fields" });
+    }
+
+    const order = await AdPaymentOrder.findOne({ _id: orderId, userId, orderType: "design_fee" });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.paymentOrderId && order.paymentOrderId !== razorpay_order_id) {
+      return res.status(400).json({ success: false, message: "Razorpay order ID mismatch" });
+    }
+
+    const isValidSignature = verifyRazorpaySignature({
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpaySignature: razorpay_signature,
+    });
+
+    if (!isValidSignature) {
+      order.status = "payment_failed";
+      await order.save();
+      await releaseReservedVouchersForAdOrder(order, "payment_failed");
+      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
+
+    order.status = "paid";
+    order.paymentId = razorpay_payment_id;
+    order.paidAt = new Date();
+    await order.save();
+
+    if (order.voucherStatus === "reserved") {
+      await VoucherRedemption.findOneAndUpdate(
+        { sourceType: "design_fee", sourceId: order._id, status: "reserved" },
+        { $set: { status: "applied", appliedAt: new Date() } },
+      );
+      order.voucherStatus = "applied";
+      await order.save();
+    }
+
+    if (order.designRequestId) {
+      await DesignRequest.findByIdAndUpdate(order.designRequestId, {
+        paymentStatus: "paid",
+        paidAt: new Date(),
+      });
+    }
+
+    return res.json({ success: true, message: "Payment verified" });
+  } catch (error) {
+    console.error("❌ ADS verify payment error:", error);
+    return res.status(500).json({ success: false, message: "Failed to verify payment" });
+  }
+});
+
+// ============================================
+// ADS APPROVAL FEE PAYMENT
+// ============================================
+
+router.post('/approval/orders/:orderId/create-payment-order', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await AdPaymentOrder.findOne({ _id: orderId, userId, orderType: "ad_approval" });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const ad = order.adId ? await Ad.findById(order.adId) : null;
+    if (!ad || ad.status !== "approved") {
+      return res.status(400).json({ success: false, message: "Ad is not approved yet" });
+    }
+
+    if (!["payment_pending", "created", "payment_failed"].includes(order.status)) {
+      return res.status(400).json({ success: false, message: `Order is in ${order.status} state` });
+    }
+
+    const payableAmount = Math.max(
+      0,
+      Number(
+        order.payableAmount !== undefined && order.payableAmount !== null
+          ? order.payableAmount
+          : order.amount || 0,
+      ),
+    );
+    if (payableAmount <= 0) {
+      return res.status(400).json({ success: false, message: "No payable amount remaining" });
+    }
+
+    const rzOrder = await createRazorpayOrder({
+      amountRupees: payableAmount,
+      currency: order.currency || "INR",
+      receipt: `adapproval_${String(order._id).slice(-12)}`,
+      notes: {
+        orderId: String(order._id),
+        adId: String(order.adId || ""),
+        userId: String(userId),
+        orderType: "ad_approval",
+      },
+    });
+
+    order.paymentProvider = "razorpay";
+    order.paymentOrderId = rzOrder.id;
+    order.status = "payment_pending";
+    await order.save();
+
+    const { keyId } = getRazorpayCredentials();
+    return res.json({
+      success: true,
+      checkout: {
+        keyId,
+        amount: rzOrder.amount,
+        currency: rzOrder.currency,
+        razorpayOrderId: rzOrder.id,
+      },
+      order,
+    });
+  } catch (error) {
+    console.error("❌ ADS approval create payment error:", error);
+    return res.status(500).json({ success: false, message: "Failed to create payment order" });
+  }
+});
+
+router.post('/approval/orders/:orderId/verify-payment', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body as {
+      razorpay_order_id?: string;
+      razorpay_payment_id?: string;
+      razorpay_signature?: string;
+    };
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: "Missing Razorpay fields" });
+    }
+
+    const order = await AdPaymentOrder.findOne({ _id: orderId, userId, orderType: "ad_approval" });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.paymentOrderId && order.paymentOrderId !== razorpay_order_id) {
+      return res.status(400).json({ success: false, message: "Razorpay order ID mismatch" });
+    }
+
+    const ad = order.adId ? await Ad.findById(order.adId) : null;
+    if (!ad || ad.status !== "approved") {
+      return res.status(400).json({ success: false, message: "Ad is not approved yet" });
+    }
+
+    const isValidSignature = verifyRazorpaySignature({
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpaySignature: razorpay_signature,
+    });
+
+    if (!isValidSignature) {
+      order.status = "payment_failed";
+      await order.save();
+      await releaseReservedVouchersForAdOrder(order, "payment_failed");
+      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
+
+    order.status = "paid";
+    order.paymentId = razorpay_payment_id;
+    order.paidAt = new Date();
+    await order.save();
+
+    if (order.voucherStatus === "reserved") {
+      await VoucherRedemption.findOneAndUpdate(
+        { sourceType: "ad_approval", sourceId: order._id, status: "reserved" },
+        { $set: { status: "applied", appliedAt: new Date() } },
+      );
+      order.voucherStatus = "applied";
+      await order.save();
+    }
+
+    if (ad) {
+      ad.paymentStatus = "paid";
+      await ad.save();
+    }
+
+    return res.json({ success: true, message: "Payment verified" });
+  } catch (error) {
+    console.error("❌ ADS approval verify payment error:", error);
+    return res.status(500).json({ success: false, message: "Failed to verify payment" });
+  }
+});
+
+router.post('/approval/orders/:orderId/confirm-voucher', requireAuth, async (req: AuthReq, res: Response) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await AdPaymentOrder.findOne({ _id: orderId, userId, orderType: "ad_approval" });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const ad = order.adId ? await Ad.findById(order.adId) : null;
+    if (!ad || ad.status !== "approved") {
+      return res.status(400).json({ success: false, message: "Ad is not approved yet" });
+    }
+
+    const payableAmount = Math.max(0, Number(order.payableAmount || 0));
+    if (payableAmount > 0) {
+      return res.status(400).json({ success: false, message: "Payable amount remaining. Please pay to confirm." });
+    }
+
+    if (order.voucherStatus !== "reserved") {
+      return res.status(400).json({ success: false, message: "No reserved voucher to confirm" });
+    }
+
+    await VoucherRedemption.findOneAndUpdate(
+      { sourceType: "ad_approval", sourceId: order._id, status: "reserved" },
+      { $set: { status: "applied", appliedAt: new Date() } },
+    );
+
+    order.voucherStatus = "applied";
+    order.status = "paid";
+    order.paidAt = new Date();
+    await order.save();
+
+    if (ad) {
+      ad.paymentStatus = "paid";
+      await ad.save();
+    }
+
+    return res.json({ success: true, message: "Voucher redemption confirmed" });
+  } catch (error) {
+    console.error("❌ ADS approval confirm voucher error:", error);
+    return res.status(500).json({ success: false, message: "Failed to confirm voucher redemption" });
+  }
+});
+
+function getRazorpayCredentials() {
+  const keyId =
+    process.env.RAZORPAY_KEY_ID ||
+    process.env.RAZORPAY_KEY_ID_TEST ||
+    "";
+  const keySecret =
+    process.env.RAZORPAY_KEY_SECRET ||
+    process.env.RAZORPAY_KEY_SECRET_TEST ||
+    "";
+
+  return { keyId, keySecret };
+}
+
+async function createRazorpayOrder(params: {
+  amountRupees: number;
+  currency: string;
+  receipt: string;
+  notes: Record<string, string>;
+}) {
+  const { keyId, keySecret } = getRazorpayCredentials();
+  if (!keyId || !keySecret) {
+    throw new Error("Razorpay credentials are not configured");
+  }
+
+  const amountPaise = Math.round(params.amountRupees * 100);
+  const payload = {
+    amount: amountPaise,
+    currency: params.currency,
+    receipt: params.receipt,
+    notes: params.notes,
+  };
+
+  const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+
+  const response = await axios.post("https://api.razorpay.com/v1/orders", payload, {
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+    timeout: 15000,
+  });
+
+  return response.data as {
+    id: string;
+    amount: number;
+    currency: string;
+    receipt: string;
+    status: string;
+  };
+}
+
+function verifyRazorpaySignature(params: {
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}) {
+  const { keySecret } = getRazorpayCredentials();
+  if (!keySecret) {
+    throw new Error("Razorpay secret is not configured");
+  }
+
+  const payload = `${params.razorpayOrderId}|${params.razorpayPaymentId}`;
+  const expectedSignature = crypto
+    .createHmac("sha256", keySecret)
+    .update(payload)
+    .digest("hex");
+
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedSignature),
+    Buffer.from(params.razorpaySignature),
+  );
+}
+
+async function getInstantllyVoucherTemplate(): Promise<any | null> {
+  const configuredId = process.env.INSTANTLLY_VOUCHER_ID;
+  if (configuredId && mongoose.Types.ObjectId.isValid(configuredId)) {
+    const voucher = (await Voucher.findById(configuredId).lean()) as any;
+    if (voucher && voucher.companyName === INSTANTLLY_COMPANY_NAME) {
+      return voucher;
+    }
+  }
+
+  const fallback = (await Voucher.findOne({
+    companyName: INSTANTLLY_COMPANY_NAME,
+    isPublished: true,
+    $or: [{ userId: { $exists: false } }, { userId: null }],
+  })
+    .sort({ publishedAt: -1, createdAt: -1 })
+    .lean()) as any;
+
+  return fallback || null;
+}
+
+function getVoucherBalanceFromUser(user: any, voucherId: string): number {
+  if (!user) return 0;
+  const balanceMap = user.voucherBalances;
+  if (balanceMap instanceof Map) {
+    return Number(balanceMap.get(String(voucherId)) || 0);
+  }
+  if (balanceMap && typeof balanceMap === "object") {
+    return Number(balanceMap[String(voucherId)] || 0);
+  }
+  return 0;
+}
+
+async function reserveUserVouchers(params: {
+  userId: string;
+  voucherId: string;
+  qty: number;
+}) {
+  const key = `voucherBalances.${params.voucherId}`;
+  const updated = await User.findOneAndUpdate(
+    { _id: params.userId, [key]: { $gte: params.qty } },
+    { $inc: { [key]: -params.qty } },
+    { new: true },
+  );
+  return updated;
+}
+
+async function releaseUserVouchers(params: {
+  userId: string;
+  voucherId: string;
+  qty: number;
+}) {
+  const key = `voucherBalances.${params.voucherId}`;
+  await User.findByIdAndUpdate(params.userId, {
+    $inc: { [key]: params.qty },
+  });
+}
+
+async function reserveInstantllyVouchersForAd(params: {
+  userId: string;
+  maxAmount: number;
+}): Promise<{
+  voucher: any;
+  qty: number;
+  mrp: number;
+  amount: number;
+} | null> {
+  const voucher = await getInstantllyVoucherTemplate();
+  if (!voucher || voucher.companyName !== INSTANTLLY_COMPANY_NAME) {
+    return null;
+  }
+
+  if (voucher.expiryDate && new Date(voucher.expiryDate) < new Date()) {
+    return null;
+  }
+
+  const user = await User.findById(params.userId).select("voucherBalances").lean();
+  const balance = getVoucherBalanceFromUser(user, voucher._id.toString());
+  const mrp = Number(voucher.MRP || 0);
+  if (mrp <= 0) {
+    return null;
+  }
+
+  const requiredQty = Math.ceil(params.maxAmount / mrp);
+  if (requiredQty <= 0) {
+    return null;
+  }
+
+  if (balance < requiredQty) {
+    return null;
+  }
+
+  const reserved = await reserveUserVouchers({
+    userId: params.userId,
+    voucherId: voucher._id.toString(),
+    qty: requiredQty,
+  });
+
+  if (!reserved) {
+    return null;
+  }
+
+  return {
+    voucher,
+    qty: requiredQty,
+    mrp,
+    amount: requiredQty * mrp,
+  };
+}
+
+async function releaseReservedVouchersForAdOrder(order: any, reason: string) {
+  if (!order?.voucherQtyApplied || !order?.voucherId) return;
+  if (order.voucherStatus !== "reserved") return;
+
+  await releaseUserVouchers({
+    userId: order.userId.toString(),
+    voucherId: order.voucherId.toString(),
+    qty: Number(order.voucherQtyApplied || 0),
+  });
+
+  await VoucherRedemption.findOneAndUpdate(
+    { sourceType: order.orderType, sourceId: order._id, status: "reserved" },
+    {
+      $set: {
+        status: "released",
+        releasedAt: new Date(),
+        releaseReason: reason,
+      },
+    },
+  );
+
+  order.voucherStatus = "released";
+  order.voucherReleasedAt = new Date();
+  await order.save();
+}
+
+async function expireStaleAdOrdersForUser(userId: string, orderType?: "design_fee" | "ad_approval"): Promise<void> {
+  const cutoff = new Date(
+    Date.now() - ADS_PAYMENT_TIMEOUT_MINUTES * 60 * 1000,
+  );
+
+  const staleOrders = await AdPaymentOrder.find({
+    userId,
+    status: "payment_pending",
+    ...(orderType ? { orderType } : {}),
+    createdAt: { $lt: cutoff },
+  });
+
+  if (staleOrders.length === 0) return;
+
+  for (const order of staleOrders) {
+    await releaseReservedVouchersForAdOrder(order, "payment_timeout");
+    order.status = "payment_failed";
+    if (order.metadata && typeof order.metadata.set === "function") {
+      order.metadata.set("paymentTimeoutAt", new Date().toISOString());
+    }
+    await order.save();
+  }
+}
 
 // Configure multer for video uploads
 const uploadVideos = multer({
@@ -89,6 +757,7 @@ router.post(
       });
 
       const { title, phoneNumber, startDate, endDate, uploaderName, priority = 1, bottomMediaType = "image", fullscreenMediaType = "image" } = req.body;
+      const redeemVouchers = String(req.body.redeemVouchers || "").toLowerCase() === "true";
       const files = req.files as Express.Multer.File[];
 
       // Validation
@@ -148,7 +817,7 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // CREDIT CHECK - 1200 credits required
+      // VOUCHER CHECK - Instantlly vouchers required
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
       const userId = req.body.userId;
       console.log('Looking for user - phone:', uploaderPhone, 'userId:', userId);
@@ -175,34 +844,36 @@ router.post(
           user = await User.findOne({ phone: { $regex: last10Digits + '$' } });
         }
       }
-      console.log('Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
+      console.log('Found user:', user ? `${user.name} (${user.phone})` : 'NOT FOUND');
       if (!user) {
         return res.status(404).json({
           message: 'User not found. Please ensure you are logged in.',
           searchedPhone: uploaderPhone,
         });
       }
-      const currentCredits = (user as any).credits || 0;
-      if (currentCredits < 1200) {
+      if (!redeemVouchers) {
         return res.status(400).json({
-          message: 'Insufficient credits. You need 1200 credits to create an ad.',
-          currentCredits: currentCredits,
-          required: 1200
+          message: "Redeem vouchers are required to create an ad.",
         });
       }
-      (user as any).credits = currentCredits - 1200;
-      await user.save();
-      await Transaction.create({
-        type: 'ad_deduction',
-        fromUser: user._id,
-        toUser: null,
-        amount: -1200,
-        description: `Image Ad creation: ${title}`,
-        balanceBefore: currentCredits,
-        balanceAfter: currentCredits - 1200,
-        status: 'completed'
+
+      let reservedVoucher: {
+        voucher: any;
+        qty: number;
+        mrp: number;
+        amount: number;
+      } | null = null;
+
+      const reserved = await reserveInstantllyVouchersForAd({
+        userId: user._id.toString(),
+        maxAmount: AD_APPROVAL_FEE_AMOUNT,
       });
-      console.log(`Deducted 1200 credits from ${user.name} (${uploaderPhone}). Balance: ${currentCredits} to ${(user as any).credits}`);
+      if (!reserved) {
+        return res.status(400).json({
+          message: `Insufficient Instantlly vouchers. Need ₹${AD_APPROVAL_FEE_AMOUNT} in vouchers to create an ad.`,
+        });
+      }
+      reservedVoucher = reserved;
       // ---- IMAGES â†’ S3 ----
       const tempAdId = Date.now().toString();
 
@@ -286,20 +957,69 @@ router.post(
 
       await ad.save();
 
-      console.log(`? Ad created with pending status (1200 credits deducted):`, {
+      const approvalPayableAmount = Math.max(
+        0,
+        AD_APPROVAL_FEE_AMOUNT - (reservedVoucher ? reservedVoucher.amount : 0),
+      );
+
+      const orderPayload: any = {
+        userId: user._id,
+        adId: ad._id,
+        orderType: "ad_approval",
+        amount: AD_APPROVAL_FEE_AMOUNT,
+        payableAmount: approvalPayableAmount,
+        currency: "INR",
+        status: "payment_pending",
+        paymentProvider: "razorpay",
+      };
+
+      if (reservedVoucher) {
+        orderPayload.voucherId = reservedVoucher.voucher._id;
+        orderPayload.voucherQtyApplied = reservedVoucher.qty;
+        orderPayload.voucherValuePerUnit = reservedVoucher.mrp;
+        orderPayload.voucherAmountApplied = reservedVoucher.amount;
+        orderPayload.voucherStatus = "reserved";
+        orderPayload.voucherAppliedAt = new Date();
+      }
+
+      const approvalOrder = await AdPaymentOrder.create(orderPayload);
+
+      if (reservedVoucher) {
+        await VoucherRedemption.create({
+          userId: user._id,
+          sourceType: "ad_approval",
+          sourceId: approvalOrder._id,
+          voucherId: reservedVoucher.voucher._id,
+          companyName: reservedVoucher.voucher.companyName,
+          qty: reservedVoucher.qty,
+          valuePerUnit: reservedVoucher.mrp,
+          amount: reservedVoucher.amount,
+          currency: "INR",
+          status: "reserved",
+          metadata: { adId: ad._id.toString() },
+        });
+      }
+
+      ad.paymentStatus = "pending";
+      ad.paymentOrderId = approvalOrder._id;
+      await ad.save();
+
+      console.log(`? Ad created with pending status (vouchers reserved):`, {
         id: ad._id,
         title: ad.title,
         uploadedBy: ad.uploadedBy,
         status: ad.status,
-        creditsDeducted: 1200
+        voucherQtyApplied: reservedVoucher ? reservedVoucher.qty : 0
       });
 
       res.status(201).json({
-        message: 'Ad submitted successfully! 1200 credits deducted. Admin will review your ad. You will need to pay ?180 after approval.',
-        creditsDeducted: 1200,
-        remainingCredits: (user as any).credits,
-        cashPaymentRequired: 180,
-        totalCost: '1200 credits + ?180 cash',
+        message: `Ad submitted successfully! Admin will review your ad.`,
+        cashPaymentRequired: approvalPayableAmount,
+        payableAmount: approvalPayableAmount,
+        voucherQtyApplied: reservedVoucher ? reservedVoucher.qty : 0,
+        voucherAmountApplied: reservedVoucher ? reservedVoucher.amount : 0,
+        paymentOrderId: approvalOrder._id,
+        totalCost: `Instantlly vouchers ₹${reservedVoucher ? reservedVoucher.amount : 0}`,
         ad: {
           id: ad._id,
           title: ad.title,
@@ -350,6 +1070,7 @@ router.post(
       });
 
       const { title, phoneNumber, startDate, endDate, uploaderName, priority } = req.body;
+      const redeemVouchers = String(req.body.redeemVouchers || "").toLowerCase() === "true";
       const uploaderPhone = req.body.uploaderPhone || phoneNumber;
       const files = req.files as Express.Multer.File[];
 
@@ -381,7 +1102,7 @@ router.post(
         return res.status(400).json({ message: 'End date must be after start date' });
       }
 
-      // CREDIT CHECK - 1200 credits required
+      // VOUCHER CHECK - Instantlly vouchers required
       // uploaderPhone already declared above
       const userId = req.body.userId;
       
@@ -440,7 +1161,7 @@ router.post(
         }
       }
       
-      console.log('?? Found user:', user ? `${user.name} (${user.phone}) with ${(user as any).credits} credits` : 'NOT FOUND');
+      console.log('?? Found user:', user ? `${user.name} (${user.phone})` : 'NOT FOUND');
       
       if (!user) {
         return res.status(404).json({ 
@@ -449,33 +1170,29 @@ router.post(
         });
       }
 
-      const currentCredits = (user as any).credits || 0;
-      
-      if (currentCredits < 1200) {
-        return res.status(400).json({ 
-          message: 'Insufficient credits. You need 1200 credits to create an ad.',
-          currentCredits: currentCredits,
-          required: 1200
+      if (!redeemVouchers) {
+        return res.status(400).json({
+          message: "Redeem vouchers are required to create an ad.",
         });
       }
 
-      // Deduct 1200 credits from main User model
-      (user as any).credits = currentCredits - 1200;
-      await user.save();
+      let reservedVoucher: {
+        voucher: any;
+        qty: number;
+        mrp: number;
+        amount: number;
+      } | null = null;
 
-      // Create transaction record for the deduction
-      await Transaction.create({
-        type: 'ad_deduction',
-        fromUser: user._id,
-        toUser: null,
-        amount: -1200,
-        description: `Video Ad creation: ${title}`,
-        balanceBefore: currentCredits,
-        balanceAfter: currentCredits - 1200,
-        status: 'completed'
+      const reserved = await reserveInstantllyVouchersForAd({
+        userId: user._id.toString(),
+        maxAmount: AD_APPROVAL_FEE_AMOUNT,
       });
-
-      console.log(`? Deducted 1200 credits from ${user.name} (${uploaderPhone}). Remaining: ${(user as any).credits}`);
+      if (!reserved) {
+        return res.status(400).json({
+          message: `Insufficient Instantlly vouchers. Need ₹${AD_APPROVAL_FEE_AMOUNT} in vouchers to create an ad.`,
+        });
+      }
+      reservedVoucher = reserved;
 
       // Upload videos to GridFS
       const db = mongoose.connection.db;
@@ -550,19 +1267,69 @@ router.post(
 
       await ad.save();
 
+      const approvalPayableAmount = Math.max(
+        0,
+        AD_APPROVAL_FEE_AMOUNT - (reservedVoucher ? reservedVoucher.amount : 0),
+      );
+
+      const orderPayload: any = {
+        userId: user._id,
+        adId: ad._id,
+        orderType: "ad_approval",
+        amount: AD_APPROVAL_FEE_AMOUNT,
+        payableAmount: approvalPayableAmount,
+        currency: "INR",
+        status: "payment_pending",
+        paymentProvider: "razorpay",
+      };
+
+      if (reservedVoucher) {
+        orderPayload.voucherId = reservedVoucher.voucher._id;
+        orderPayload.voucherQtyApplied = reservedVoucher.qty;
+        orderPayload.voucherValuePerUnit = reservedVoucher.mrp;
+        orderPayload.voucherAmountApplied = reservedVoucher.amount;
+        orderPayload.voucherStatus = "reserved";
+        orderPayload.voucherAppliedAt = new Date();
+      }
+
+      const approvalOrder = await AdPaymentOrder.create(orderPayload);
+
+      if (reservedVoucher) {
+        await VoucherRedemption.create({
+          userId: user._id,
+          sourceType: "ad_approval",
+          sourceId: approvalOrder._id,
+          voucherId: reservedVoucher.voucher._id,
+          companyName: reservedVoucher.voucher.companyName,
+          qty: reservedVoucher.qty,
+          valuePerUnit: reservedVoucher.mrp,
+          amount: reservedVoucher.amount,
+          currency: "INR",
+          status: "reserved",
+          metadata: { adId: ad._id.toString() },
+        });
+      }
+
+      ad.paymentStatus = "pending";
+      ad.paymentOrderId = approvalOrder._id;
+      await ad.save();
+
       console.log(`? Video Ad created with pending status:`, {
         id: ad._id,
         title: ad.title,
         adType: 'video',
         uploadedBy: ad.uploadedBy,
         status: ad.status,
-        creditsDeducted: 1200
+        voucherQtyApplied: reservedVoucher ? reservedVoucher.qty : 0
       });
 
       res.status(201).json({
-        message: 'Video ad submitted successfully! 1200 credits deducted. Admin will review your ad.',
-        creditsDeducted: 1200,
-        remainingCredits: user.credits,
+        message: `Video ad submitted successfully! Admin will review your ad.`,
+        cashPaymentRequired: approvalPayableAmount,
+        payableAmount: approvalPayableAmount,
+        voucherQtyApplied: reservedVoucher ? reservedVoucher.qty : 0,
+        voucherAmountApplied: reservedVoucher ? reservedVoucher.amount : 0,
+        paymentOrderId: approvalOrder._id,
         ad: {
           id: ad._id,
           title: ad.title,
@@ -789,6 +1556,8 @@ router.get('/', async (req: Request, res: Response) => {
         approvalDate: ad.approvalDate,
         rejectionReason: ad.rejectionReason,
         priority: ad.priority,
+        paymentStatus: (ad as any).paymentStatus || null,
+        paymentOrderId: (ad as any).paymentOrderId || null,
         bottomImageId: ad.bottomImageGridFS,
         fullscreenImageId: ad.fullscreenImageGridFS,
         bottomVideoId: (ad as any).bottomVideoGridFS,

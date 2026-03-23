@@ -6,6 +6,9 @@ import { requireAuth, AuthReq } from "../middleware/auth";
 import BusinessPromotion from "../models/BusinessPromotion";
 import PromotionOrder from "../models/PromotionOrder";
 import PromotionPricingPlan from "../models/PromotionPricingPlan";
+import User from "../models/User";
+import Voucher from "../models/Voucher";
+import VoucherRedemption from "../models/VoucherRedemption";
 
 const router = Router();
 
@@ -64,6 +67,16 @@ const AREA_TYPES: AreaType[] = [
   "zone",
   "india",
 ];
+
+const INSTANTLLY_COMPANY_NAME = "Instantlly";
+const PAYMENT_PENDING_TIMEOUT_MINUTES = Math.max(
+  5,
+  Number(process.env.PROMOTION_PAYMENT_TIMEOUT_MINUTES || 30),
+);
+const PROMO_STALE_SWEEP_MINUTES = Math.max(
+  2,
+  Number(process.env.PROMOTION_STALE_SWEEP_MINUTES || 10),
+);
 
 function priorityFromRank(rank: number): number {
   if (rank === 21) {
@@ -154,6 +167,142 @@ function verifyRazorpaySignature(params: {
   );
 }
 
+async function getInstantllyVoucherTemplate(): Promise<any | null> {
+  const configuredId = process.env.INSTANTLLY_VOUCHER_ID;
+  if (configuredId && mongoose.Types.ObjectId.isValid(configuredId)) {
+    const voucher = (await Voucher.findById(configuredId).lean()) as any;
+    if (voucher && voucher.companyName === INSTANTLLY_COMPANY_NAME) {
+      return voucher;
+    }
+  }
+
+  // Fallback: latest published Instantlly template (admin-level, no userId)
+  const fallback = (await Voucher.findOne({
+    companyName: INSTANTLLY_COMPANY_NAME,
+    isPublished: true,
+    $or: [{ userId: { $exists: false } }, { userId: null }],
+  })
+    .sort({ publishedAt: -1, createdAt: -1 })
+    .lean()) as any;
+  return fallback || null;
+}
+
+function getVoucherBalanceFromUser(user: any, voucherId: string): number {
+  if (!user) return 0;
+  const balanceMap = user.voucherBalances;
+  if (balanceMap instanceof Map) {
+    return Number(balanceMap.get(String(voucherId)) || 0);
+  }
+  if (balanceMap && typeof balanceMap === "object") {
+    return Number(balanceMap[String(voucherId)] || 0);
+  }
+  return 0;
+}
+
+async function reserveUserVouchers(params: {
+  userId: string;
+  voucherId: string;
+  qty: number;
+}) {
+  const key = `voucherBalances.${params.voucherId}`;
+  const updated = await User.findOneAndUpdate(
+    { _id: params.userId, [key]: { $gte: params.qty } },
+    { $inc: { [key]: -params.qty } },
+    { new: true },
+  );
+  return updated;
+}
+
+async function releaseUserVouchers(params: {
+  userId: string;
+  voucherId: string;
+  qty: number;
+}) {
+  const key = `voucherBalances.${params.voucherId}`;
+  await User.findByIdAndUpdate(params.userId, {
+    $inc: { [key]: params.qty },
+  });
+}
+
+async function releaseReservedVouchersForOrder(
+  order: any,
+  reason: string,
+): Promise<void> {
+  if (!order?.voucherQtyApplied || !order?.voucherId) return;
+  if (order.voucherStatus !== "reserved") return;
+
+  await releaseUserVouchers({
+    userId: order.userId.toString(),
+    voucherId: order.voucherId.toString(),
+    qty: Number(order.voucherQtyApplied || 0),
+  });
+
+  await VoucherRedemption.findOneAndUpdate(
+    {
+      $or: [
+        { sourceType: "promotion", sourceId: order._id, status: "reserved" },
+        { orderId: order._id, status: "reserved" },
+      ],
+    },
+    {
+      $set: {
+        status: "released",
+        releasedAt: new Date(),
+        releaseReason: reason,
+      },
+    },
+  );
+
+  order.voucherStatus = "released";
+  order.voucherReleasedAt = new Date();
+  await order.save();
+}
+
+async function expireStaleOrdersForUser(userId: string): Promise<void> {
+  const cutoff = new Date(
+    Date.now() - PAYMENT_PENDING_TIMEOUT_MINUTES * 60 * 1000,
+  );
+
+  const staleOrders = await PromotionOrder.find({
+    userId,
+    status: { $in: ["payment_pending", "created"] },
+    createdAt: { $lt: cutoff },
+  });
+
+  if (staleOrders.length === 0) return;
+
+  for (const order of staleOrders) {
+    await releaseReservedVouchersForOrder(order, "payment_timeout");
+    order.status = "payment_failed";
+    if (order.metadata && typeof order.metadata.set === "function") {
+      order.metadata.set("paymentTimeoutAt", new Date().toISOString());
+    }
+    await order.save();
+  }
+}
+
+async function expireStaleOrdersGlobally(): Promise<void> {
+  const cutoff = new Date(
+    Date.now() - PAYMENT_PENDING_TIMEOUT_MINUTES * 60 * 1000,
+  );
+
+  const staleOrders = await PromotionOrder.find({
+    status: { $in: ["payment_pending", "created"] },
+    createdAt: { $lt: cutoff },
+  });
+
+  if (staleOrders.length === 0) return;
+
+  for (const order of staleOrders) {
+    await releaseReservedVouchersForOrder(order, "payment_timeout");
+    order.status = "payment_failed";
+    if (order.metadata && typeof order.metadata.set === "function") {
+      order.metadata.set("paymentTimeoutAt", new Date().toISOString());
+    }
+    await order.save();
+  }
+}
+
 async function activateOrderAndPromotion(params: {
   order: any;
   promotion: any;
@@ -196,6 +345,28 @@ async function activateOrderAndPromotion(params: {
 
   return { now, expiryDate };
 }
+
+function startPromotionStaleSweep(): void {
+  if (process.env.NODE_ENV === "test") return;
+
+  const globalKey = "__promotionStaleSweepStarted";
+  const globalRef = global as typeof globalThis & Record<string, unknown>;
+  if (globalRef[globalKey]) return;
+  globalRef[globalKey] = true;
+
+  const sweep = async () => {
+    try {
+      await expireStaleOrdersGlobally();
+    } catch (error) {
+      console.error("❌ [PROMOTION-PRICING] Stale sweep error:", error);
+    }
+  };
+
+  setTimeout(sweep, 30 * 1000);
+  setInterval(sweep, PROMO_STALE_SWEEP_MINUTES * 60 * 1000);
+}
+
+startPromotionStaleSweep();
 
 // Admin-only: seed default pricing catalog
 router.post("/seed-default", requireAuth, async (req: AuthReq, res) => {
@@ -327,6 +498,71 @@ router.get("/quote", async (req, res) => {
   }
 });
 
+// Get Instantlly voucher balance for promotion redeem
+router.get("/voucher-balance", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    await expireStaleOrdersForUser(userId);
+    const [user, voucher] = await Promise.all([
+      User.findById(userId).select("voucherBalances").lean(),
+      getInstantllyVoucherTemplate(),
+    ]);
+
+    if (!voucher) {
+      return res.json({
+        success: true,
+        voucher: null,
+        balance: 0,
+        totalValue: 0,
+      });
+    }
+
+    if (voucher.companyName !== INSTANTLLY_COMPANY_NAME) {
+      return res.status(400).json({
+        success: false,
+        message: "Instantlly voucher template not configured correctly",
+      });
+    }
+
+    if (voucher.expiryDate && new Date(voucher.expiryDate) < new Date()) {
+      return res.json({
+        success: true,
+        voucher: {
+          id: voucher._id,
+          companyName: voucher.companyName,
+          mrp: voucher.MRP || 0,
+          expiresAt: voucher.expiryDate,
+        },
+        balance: 0,
+        totalValue: 0,
+        expired: true,
+      });
+    }
+
+    const balance = getVoucherBalanceFromUser(user, voucher._id.toString());
+    const mrp = Number(voucher.MRP || 0);
+    const totalValue = Math.max(0, balance * mrp);
+
+    return res.json({
+      success: true,
+      voucher: {
+        id: voucher._id,
+        companyName: voucher.companyName,
+        mrp,
+        expiresAt: voucher.expiryDate,
+      },
+      balance,
+      totalValue,
+    });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Voucher balance error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch voucher balance",
+    });
+  }
+});
+
 // Create order for a business promotion
 router.post("/orders", requireAuth, async (req: AuthReq, res) => {
   try {
@@ -337,12 +573,14 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
       rank,
       durationDays = 30,
       paymentProvider = "razorpay",
+      deferPaymentOrder = false,
     } = req.body as {
       businessPromotionId?: string;
       areaType?: AreaType;
       rank?: number;
       durationDays?: number;
       paymentProvider?: string;
+      deferPaymentOrder?: boolean;
     };
 
     if (!businessPromotionId || !mongoose.Types.ObjectId.isValid(businessPromotionId)) {
@@ -401,6 +639,34 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
       });
     }
 
+    const existingPending = await PromotionOrder.findOne({
+      userId,
+      businessPromotionId,
+      status: { $in: ["payment_pending", "created"] },
+    }).sort({ createdAt: -1 });
+
+    if (existingPending) {
+      const sameSelection =
+        existingPending.areaType === areaType &&
+        Number(existingPending.rank) === Number(rank) &&
+        Number(existingPending.durationDays) === Number(durationDays);
+
+      if (sameSelection) {
+        return res.status(200).json({
+          success: true,
+          order: existingPending,
+          message: "Pending order already exists for this selection.",
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message:
+          "You already have a pending order for this promotion. Please resume or cancel it before creating a new one.",
+        order: existingPending,
+      });
+    }
+
     const pricingPlan = await PromotionPricingPlan.findOne({
       areaType,
       rank,
@@ -423,6 +689,7 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
       rank,
       rankLabel: pricingPlan.rankLabel,
       amount: pricingPlan.amount,
+      payableAmount: pricingPlan.amount,
       currency: pricingPlan.currency,
       durationDays: pricingPlan.durationDays,
       priorityScore: pricingPlan.priorityScore,
@@ -431,7 +698,7 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
     });
 
     let checkout: any = null;
-    if (paymentProvider === "razorpay") {
+    if (paymentProvider === "razorpay" && !deferPaymentOrder) {
       const rzOrder = await createRazorpayOrder({
         amountRupees: pricingPlan.amount,
         currency: pricingPlan.currency,
@@ -469,10 +736,424 @@ router.post("/orders", requireAuth, async (req: AuthReq, res) => {
   }
 });
 
+// Get latest pending order for a promotion/selection
+router.get("/orders/pending", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const {
+      businessPromotionId,
+      areaType,
+      rank,
+      durationDays,
+    } = req.query as {
+      businessPromotionId?: string;
+      areaType?: AreaType;
+      rank?: string;
+      durationDays?: string;
+    };
+
+    if (!businessPromotionId || !mongoose.Types.ObjectId.isValid(businessPromotionId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid businessPromotionId is required",
+      });
+    }
+
+    if (!areaType || !AREA_TYPES.includes(areaType)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid areaType. Use pincode, tehsil, district, division, state, zone, or india",
+      });
+    }
+
+    const parsedRank = Number(rank);
+    const parsedDuration = Number(durationDays);
+    if (!Number.isInteger(parsedRank) || parsedRank < 1 || parsedRank > 21) {
+      return res.status(400).json({ success: false, message: "Invalid rank" });
+    }
+    if (!Number.isInteger(parsedDuration) || parsedDuration <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid durationDays" });
+    }
+
+    await expireStaleOrdersForUser(userId);
+
+    const order = await PromotionOrder.findOne({
+      userId,
+      businessPromotionId,
+      areaType,
+      rank: parsedRank,
+      durationDays: parsedDuration,
+      status: { $in: ["payment_pending", "created"] },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({ success: true, order: order || null });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Pending order lookup error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch pending order",
+    });
+  }
+});
+
+// Get latest pending order for a promotion (any selection)
+router.get("/orders/pending-by-promotion", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const { businessPromotionId } = req.query as { businessPromotionId?: string };
+
+    if (!businessPromotionId || !mongoose.Types.ObjectId.isValid(businessPromotionId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid businessPromotionId is required",
+      });
+    }
+
+    await expireStaleOrdersForUser(userId);
+
+    const order = await PromotionOrder.findOne({
+      userId,
+      businessPromotionId,
+      status: { $in: ["payment_pending", "created"] },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({ success: true, order: order || null });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Pending by promotion error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch pending order",
+    });
+  }
+});
+
+// Cancel a pending order and release vouchers
+router.post("/orders/:orderId/cancel", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await PromotionOrder.findOne({ _id: orderId, userId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Promotion order not found" });
+    }
+
+    if (!["payment_pending", "created"].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order is in ${order.status} state`,
+      });
+    }
+
+    await releaseReservedVouchersForOrder(order, "user_cancelled");
+    order.status = "cancelled";
+    if (order.metadata && typeof order.metadata.set === "function") {
+      order.metadata.set("cancelledAt", new Date().toISOString());
+    }
+    await order.save();
+
+    return res.json({ success: true, message: "Order cancelled", order });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Cancel order error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel order",
+    });
+  }
+});
+
+// Apply Instantlly vouchers to a promotion order (reserve on apply)
+router.post("/orders/:orderId/apply-vouchers", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+    const { qty } = req.body as { qty?: number };
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await PromotionOrder.findOne({ _id: orderId, userId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Promotion order not found" });
+    }
+
+    if (!["payment_pending", "created"].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order is in ${order.status} state`,
+      });
+    }
+
+    if (order.voucherStatus === "reserved") {
+      return res.json({
+        success: true,
+        message: "Vouchers already applied",
+        order,
+      });
+    }
+
+    const voucher = await getInstantllyVoucherTemplate();
+    if (!voucher || voucher.companyName !== INSTANTLLY_COMPANY_NAME) {
+      return res.status(400).json({
+        success: false,
+        message: "Instantlly voucher not available",
+      });
+    }
+
+    if (voucher.expiryDate && new Date(voucher.expiryDate) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "Instantlly voucher has expired",
+      });
+    }
+
+    const user = await User.findById(userId).select("voucherBalances").lean();
+    const balance = getVoucherBalanceFromUser(user, voucher._id.toString());
+    const mrp = Number(voucher.MRP || 0);
+    const maxByAmount = mrp > 0 ? Math.floor(order.amount / mrp) : 0;
+    const maxQty = Math.max(0, Math.min(balance, maxByAmount));
+
+    const requestedQty = qty !== undefined ? Math.max(0, Math.floor(qty)) : maxQty;
+    const qtyToUse = Math.min(requestedQty, maxQty);
+
+    if (qtyToUse <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No vouchers available to apply",
+        balance,
+        maxRedeemable: maxQty,
+      });
+    }
+
+    const reserved = await reserveUserVouchers({
+      userId,
+      voucherId: voucher._id.toString(),
+      qty: qtyToUse,
+    });
+
+    if (!reserved) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient voucher balance",
+      });
+    }
+
+    const voucherAmount = qtyToUse * mrp;
+    const payableAmount = Math.max(0, order.amount - voucherAmount);
+
+    await VoucherRedemption.create({
+      userId,
+      sourceType: "promotion",
+      sourceId: order._id,
+      voucherId: voucher._id,
+      companyName: voucher.companyName,
+      qty: qtyToUse,
+      valuePerUnit: mrp,
+      amount: voucherAmount,
+      currency: order.currency || "INR",
+      status: "reserved",
+    });
+
+    order.voucherId = voucher._id as any;
+    order.voucherQtyApplied = qtyToUse;
+    order.voucherValuePerUnit = mrp;
+    order.voucherAmountApplied = voucherAmount;
+    order.payableAmount = payableAmount;
+    order.voucherStatus = "reserved";
+    order.voucherAppliedAt = new Date();
+    await order.save();
+
+    return res.json({
+      success: true,
+      message: "Vouchers applied",
+      order,
+    });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Apply vouchers error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to apply vouchers",
+    });
+  }
+});
+
+// Create a Razorpay payment order for the payable amount
+router.post("/orders/:orderId/create-payment-order", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await PromotionOrder.findOne({ _id: orderId, userId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Promotion order not found" });
+    }
+
+    if (!["payment_pending", "created"].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order is in ${order.status} state`,
+      });
+    }
+
+    const payableAmount = Math.max(
+      0,
+      Number(
+        order.payableAmount !== undefined && order.payableAmount !== null
+          ? order.payableAmount
+          : order.amount || 0,
+      ),
+    );
+    if (payableAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No payable amount remaining for this order",
+      });
+    }
+
+    const rzOrder = await createRazorpayOrder({
+      amountRupees: payableAmount,
+      currency: order.currency || "INR",
+      receipt: `promo_${String(order._id).slice(-12)}`,
+      notes: {
+        orderId: String(order._id),
+        businessPromotionId: String(order.businessPromotionId),
+        userId: String(userId),
+      },
+    });
+
+    order.paymentProvider = "razorpay";
+    order.paymentOrderId = rzOrder.id;
+    await order.save();
+
+    const { keyId } = getRazorpayCredentials();
+    return res.json({
+      success: true,
+      checkout: {
+        keyId,
+        amount: rzOrder.amount,
+        currency: rzOrder.currency,
+        razorpayOrderId: rzOrder.id,
+      },
+      order,
+    });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Create payment order error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to create payment order",
+    });
+  }
+});
+
+// Confirm promotion order using vouchers only (payable amount = 0)
+router.post("/orders/:orderId/confirm-voucher", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const userId = req.userId as string;
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: "Invalid orderId" });
+    }
+
+    const order = await PromotionOrder.findOne({ _id: orderId, userId });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Promotion order not found" });
+    }
+
+    if (!["payment_pending", "created"].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Order is in ${order.status} state`,
+      });
+    }
+
+    const payableAmount = Math.max(
+      0,
+      Number(
+        order.payableAmount !== undefined && order.payableAmount !== null
+          ? order.payableAmount
+          : order.amount || 0,
+      ),
+    );
+    if (payableAmount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Order still has payable amount",
+      });
+    }
+
+    if (order.voucherStatus !== "reserved") {
+      return res.status(400).json({
+        success: false,
+        message: "No reserved vouchers for this order",
+      });
+    }
+
+    const promotion = await BusinessPromotion.findOne({
+      _id: order.businessPromotionId,
+      userId,
+    });
+
+    if (!promotion) {
+      return res.status(404).json({
+        success: false,
+        message: "Business promotion not found",
+      });
+    }
+
+      await VoucherRedemption.findOneAndUpdate(
+        { sourceType: "promotion", sourceId: order._id, status: "reserved" },
+        { $set: { status: "applied", appliedAt: new Date() } },
+      );
+
+    order.voucherStatus = "applied";
+    await activateOrderAndPromotion({
+      order,
+      promotion,
+      paymentId: `voucher_redeem_${order._id.toString()}`,
+      metadata: { gateway: "voucher" },
+    });
+
+    return res.json({
+      success: true,
+      message: "Voucher redemption confirmed and listing activated",
+      order,
+      promotion: {
+        id: promotion._id,
+        listingType: promotion.listingType,
+        status: promotion.status,
+        priorityScore: promotion.visibility.priorityScore,
+        expiryDate: promotion.expiryDate,
+      },
+    });
+  } catch (error) {
+    console.error("❌ [PROMOTION-PRICING] Confirm voucher error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to confirm voucher redemption",
+    });
+  }
+});
+
 // Verify Razorpay payment signature and activate listing
 router.post("/orders/:orderId/verify-payment", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId as string;
+    await expireStaleOrdersForUser(userId);
     const { orderId } = req.params;
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body as {
       razorpay_order_id?: string;
@@ -526,6 +1207,7 @@ router.post("/orders/:orderId/verify-payment", requireAuth, async (req: AuthReq,
     if (!isValidSignature) {
       order.status = "payment_failed";
       await order.save();
+      await releaseReservedVouchersForOrder(order, "payment_failed");
       return res.status(400).json({
         success: false,
         message: "Invalid payment signature",
@@ -555,6 +1237,15 @@ router.post("/orders/:orderId/verify-payment", requireAuth, async (req: AuthReq,
       },
     });
 
+    if (order.voucherStatus === "reserved") {
+    await VoucherRedemption.findOneAndUpdate(
+      { sourceType: "promotion", sourceId: order._id, status: "reserved" },
+      { $set: { status: "applied", appliedAt: new Date() } },
+    );
+      order.voucherStatus = "applied";
+      await order.save();
+    }
+
     return res.json({
       success: true,
       message: "Payment verified and listing activated",
@@ -580,6 +1271,7 @@ router.post("/orders/:orderId/verify-payment", requireAuth, async (req: AuthReq,
 router.get("/orders/me", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId as string;
+    await expireStaleOrdersForUser(userId);
 
     const orders = await PromotionOrder.find({ userId })
       .populate("businessPromotionId", "businessName city category")
@@ -600,6 +1292,7 @@ router.get("/orders/me", requireAuth, async (req: AuthReq, res) => {
 router.post("/orders/:orderId/confirm-payment", requireAuth, async (req: AuthReq, res) => {
   try {
     const userId = req.userId as string;
+    await expireStaleOrdersForUser(userId);
     const { orderId } = req.params;
     const { paymentId, paymentOrderId, metadata } = req.body as {
       paymentId?: string;
@@ -663,6 +1356,15 @@ router.post("/orders/:orderId/confirm-payment", requireAuth, async (req: AuthReq
       paymentOrderId,
       metadata,
     });
+
+    if (order.voucherStatus === "reserved") {
+    await VoucherRedemption.findOneAndUpdate(
+      { sourceType: "promotion", sourceId: order._id, status: "reserved" },
+      { $set: { status: "applied", appliedAt: new Date() } },
+    );
+      order.voucherStatus = "applied";
+      await order.save();
+    }
 
     return res.json({
       success: true,

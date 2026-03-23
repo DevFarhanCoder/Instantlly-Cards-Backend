@@ -22,6 +22,9 @@ export interface IDesignRequest extends Document {
   assignedDesignerName?: string;
   assignedAt?: Date;
   completedAdId?: mongoose.Types.ObjectId;
+  paymentStatus?: 'not_required' | 'pending' | 'paid' | 'failed' | 'expired';
+  paymentOrderId?: mongoose.Types.ObjectId;
+  paidAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -123,6 +126,17 @@ const DesignRequestSchema = new Schema<IDesignRequest>(
       ref: 'Ad',
       default: null,
     },
+    paymentStatus: {
+      type: String,
+      enum: ['not_required', 'pending', 'paid', 'failed', 'expired'],
+      default: 'pending',
+    },
+    paymentOrderId: {
+      type: Schema.Types.ObjectId,
+      ref: 'AdPaymentOrder',
+      default: null,
+    },
+    paidAt: { type: Date, default: null },
   },
   {
     timestamps: true,

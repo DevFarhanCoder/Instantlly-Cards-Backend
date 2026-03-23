@@ -40,6 +40,39 @@ const PromotionOrderSchema = new Schema(
       required: true,
       min: 0,
     },
+    // Voucher redemption (Instantlly-only)
+    voucherId: {
+      type: Schema.Types.ObjectId,
+      ref: "Voucher",
+      default: null,
+    },
+    voucherQtyApplied: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    voucherValuePerUnit: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    voucherAmountApplied: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    payableAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    voucherStatus: {
+      type: String,
+      enum: ["none", "reserved", "applied", "released"],
+      default: "none",
+    },
+    voucherAppliedAt: { type: Date, default: null },
+    voucherReleasedAt: { type: Date, default: null },
     currency: {
       type: String,
       default: "INR",

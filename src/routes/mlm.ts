@@ -5,6 +5,9 @@ import User from "../models/User";
 import MlmCredit from "../models/MlmCredit";
 import MlmTransfer from "../models/MlmTransfer";
 import Voucher from "../models/Voucher";
+import VoucherRedemption from "../models/VoucherRedemption";
+import AdPaymentOrder from "../models/AdPaymentOrder";
+import Ad from "../models/Ad";
 import SpecialCredit from "../models/SpecialCredit";
 import VoucherTransferLog from "../models/VoucherTransferLog";
 import { getStructuralCreditPool, MLM_BASE_MRP } from "../utils/mlm";
@@ -1931,6 +1934,145 @@ router.get("/transfer-history", requireAuth, async (req: AuthReq, res) => {
     });
   } catch (error) {
     console.error("MLM TRANSFER HISTORY ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// ============================================
+// REDEEM HISTORY (Instantlly Only)
+// ============================================
+
+router.get("/redeem-history", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { limit = 50 } = req.query;
+    const safeLimit = Math.min(200, Number(limit) || 50);
+
+    const redemptions = await VoucherRedemption.find({
+      userId: req.userId,
+      companyName: "Instantlly",
+    })
+      .sort({ createdAt: -1 })
+      .limit(safeLimit)
+      .lean();
+
+    const adOrderIds = redemptions
+      .filter((r: any) => r.sourceType === "ad_approval")
+      .map((r: any) => r.sourceId);
+
+    const adOrders = adOrderIds.length
+      ? await AdPaymentOrder.find({ _id: { $in: adOrderIds } }).lean()
+      : [];
+    const adOrderById = new Map(
+      adOrders.map((order: any) => [order._id.toString(), order]),
+    );
+
+    const adIds = adOrders
+      .map((order: any) => order.adId)
+      .filter(Boolean) as Types.ObjectId[];
+
+    const ads = adIds.length
+      ? await Ad.find({ _id: { $in: adIds } }).select("status").lean()
+      : [];
+    const adById = new Map(ads.map((ad: any) => [ad._id.toString(), ad]));
+
+    const payload = redemptions.map((r: any) => {
+      const order = adOrderById.get(r.sourceId?.toString());
+      const ad = order?.adId ? adById.get(order.adId.toString()) : null;
+      const payableAmount = Number(order?.payableAmount ?? 0);
+      const confirmable =
+        r.status === "reserved" &&
+        r.sourceType === "ad_approval" &&
+        payableAmount <= 0 &&
+        ad?.status === "approved";
+
+      return {
+        id: r._id,
+        sourceType: r.sourceType,
+        sourceId: r.sourceId,
+        qty: r.qty,
+        valuePerUnit: r.valuePerUnit,
+        amount: r.amount,
+        currency: r.currency || "INR",
+        status: r.status,
+        reservedAt: r.reservedAt,
+        appliedAt: r.appliedAt,
+        releasedAt: r.releasedAt,
+        releaseReason: r.releaseReason,
+        createdAt: r.createdAt,
+        confirmable,
+        orderId: order?._id || null,
+        payableAmount,
+      };
+    });
+
+    res.json({ success: true, redemptions: payload });
+  } catch (error) {
+    console.error("MLM REDEEM HISTORY ERROR", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+router.post("/redeem/confirm", requireAuth, async (req: AuthReq, res) => {
+  try {
+    const { redemptionId } = req.body as { redemptionId?: string };
+    if (!redemptionId || !isValidObjectId(redemptionId)) {
+      return res.status(400).json({ success: false, message: "Invalid redemption id" });
+    }
+
+    const redemption = await VoucherRedemption.findOne({
+      _id: redemptionId,
+      userId: req.userId,
+      status: "reserved",
+      companyName: "Instantlly",
+    });
+
+    if (!redemption) {
+      return res.status(404).json({ success: false, message: "Redemption not found" });
+    }
+
+    if (redemption.sourceType !== "ad_approval") {
+      return res.status(400).json({ success: false, message: "Redemption cannot be confirmed here" });
+    }
+
+    const order = await AdPaymentOrder.findOne({
+      _id: redemption.sourceId,
+      userId: req.userId,
+      orderType: "ad_approval",
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const ad = order.adId ? await Ad.findById(order.adId) : null;
+    if (!ad || ad.status !== "approved") {
+      return res.status(400).json({ success: false, message: "Ad is not approved yet" });
+    }
+
+    const payableAmount = Number(order.payableAmount || 0);
+    if (payableAmount > 0) {
+      return res.status(400).json({ success: false, message: "Payable amount remaining" });
+    }
+
+    if (order.voucherStatus !== "reserved") {
+      return res.status(400).json({ success: false, message: "No reserved voucher to confirm" });
+    }
+
+    redemption.status = "applied";
+    redemption.appliedAt = new Date();
+    await redemption.save();
+
+    order.voucherStatus = "applied";
+    order.status = "paid";
+    order.paidAt = new Date();
+    await order.save();
+
+    ad.paymentStatus = "paid";
+    await ad.save();
+
+    return res.json({ success: true, message: "Voucher redemption confirmed" });
+  } catch (error) {
+    console.error("MLM REDEEM CONFIRM ERROR", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
