@@ -14,18 +14,51 @@ import Contact from "../models/Contact";
 import Notification from "../models/Notification";
 import SharedCard from "../models/SharedCard";
 import Ad from "../models/Ad";
+import AdPaymentOrder from "../models/AdPaymentOrder";
 import Transaction from "../models/Transaction";
 import Designer from "../models/Designer";
 import DesignerUpload from "../models/DesignerUpload";
 import DesignRequest from "../models/DesignRequest";
 import Voucher from "../models/Voucher";
 import VoucherTransferLog from "../models/VoucherTransferLog";
+import VoucherRedemption from "../models/VoucherRedemption";
 import MlmTransfer from "../models/MlmTransfer";
 import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { movePendingToApproved, uploadToS3 } from "../services/s3Service";
 import SpecialCredit from "../models/SpecialCredit";
 
 const router = express.Router();
+
+async function releaseAdApprovalVouchers(ad: any, reason: string) {
+  if (!ad?.paymentOrderId) return;
+
+  const order = await AdPaymentOrder.findById(ad.paymentOrderId);
+  if (!order) return;
+
+  if (order.voucherStatus === "reserved" && order.voucherId && order.voucherQtyApplied) {
+    const key = `voucherBalances.${order.voucherId.toString()}`;
+    await User.findByIdAndUpdate(order.userId, {
+      $inc: { [key]: Number(order.voucherQtyApplied || 0) },
+    });
+
+    await VoucherRedemption.findOneAndUpdate(
+      { sourceType: "ad_approval", sourceId: order._id, status: "reserved" },
+      {
+        $set: {
+          status: "released",
+          releasedAt: new Date(),
+          releaseReason: reason,
+        },
+      },
+    );
+
+    order.voucherStatus = "released";
+    order.voucherReleasedAt = new Date();
+  }
+
+  order.status = "cancelled";
+  await order.save();
+}
 
 async function resolveVoucherScopeForAdmin(
   voucherId?: string | null,
@@ -904,8 +937,11 @@ router.post(
       ad.approvedBy = req.adminId || req.adminUsername || "admin";
       ad.approvalDate = new Date();
       ad.rejectionReason = reason.trim();
+      ad.paymentStatus = "failed";
 
       await ad.save();
+
+      await releaseAdApprovalVouchers(ad, "ad_rejected");
 
       console.log(`âŒ Ad ${id} rejected by ${req.adminUsername}: ${reason}`);
 

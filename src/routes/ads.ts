@@ -5,6 +5,8 @@ import { requireAdminAuth, AdminAuthReq } from "../middleware/adminAuth";
 import { gridfsService } from "../services/gridfsService";
 import { imageCache } from "../services/imageCache";
 import User from "../models/User";
+import AdPaymentOrder from "../models/AdPaymentOrder";
+import VoucherRedemption from "../models/VoucherRedemption";
 import multer from "multer";
 import AWS from "aws-sdk";
 const jwt = require("jsonwebtoken");
@@ -37,6 +39,37 @@ const s3 = new AWS.S3({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
 });
+
+async function releaseAdApprovalVouchers(ad: any, reason: string) {
+  if (!ad?.paymentOrderId) return;
+
+  const order = await AdPaymentOrder.findById(ad.paymentOrderId);
+  if (!order) return;
+
+  if (order.voucherStatus === "reserved" && order.voucherId && order.voucherQtyApplied) {
+    const key = `voucherBalances.${order.voucherId.toString()}`;
+    await User.findByIdAndUpdate(order.userId, {
+      $inc: { [key]: Number(order.voucherQtyApplied || 0) },
+    });
+
+    await VoucherRedemption.findOneAndUpdate(
+      { sourceType: "ad_approval", sourceId: order._id, status: "reserved" },
+      {
+        $set: {
+          status: "released",
+          releasedAt: new Date(),
+          releaseReason: reason,
+        },
+      },
+    );
+
+    order.voucherStatus = "released";
+    order.voucherReleasedAt = new Date();
+  }
+
+  order.status = "cancelled";
+  await order.save();
+}
 // Cleanup old entries every 5 minutes
 setInterval(
   () => {
@@ -1412,8 +1445,11 @@ router.post("/:id/reject", requireAdminAuth, async (req: AdminAuthReq, res: Resp
     ad.approvedBy = req.adminId as string;
     ad.approvalDate = new Date();
     ad.rejectionReason = reason || "No reason provided";
+    ad.paymentStatus = "failed";
     
     await ad.save();
+
+    await releaseAdApprovalVouchers(ad, "ad_rejected");
     
     console.log(`âŒ Ad ${ad._id} rejected by admin ${req.adminId}`);
     
