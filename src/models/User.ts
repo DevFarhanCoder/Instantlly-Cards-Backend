@@ -26,8 +26,8 @@ const UserSchema = new Schema(
     pushToken: { type: String },
     platform: { type: String },
     pushTokenUpdatedAt: { type: Date },
-    // Credits system - 5 lac (500,000) credits on signup, valid for 1 month
-    credits: { type: Number, default: 200 },
+    // Credits system - 300 credits on signup, valid for 1 month
+    credits: { type: Number, default: 300 },
     creditsExpiryDate: { type: Date }, // Credits expire 1 month after signup
     referralCode: { type: String, unique: true, sparse: true, index: true },
     referredBy: { type: Schema.Types.ObjectId, ref: "User" },
