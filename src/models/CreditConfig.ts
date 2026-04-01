@@ -12,7 +12,7 @@ const CreditConfigSchema = new Schema(
     signupBonus: { 
       type: Number, 
       required: true,
-      default: 200,
+      default: 300,
       min: 0,
       description: "Credits given to new users when they sign up"
     },
