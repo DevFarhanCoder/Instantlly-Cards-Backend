@@ -214,17 +214,16 @@ router.post("/signup", async (req, res) => {
       codeExists = await User.findOne({ referralCode: newReferralCode });
     }
 
-    // Set credits expiry date to 1 month from signup
-    const creditsExpiryDate = new Date();
-    creditsExpiryDate.setMonth(creditsExpiryDate.getMonth() + 1);
+    // Set credits expiry date to December 31, 2026
+    const creditsExpiryDate = new Date("2026-12-31T23:59:59.999Z");
 
-    // Create user data object with 300 credits valid for 1 month
+    // Create user data object with 300 credits valid until Dec 31, 2026
     const userData: any = {
       name: cleanName,
       phone: cleanPhone,
       password: hashedPassword,
       credits: 300, // 300 credits
-      creditsExpiryDate: creditsExpiryDate, // Expire after 1 month
+      creditsExpiryDate: creditsExpiryDate, // Expire on December 31, 2026
       referralCode: newReferralCode,
       level: 0,
       directCount: 0,

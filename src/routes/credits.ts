@@ -60,6 +60,14 @@ router.get("/balance", requireAuth, async (req: AuthReq, res) => {
     // If not set, credits never expire (for backward compatibility)
     const userExpiryDate = (user as any).creditsExpiryDate;
     
+    // DEBUG LOGGING
+    console.log(`\n🔍 DEBUG - Credits Balance Check for user ${req.userId}`);
+    console.log(`   Current credits in DB: ${currentCredits}`);
+    console.log(`   Expiry date: ${userExpiryDate}`);
+    console.log(`   Current time: ${new Date().toISOString()}`);
+    console.log(`   Expiry time: ${userExpiryDate ? new Date(userExpiryDate).toISOString() : 'null'}`);
+    console.log(`   Is expired? ${userExpiryDate && new Date() > new Date(userExpiryDate)}`);
+    
     // Check if credits have expired
     let activeCredits = currentCredits;
     let isExpired = false;
